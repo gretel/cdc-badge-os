@@ -1,0 +1,19 @@
+menu "CDC Badge Features"
+
+    config CDC_FEATURE_SSH
+        bool "Enable SSH key support"
+        default n
+
+    config CDC_FEATURE_CA
+        bool "Enable CA features"
+        default n
+
+    config CDC_FEATURE_TOTP
+        bool "Enable TOTP"
+        default y
+
+    config CDC_FEATURE_FIDO2
+        bool "Enable FIDO2"
+        default y
+
+endmenu

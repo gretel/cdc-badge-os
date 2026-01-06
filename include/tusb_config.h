@@ -1,0 +1,79 @@
+#pragma once
+
+#include "tusb_option.h"
+#include "sdkconfig.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifndef CONFIG_TINYUSB_CDC_ENABLED
+#define CONFIG_TINYUSB_CDC_ENABLED 0
+#endif
+
+#ifndef CONFIG_TINYUSB_MSC_ENABLED
+#define CONFIG_TINYUSB_MSC_ENABLED 0
+#endif
+
+#ifndef CONFIG_TINYUSB_HID_ENABLED
+#define CONFIG_TINYUSB_HID_ENABLED 0
+#endif
+
+#ifndef CONFIG_TINYUSB_MIDI_ENABLED
+#define CONFIG_TINYUSB_MIDI_ENABLED 0
+#endif
+
+#ifndef CONFIG_TINYUSB_CUSTOM_CLASS_ENABLED
+#define CONFIG_TINYUSB_CUSTOM_CLASS_ENABLED 0
+#endif
+
+#ifndef CONFIG_TINYUSB_CDC_RX_BUFSIZE
+#define CONFIG_TINYUSB_CDC_RX_BUFSIZE 64
+#endif
+
+#ifndef CONFIG_TINYUSB_CDC_TX_BUFSIZE
+#define CONFIG_TINYUSB_CDC_TX_BUFSIZE 64
+#endif
+
+#ifndef CONFIG_TINYUSB_MSC_BUFSIZE
+#define CONFIG_TINYUSB_MSC_BUFSIZE 512
+#endif
+
+#ifndef CONFIG_TINYUSB_HID_BUFSIZE
+#define CONFIG_TINYUSB_HID_BUFSIZE 64
+#endif
+
+#define CFG_TUSB_RHPORT0_MODE       OPT_MODE_DEVICE | OPT_MODE_FULL_SPEED
+#define CFG_TUSB_OS                 OPT_OS_FREERTOS
+
+#ifndef CFG_TUSB_MEM_SECTION
+#define CFG_TUSB_MEM_SECTION
+#endif
+
+#ifndef CFG_TUSB_MEM_ALIGN
+#define CFG_TUSB_MEM_ALIGN          TU_ATTR_ALIGNED(4)
+#endif
+
+#ifndef CFG_TUD_ENDPOINT0_SIZE
+#define CFG_TUD_ENDPOINT0_SIZE      64
+#endif
+
+#define CFG_TUD_CDC_RX_BUFSIZE      CONFIG_TINYUSB_CDC_RX_BUFSIZE
+#define CFG_TUD_CDC_TX_BUFSIZE      CONFIG_TINYUSB_CDC_TX_BUFSIZE
+#define CFG_TUD_MSC_BUFSIZE         CONFIG_TINYUSB_MSC_BUFSIZE
+#define CFG_TUD_HID_BUFSIZE         CONFIG_TINYUSB_HID_BUFSIZE
+
+// Enabled device class driver counts
+#define CFG_TUD_CDC                 (CONFIG_TINYUSB_CDC_ENABLED ? 1 : 0)
+#define CFG_TUD_MSC                 (CONFIG_TINYUSB_MSC_ENABLED ? 1 : 0)
+#if CONFIG_TINYUSB_HID_ENABLED
+#define CFG_TUD_HID                 2
+#else
+#define CFG_TUD_HID                 0
+#endif
+#define CFG_TUD_MIDI                (CONFIG_TINYUSB_MIDI_ENABLED ? 1 : 0)
+#define CFG_TUD_CUSTOM_CLASS        (CONFIG_TINYUSB_CUSTOM_CLASS_ENABLED ? 1 : 0)
+
+#ifdef __cplusplus
+}
+#endif

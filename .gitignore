@@ -1,0 +1,17 @@
+.DS_Store
+.vscode
+.pio
+build
+managed_components
+dependencies.lock
+CMakeCache.txt
+CMakeFiles
+# Patch marker files
+components/*/.patched
+
+# Legacy code
+legacy/
+
+# Claude config
+CLAUDE.md
+agents.md
