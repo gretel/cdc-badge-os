@@ -33,8 +33,8 @@ static volatile uint8_t key_buffer_tail = 0;
 // Keypad task handles
 static SemaphoreHandle_t keypad_sem = nullptr;
 static TaskHandle_t keypad_task_handle = nullptr;
-#define KEYPAD_TASK_STACK_SIZE 2048
-#define KEYPAD_TASK_PRIORITY 10  // Higher than display task
+#define KEYPAD_TASK_STACK_SIZE 4096
+#define KEYPAD_TASK_PRIORITY 5  // Lowered from 10 for stability
 
 // Device handle and state
 static i2c_master_dev_handle_t expander_dev = nullptr;
@@ -137,10 +137,10 @@ static uint16_t expander_read_inputs(void) {
     return (uint16_t)((hi << 8) | lo);
 }
 
-// Keypad task - runs at high priority to capture keys immediately
+// Keypad task - waits for IRQ or polls as fallback
 static void keypad_task(void *arg) {
     (void)arg;
-    LOG_I("KEYPAD", "Keypad task started");
+    LOG_I("KEYPAD", "Keypad task started (prio=%d)", KEYPAD_TASK_PRIORITY);
 
     while (true) {
         // Wait for IRQ or timeout (poll every 50ms as fallback)
@@ -210,7 +210,7 @@ bool pin_expander_init(void) {
         return false;
     }
 
-    // Create keypad task (high priority to capture keys during display updates)
+    // Create keypad task
     BaseType_t ret = xTaskCreate(keypad_task, "keypad", KEYPAD_TASK_STACK_SIZE,
                                   NULL, KEYPAD_TASK_PRIORITY, &keypad_task_handle);
     if (ret != pdPASS) {
@@ -226,7 +226,7 @@ bool pin_expander_init(void) {
     gpio_set_intr_type(EXP_IRQ_PIN, GPIO_INTR_NEGEDGE);
     gpio_isr_handler_add(EXP_IRQ_PIN, expander_isr_handler, nullptr);
 
-    LOG_I("KEYPAD", "Keypad initialized (12 keys, IRQ=GPIO%d, async task)", EXP_IRQ_PIN);
+    LOG_I("KEYPAD", "Keypad initialized (12 keys, IRQ=GPIO%d, stack=%d)", EXP_IRQ_PIN, KEYPAD_TASK_STACK_SIZE);
     return true;
 }
 

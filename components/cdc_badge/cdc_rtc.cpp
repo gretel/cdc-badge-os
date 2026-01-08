@@ -26,26 +26,6 @@ static void save_time_to_nvs(void) {
     }
 }
 
-// Load time from NVS
-static bool load_time_from_nvs(void) {
-    nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
-        int64_t saved_time = 0;
-        if (nvs_get_i64(nvs, NVS_KEY_TIME, &saved_time) == ESP_OK) {
-            nvs_close(nvs);
-            // Validate: time should be after 2024
-            if (saved_time > 1704067200) {  // 2024-01-01 00:00:00 UTC
-                struct timeval tv = { .tv_sec = (time_t)saved_time, .tv_usec = 0 };
-                settimeofday(&tv, NULL);
-                LOG_I("RTC", "Restored time from NVS: %lld", saved_time);
-                return true;
-            }
-        }
-        nvs_close(nvs);
-    }
-    return false;
-}
-
 void cdc_rtc_init(void) {
     LOG_I("RTC", "Initializing RTC");
 
@@ -53,7 +33,7 @@ void cdc_rtc_init(void) {
     setenv("TZ", "UTC0", 1);
     tzset();
 
-    // Check internal RTC value first
+    // Check internal RTC value
     time_t now;
     time(&now);
     struct tm timeinfo;
@@ -62,22 +42,14 @@ void cdc_rtc_init(void) {
           timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
           timeinfo.tm_hour, timeinfo.tm_min, (long)now);
 
-    // If RTC has valid time (year >= 2024), use it
+    // Only use time if internal RTC has valid time (year >= 2024)
+    // Do NOT restore from NVS - better no time than wrong time
     if (timeinfo.tm_year >= (2024 - 1900)) {
         time_is_set = true;
         LOG_I("RTC", "RTC time valid");
-    }
-    // Otherwise try NVS backup
-    else if (load_time_from_nvs()) {
-        time_is_set = true;
-        time(&now);
-        localtime_r(&now, &timeinfo);
-        LOG_I("RTC", "RTC restored from NVS: %04d-%02d-%02d %02d:%02d",
-              timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-              timeinfo.tm_hour, timeinfo.tm_min);
     } else {
         time_is_set = false;
-        LOG_I("RTC", "RTC time not set");
+        LOG_I("RTC", "RTC time not set - use TIME_SET command");
     }
 }
 
@@ -109,6 +81,15 @@ void cdc_rtc_set_time(int hour, int minute, int second) {
     struct tm timeinfo;
     cdc_rtc_get_time(&timeinfo);
 
+    // If year is invalid (< 2024), set a default date
+    if (timeinfo.tm_year < (2024 - 1900)) {
+        LOG_W("RTC", "Year invalid (%d), setting default date 2025-01-01",
+              timeinfo.tm_year + 1900);
+        timeinfo.tm_year = 2025 - 1900;
+        timeinfo.tm_mon = 0;   // January
+        timeinfo.tm_mday = 1;
+    }
+
     timeinfo.tm_hour = hour;
     timeinfo.tm_min = minute;
     timeinfo.tm_sec = second;
@@ -119,7 +100,9 @@ void cdc_rtc_set_time(int hour, int minute, int second) {
 
     time_is_set = true;
     save_time_to_nvs();
-    LOG_I("RTC", "Time set to %02d:%02d:%02d", hour, minute, second);
+    LOG_I("RTC", "Time set to %02d:%02d:%02d (date: %04d-%02d-%02d)",
+          hour, minute, second,
+          timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
 }
 
 void cdc_rtc_set_date(int year, int month, int day) {

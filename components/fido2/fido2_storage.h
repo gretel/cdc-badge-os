@@ -1,0 +1,264 @@
+// FIDO2 Storage Layer (TROPIC01 + NVS)
+// Handles credential storage in ECC slots and R-Memory
+
+#ifndef FIDO2_STORAGE_H
+#define FIDO2_STORAGE_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include "fido2.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ============================================================================
+// Storage Layout
+// ============================================================================
+// ECC Slots 0-26:    Private keys (P-256 for WebAuthn)
+// R-Memory 0-26:     Credential metadata (rp_id, user_id, sign_count, etc.)
+// NVS "fido2":       Global auth counter, PIN hash
+
+#define FIDO2_ECC_SLOT_BASE     0
+#define FIDO2_ECC_SLOT_MAX      26
+#define FIDO2_RMEM_SLOT_BASE    0
+#define FIDO2_RMEM_SLOT_MAX     26
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+/**
+ * Initialize storage layer.
+ * Loads credential metadata from TROPIC01 cache.
+ *
+ * @return Number of credentials found
+ */
+uint8_t fido2_storage_init(void);
+
+// ============================================================================
+// Credential Operations
+// ============================================================================
+
+/**
+ * Create a new credential.
+ *
+ * @param rp_id Relying Party ID string
+ * @param rp_id_hash SHA-256 hash of RP ID (32 bytes)
+ * @param user_id User handle (opaque bytes)
+ * @param user_id_len Length of user handle
+ * @param user_name Display name (can be empty)
+ * @param resident_key Store as discoverable credential
+ * @param cred_protect Credential protection level (0-3)
+ * @param out_slot Output: allocated slot index
+ * @param out_cred_id Output: credential ID (64 bytes)
+ * @param out_pubkey Output: public key (64 bytes, X||Y without 0x04 prefix)
+ * @return true on success
+ */
+bool fido2_storage_create_credential(
+    const char *rp_id,
+    const uint8_t *rp_id_hash,
+    const uint8_t *user_id,
+    uint8_t user_id_len,
+    const char *user_name,
+    bool resident_key,
+    uint8_t cred_protect,
+    uint8_t *out_slot,
+    uint8_t *out_cred_id,
+    uint8_t *out_pubkey
+);
+
+/**
+ * Get credential info by slot.
+ *
+ * @param slot ECC slot index (0-26)
+ * @param info Output structure
+ * @return true if credential exists
+ */
+bool fido2_storage_get_credential(uint8_t slot, fido2_credential_info_t *info);
+
+/**
+ * Delete credential by slot.
+ *
+ * @param slot ECC slot index (0-26)
+ * @return true on success
+ */
+bool fido2_storage_delete_credential(uint8_t slot);
+
+/**
+ * Increment and get sign count for a credential.
+ *
+ * @param slot ECC slot index
+ * @return New sign count, or 0 on error
+ */
+uint32_t fido2_storage_increment_sign_count(uint8_t slot);
+
+// ============================================================================
+// Lookup Operations (use cache - no TROPIC01 access)
+// ============================================================================
+
+/**
+ * Get total credential count.
+ */
+uint8_t fido2_storage_count(void);
+
+/**
+ * Check if slot has a credential.
+ */
+bool fido2_storage_slot_used(uint8_t slot);
+
+/**
+ * Find first free slot.
+ *
+ * @return Slot index, or -1 if full
+ */
+int8_t fido2_storage_find_free_slot(void);
+
+/**
+ * Find credentials matching RP ID hash.
+ *
+ * @param rp_id_hash SHA-256 of RP ID
+ * @param out_slots Array to store matching slot indices
+ * @param max_slots Array size
+ * @return Number of matches
+ */
+uint8_t fido2_storage_find_by_rp(const uint8_t *rp_id_hash,
+                                  uint8_t *out_slots, uint8_t max_slots);
+
+/**
+ * Find resident (discoverable) credentials matching RP ID hash.
+ *
+ * @param rp_id_hash SHA-256 of RP ID
+ * @param out_slots Array to store matching slot indices
+ * @param max_slots Array size
+ * @return Number of matches
+ */
+uint8_t fido2_storage_find_by_rp_resident(const uint8_t *rp_id_hash,
+                                          uint8_t *out_slots, uint8_t max_slots);
+
+/**
+ * Check if slot contains a resident (discoverable) credential.
+ */
+bool fido2_storage_is_resident(uint8_t slot);
+
+/**
+ * Find slot by credential ID.
+ *
+ * @param cred_id Credential ID bytes
+ * @param cred_id_len Credential ID length
+ * @return Slot index, or -1 if not found
+ */
+int8_t fido2_storage_find_slot_by_cred_id(const uint8_t *cred_id, uint16_t cred_id_len);
+
+/**
+ * Get user information for a credential slot.
+ *
+ * @param slot ECC slot index
+ * @param user_id Output user handle buffer
+ * @param user_id_len Output user handle length
+ * @param user_name Output user name buffer (can be NULL)
+ * @param user_name_max Output buffer size for user_name
+ * @return true on success
+ */
+bool fido2_storage_get_user(uint8_t slot,
+                            uint8_t *user_id,
+                            uint8_t *user_id_len,
+                            char *user_name,
+                            size_t user_name_max);
+
+/**
+ * Verify credential ID belongs to slot.
+ *
+ * @param slot ECC slot index
+ * @param cred_id Credential ID to verify
+ * @return true if matches
+ */
+bool fido2_storage_verify_cred_id(uint8_t slot, const uint8_t *cred_id);
+
+/**
+ * Get credential ID for slot.
+ *
+ * @param slot ECC slot index
+ * @param out_cred_id Output buffer (FIDO2_CRED_ID_LEN bytes)
+ * @return true on success
+ */
+bool fido2_storage_get_cred_id(uint8_t slot, uint8_t *out_cred_id);
+
+// ============================================================================
+// Signing Operations (requires TROPIC01 access)
+// ============================================================================
+
+/**
+ * Sign authentication data with credential key.
+ *
+ * @param slot ECC slot index
+ * @param hash SHA-256 hash to sign (32 bytes)
+ * @param signature Output DER-encoded signature
+ * @param sig_len Output signature length
+ * @return true on success
+ */
+bool fido2_storage_sign(uint8_t slot, const uint8_t *hash,
+                        uint8_t *signature, uint8_t *sig_len);
+
+/**
+ * Sign raw message with credential private key (TROPIC01 hashes internally).
+ * Returns raw signature format (r || s = 64 bytes) for CTAP2/WebAuthn.
+ *
+ * @param slot ECC slot index
+ * @param msg Raw message to sign (authData || clientDataHash)
+ * @param msg_len Message length
+ * @param signature Output raw signature (64 bytes)
+ * @param sig_len Output signature length (always 64)
+ * @return true on success
+ */
+bool fido2_storage_sign_raw(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
+                            uint8_t *signature, uint8_t *sig_len);
+
+/**
+ * Sign raw message with credential private key (TROPIC01 hashes internally).
+ * Returns DER-encoded signature for U2F compatibility.
+ *
+ * @param slot ECC slot index
+ * @param msg Raw message to sign (authData || clientDataHash)
+ * @param msg_len Message length
+ * @param signature Output DER-encoded signature
+ * @param sig_len Output signature length
+ * @return true on success
+ */
+bool fido2_storage_sign_der(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
+                            uint8_t *signature, uint8_t *sig_len);
+
+/**
+ * Get public key for credential.
+ *
+ * @param slot ECC slot index
+ * @param pubkey Output: uncompressed P-256 public key (65 bytes)
+ * @return true on success
+ */
+bool fido2_storage_get_pubkey(uint8_t slot, uint8_t *pubkey);
+
+// ============================================================================
+// NVS Counter Operations
+// ============================================================================
+
+/**
+ * Load global auth counter from NVS.
+ */
+void fido2_storage_counter_load(void);
+
+/**
+ * Get global auth counter value.
+ */
+uint32_t fido2_storage_counter_get(void);
+
+/**
+ * Increment and save global auth counter.
+ */
+void fido2_storage_counter_increment(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // FIDO2_STORAGE_H

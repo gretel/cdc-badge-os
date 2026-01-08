@@ -3,6 +3,22 @@
 #include "tusb_option.h"
 #include "sdkconfig.h"
 
+// ============================================================================
+// HID Interface Count
+// ============================================================================
+// CFG_TUD_HID must match the actual number of HID interfaces in the
+// configuration descriptor. Set via build flags in platformio.ini.
+//
+// Example: -D TUSB_HID_COUNT=2 for FIDO2 + Keyboard
+//          -D TUSB_HID_COUNT=1 for only Keyboard or only FIDO2
+//          -D TUSB_HID_COUNT=0 for no HID (CDC only)
+
+#ifndef TUSB_HID_COUNT
+#define TUSB_HID_COUNT 2    // Default: FIDO2 + Keyboard (both enabled by default)
+#endif
+
+#define TUSB_FEATURE_HID (TUSB_HID_COUNT > 0)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -64,15 +80,11 @@ extern "C" {
 #define CFG_TUD_HID_BUFSIZE         CONFIG_TINYUSB_HID_BUFSIZE
 
 // Enabled device class driver counts
-#define CFG_TUD_CDC                 (CONFIG_TINYUSB_CDC_ENABLED ? 1 : 0)
-#define CFG_TUD_MSC                 (CONFIG_TINYUSB_MSC_ENABLED ? 1 : 0)
-#if CONFIG_TINYUSB_HID_ENABLED
-#define CFG_TUD_HID                 2
-#else
-#define CFG_TUD_HID                 0
-#endif
-#define CFG_TUD_MIDI                (CONFIG_TINYUSB_MIDI_ENABLED ? 1 : 0)
-#define CFG_TUD_CUSTOM_CLASS        (CONFIG_TINYUSB_CUSTOM_CLASS_ENABLED ? 1 : 0)
+#define CFG_TUD_CDC                 1   // CDC always enabled for serial console
+#define CFG_TUD_MSC                 0   // MSC not used
+#define CFG_TUD_HID                 TUSB_HID_COUNT  // Set via TUSB_HID_COUNT above
+#define CFG_TUD_MIDI                0   // MIDI not used
+#define CFG_TUD_CUSTOM_CLASS        0   // Custom class not used
 
 #ifdef __cplusplus
 }

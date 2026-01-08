@@ -30,6 +30,10 @@ void badge_settings_set_info(const char *info);
 const char* badge_settings_get_info2(void);
 void badge_settings_set_info2(const char *info2);
 
+// Get/Set timezone offset (-12 to +14)
+int8_t badge_settings_get_timezone(void);
+void badge_settings_set_timezone(int8_t tz_offset);
+
 #ifdef __cplusplus
 }
 #endif

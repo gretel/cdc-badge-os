@@ -1,7 +1,7 @@
 #pragma once
 
 // Serial Command Interface for CDC Badge
-// Allows setting time, date, and display text via USB serial
+// Extended command set for TOTP, FIDO2, and TROPIC01 management
 
 #include <stdbool.h>
 

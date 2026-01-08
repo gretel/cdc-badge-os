@@ -139,7 +139,7 @@ void gui_init(void) {
     // Initialize display (CalEPD uses Kconfig for pins)
     display.init(false);  // debug=false
     display.setRotation(1);  // Landscape
-    display.setMonoMode(true);
+    display.setMonoMode(true);  // Mono only (partial refresh needs this)
     display.fillScreen(EPD_WHITE);
 
     // Create render mutex and task
@@ -173,6 +173,23 @@ void gui_show_splash(void) {
     int ver_x = (display.width() - w) / 2;
     display.setCursor(ver_x, 80);
     display.print(APP_VERSION);
+
+    // Small text at bottom - use built-in font (6x8 pixels)
+    display.setFont(NULL);
+    display.setTextSize(1);
+
+    // Left bottom: Build date (MMDD HH:MM format)
+    char build_str[16];
+    // Extract from __DATE__ ("Jan  1 2025") and __TIME__ ("12:34:56")
+    snprintf(build_str, sizeof(build_str), "%.3s%2.2s %.5s", __DATE__, __DATE__ + 4, __TIME__);
+    display.setCursor(2, 120);
+    display.print(build_str);
+
+    // Right bottom: "updating cache"
+    const char *cache_text = "updating cache";
+    int cache_x = display.width() - (strlen(cache_text) * 6) - 2;  // 6 pixels per char
+    display.setCursor(cache_x, 120);
+    display.print(cache_text);
 
     // Full refresh (synchronous - we want to see it)
     display.update();

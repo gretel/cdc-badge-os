@@ -5,6 +5,7 @@
 #include "gui.h"
 #include "cdc_log.h"
 #include "cdc_time.h"
+#include "i18n.h"
 #include <cstring>
 #include <cstdio>
 #include <cmath>
@@ -141,7 +142,49 @@ static void draw_sun_icon(Gdey029T94 &display, int x, int y) {
     }
 }
 
-// Draw comic-style sleep icon (stacked Z's getting smaller)
+// Draw small tilted 'z' for light sleep
+static void draw_light_sleep_icon(Gdey029T94 &display, int x, int y) {
+    // Single small z, slightly tilted (italicized)
+    int w = 6, h = 6;
+    int tilt = 1;  // Pixel offset for italic effect
+    display.drawLine(x + tilt, y, x + w + tilt, y, EPD_BLACK);        // top
+    display.drawLine(x + w + tilt, y, x, y + h, EPD_BLACK);           // diagonal
+    display.drawLine(x, y + h, x + w, y + h, EPD_BLACK);              // bottom
+}
+
+// Draw USB icon (simplified USB connector shape)
+static void draw_usb_icon(Gdey029T94 &display, int x, int y) {
+    // USB connector shape - simplified trident
+    int w = 10, h = 12;
+    // Main stem
+    display.drawLine(x + w/2, y + 4, x + w/2, y + h, EPD_BLACK);
+    // Top horizontal
+    display.drawLine(x + 2, y + 4, x + w - 2, y + 4, EPD_BLACK);
+    // Left branch
+    display.drawLine(x + 2, y + 4, x + 2, y, EPD_BLACK);
+    display.fillCircle(x + 2, y, 1, EPD_BLACK);
+    // Right branch
+    display.drawLine(x + w - 2, y + 4, x + w - 2, y + 2, EPD_BLACK);
+    display.fillRect(x + w - 4, y, 4, 3, EPD_BLACK);
+    // Bottom arrow
+    display.drawLine(x + w/2, y + h, x + w/2 - 2, y + h - 2, EPD_BLACK);
+    display.drawLine(x + w/2, y + h, x + w/2 + 2, y + h - 2, EPD_BLACK);
+}
+
+// Draw BLE icon (simplified Bluetooth rune)
+static void draw_ble_icon(Gdey029T94 &display, int x, int y) {
+    int h = 12;
+    // Central vertical
+    display.drawLine(x + 4, y, x + 4, y + h, EPD_BLACK);
+    // Top right diagonal
+    display.drawLine(x + 4, y, x + 8, y + 3, EPD_BLACK);
+    display.drawLine(x + 8, y + 3, x + 1, y + h/2, EPD_BLACK);
+    // Bottom right diagonal
+    display.drawLine(x + 1, y + h/2, x + 8, y + h - 3, EPD_BLACK);
+    display.drawLine(x + 8, y + h - 3, x + 4, y + h, EPD_BLACK);
+}
+
+// Draw comic-style sleep icon (stacked Z's getting smaller) for deep sleep
 static void draw_sleep_icon(Gdey029T94 &display, int x, int y) {
     // Draw 3 Z's stacked, getting smaller as they go up-right
     // Large Z (bottom-left)
@@ -166,6 +209,100 @@ static void draw_sleep_icon(Gdey029T94 &display, int x, int y) {
     display.drawLine(z3_x, z3_y + z3_h, z3_x + z3_w, z3_y + z3_h, EPD_BLACK);
 }
 
+// Draw WiFi icon (3 signal arcs + dot at base)
+static void draw_wifi_icon(Gdey029T94 &display, int x, int y) {
+    int cx = x + 6;  // center x
+    int by = y + 12; // base y
+
+    // Base dot
+    display.fillCircle(cx, by, 1, EPD_BLACK);
+
+    // Signal arcs (from small to large)
+    // Arc 1 (smallest)
+    for (int i = -20; i <= 20; i++) {
+        int px = cx + (i * 3 / 20);
+        int py = by - 4 + (i * i / 100);
+        display.drawPixel(px, py, EPD_BLACK);
+    }
+    // Arc 2 (medium)
+    for (int i = -30; i <= 30; i++) {
+        int px = cx + (i * 5 / 30);
+        int py = by - 7 + (i * i / 150);
+        display.drawPixel(px, py, EPD_BLACK);
+    }
+    // Arc 3 (largest)
+    for (int i = -40; i <= 40; i++) {
+        int px = cx + (i * 6 / 40);
+        int py = by - 10 + (i * i / 180);
+        display.drawPixel(px, py, EPD_BLACK);
+    }
+}
+
+// ============================================================================
+// Status Icon Rendering (right-to-left from x,y position)
+// ============================================================================
+
+int view_render_status_icons(uint16_t icons, int x, int y) {
+    if (icons == ICON_NONE) return 0;
+
+    Gdey029T94 &display = gui_get_display();
+    int total_width = 0;
+    int cur_x = x;
+
+    // Icons are rendered right-to-left in priority order
+    // Each icon function expects top-left corner
+
+    if (icons & ICON_WIFI) {
+        cur_x -= 12;
+        draw_wifi_icon(display, cur_x, y);
+        cur_x -= ICON_SPACING;
+        total_width += 12 + ICON_SPACING;
+    }
+
+    if (icons & ICON_BLE) {
+        cur_x -= 12;
+        draw_ble_icon(display, cur_x, y);
+        cur_x -= ICON_SPACING;
+        total_width += 12 + ICON_SPACING;
+    }
+
+    if (icons & ICON_USB) {
+        cur_x -= 12;
+        draw_usb_icon(display, cur_x, y);
+        cur_x -= ICON_SPACING;
+        total_width += 12 + ICON_SPACING;
+    }
+
+    if (icons & ICON_BACKLIGHT) {
+        cur_x -= 14;
+        draw_sun_icon(display, cur_x + 7, y + 7);  // sun_icon uses center point
+        cur_x -= ICON_SPACING;
+        total_width += 14 + ICON_SPACING;
+    }
+
+    // Deep sleep and light sleep are mutually exclusive (deep sleep has priority)
+    if (icons & ICON_DEEP_SLEEP) {
+        cur_x -= 20;
+        draw_sleep_icon(display, cur_x, y);
+        cur_x -= ICON_SPACING;
+        total_width += 20 + ICON_SPACING;
+    } else if (icons & ICON_LIGHT_SLEEP) {
+        cur_x -= 8;
+        draw_light_sleep_icon(display, cur_x, y + 4);
+        cur_x -= ICON_SPACING;
+        total_width += 8 + ICON_SPACING;
+    }
+
+    if (icons & ICON_LOCK) {
+        cur_x -= 12;
+        draw_lock_icon(display, cur_x, y);
+        cur_x -= ICON_SPACING;
+        total_width += 12 + ICON_SPACING;
+    }
+
+    return total_width;
+}
+
 // ============================================================================
 // Lock Screen View
 // ============================================================================
@@ -180,24 +317,27 @@ void view_lock_screen_render(const view_lock_screen_t *data, bool partial) {
     // Battery icon (top-left)
     draw_battery(display, ICON_MARGIN, ICON_MARGIN, data->battery_percent, data->charging);
 
-    // Clock next to battery (hidden if empty)
+    // Clock and date next to battery (on same line)
     if (data->clock[0]) {
         display.setFont(&FreeMonoBold9pt7b);
         display.setCursor(ICON_MARGIN + 30, ICON_MARGIN + 12);
         display.print(data->clock);
+        // Date after clock (if set)
+        if (data->date[0]) {
+            display.print(" ");
+            display.print(data->date);
+        }
     }
 
-    // Sun icon (top-right) when backlight forced on
-    if (data->backlight_on) {
-        draw_sun_icon(display, display.width() - ICON_MARGIN - 25, ICON_MARGIN + 7);
-    }
+    // Build icon bitmask from both new field and legacy fields
+    uint16_t icons = data->status_icons;
+    if (data->backlight_on) icons |= ICON_BACKLIGHT;
+    if (data->show_sleep_icon) icons |= ICON_DEEP_SLEEP;
+    if (data->show_light_sleep_icon) icons |= ICON_LIGHT_SLEEP;
+    if (data->show_lock_icon) icons |= ICON_LOCK;
 
-    // Sleep icon or Lock icon (top-right)
-    if (data->show_sleep_icon) {
-        draw_sleep_icon(display, display.width() - ICON_MARGIN - 22, ICON_MARGIN);
-    } else if (data->show_lock_icon) {
-        draw_lock_icon(display, display.width() - ICON_MARGIN - 12, ICON_MARGIN);
-    }
+    // Render all status icons (right-to-left from top-right corner)
+    view_render_status_icons(icons, display.width() - ICON_MARGIN, ICON_MARGIN);
 
     // Name (large, bold)
     display.setFont(&FreeMonoBold12pt7b);
@@ -215,11 +355,11 @@ void view_lock_screen_render(const view_lock_screen_t *data, bool partial) {
 
     // Footer: different text for deep sleep mode
     if (data->show_sleep_icon) {
-        draw_hints(display, "Press any key to wake up");
+        draw_hints(display, i18n_str(STR_PRESS_ANY_KEY));
     } else {
-        draw_hints(display, "[Y] Unlock");
+        draw_hints(display, i18n_str(STR_UNLOCK));
     }
-    gui_flush(!partial);
+    gui_flush(false);  // Always partial refresh
 }
 
 // ============================================================================
@@ -253,15 +393,23 @@ void view_info_screen_init(view_info_screen_t *view, const char *title, const ch
 }
 
 void view_info_screen_scroll(view_info_screen_t *view, bool down) {
-    if (!view) return;
+    if (!view || view->total_lines == 0) return;
 
     if (down) {
         if (view->scroll_offset + view->visible_lines < view->total_lines) {
             view->scroll_offset++;
+        } else {
+            // Wrap to top
+            view->scroll_offset = 0;
         }
     } else {
         if (view->scroll_offset > 0) {
             view->scroll_offset--;
+        } else {
+            // Wrap to bottom
+            if (view->total_lines > view->visible_lines) {
+                view->scroll_offset = view->total_lines - view->visible_lines;
+            }
         }
     }
 }
@@ -325,11 +473,14 @@ void view_info_screen_render(const view_info_screen_t *view, bool partial) {
         display.print("(empty)");
     }
 
-    // Footer with line position
+    // Footer with line range (e.g., "1-4/8")
     char hint[32];
-    snprintf(hint, sizeof(hint), "%d/%d  [Y] Back", view->scroll_offset + 1, view->total_lines);
+    uint16_t first_line = view->scroll_offset + 1;
+    uint16_t last_line = view->scroll_offset + view->visible_lines;
+    if (last_line > view->total_lines) last_line = view->total_lines;
+    snprintf(hint, sizeof(hint), "%d-%d/%d  %s", first_line, last_line, view->total_lines, i18n_str(STR_HINT_BACK));
     draw_hints(display, hint);
-    gui_flush(!partial);
+    gui_flush(false);  // Always partial refresh
 }
 
 // ============================================================================
@@ -345,6 +496,7 @@ void view_list_screen_init(view_list_screen_t *view, const char *title,
     view->item_count = count;
     view->selection = 0;
     view->scroll_pos = 0;
+    view->hint = NULL;  // Use default hint
 }
 
 void view_list_screen_navigate(view_list_screen_t *view, bool down) {
@@ -353,18 +505,28 @@ void view_list_screen_navigate(view_list_screen_t *view, bool down) {
     if (down) {
         if (view->selection < view->item_count - 1) {
             view->selection++;
-            // Adjust scroll if needed
-            if (view->selection >= view->scroll_pos + VIEW_LIST_VISIBLE_ITEMS) {
-                view->scroll_pos = view->selection - VIEW_LIST_VISIBLE_ITEMS + 1;
-            }
+        } else {
+            // Wrap to top
+            view->selection = 0;
+            view->scroll_pos = 0;
+        }
+        // Adjust scroll if needed
+        if (view->selection >= view->scroll_pos + VIEW_LIST_VISIBLE_ITEMS) {
+            view->scroll_pos = view->selection - VIEW_LIST_VISIBLE_ITEMS + 1;
         }
     } else {
         if (view->selection > 0) {
             view->selection--;
-            // Adjust scroll if needed
-            if (view->selection < view->scroll_pos) {
-                view->scroll_pos = view->selection;
+        } else {
+            // Wrap to bottom
+            view->selection = view->item_count - 1;
+            if (view->item_count > VIEW_LIST_VISIBLE_ITEMS) {
+                view->scroll_pos = view->item_count - VIEW_LIST_VISIBLE_ITEMS;
             }
+        }
+        // Adjust scroll if needed
+        if (view->selection < view->scroll_pos) {
+            view->scroll_pos = view->selection;
         }
     }
 }
@@ -419,11 +581,6 @@ void view_list_screen_render(const view_list_screen_t *view, bool partial) {
             }
 
             display.setCursor(10, y);
-            if (view->items[idx].shortcut) {
-                display.print("[");
-                display.print(view->items[idx].shortcut);
-                display.print("] ");
-            }
             display.print(view->items[idx].label ? view->items[idx].label : "");
             y += LINE_HEIGHT;
         }
@@ -441,10 +598,16 @@ void view_list_screen_render(const view_list_screen_t *view, bool partial) {
     }
 
     // Footer with position indicator
-    char hint[32];
-    snprintf(hint, sizeof(hint), "%d/%d  [Y] Select", view->selection + 1, view->item_count);
+    char hint[64];
+    if (view->hint) {
+        // Custom hint with position prefix
+        snprintf(hint, sizeof(hint), "%d/%d  %s", view->selection + 1, view->item_count, view->hint);
+    } else {
+        // Default hint
+        snprintf(hint, sizeof(hint), "%d/%d  %s", view->selection + 1, view->item_count, i18n_str(STR_HINT_SELECT));
+    }
     draw_hints(display, hint);
-    gui_flush(!partial);
+    gui_flush(false);  // Always partial refresh
 }
 
 // ============================================================================
@@ -552,8 +715,8 @@ void view_t9_input_render(const view_t9_input_t *view, bool partial) {
         display.print("|");
     }
 
-    draw_hints(display, "[N] Del  [2s N] Abort  [Y] OK");
-    gui_flush(!partial);
+    draw_hints(display, i18n_str(STR_HINT_T9_INPUT));
+    gui_flush(false);  // Always partial refresh
 }
 
 // ============================================================================
@@ -574,6 +737,7 @@ void view_slider_init(view_slider_t *view, const char *title,
     view->format = format ? format : "%d";
     view->unit = unit ? unit : "";
     view->hint = hint ? hint : "[2/8] Adjust  [Y] OK";
+    view->display_offset = 0;
 }
 
 void view_slider_adjust(view_slider_t *view, bool up) {
@@ -616,9 +780,10 @@ void view_slider_render(const view_slider_t *view, bool partial) {
     display.setFont(&FreeMonoBold12pt7b);
     display.setTextColor(EPD_BLACK);
 
-    // Value display
+    // Value display (with optional offset for signed display)
     char value_str[32];
-    snprintf(value_str, sizeof(value_str), view->format, view->value);
+    int16_t display_value = (int16_t)view->value + view->display_offset;
+    snprintf(value_str, sizeof(value_str), view->format, display_value);
 
     // Center the value
     display.setCursor(80, 60);
@@ -646,7 +811,7 @@ void view_slider_render(const view_slider_t *view, bool partial) {
     }
 
     draw_hints(display, view->hint);
-    gui_flush(!partial);
+    gui_flush(false);  // Always partial refresh
 }
 
 // ============================================================================
@@ -773,8 +938,313 @@ void view_pin_entry_render(const view_pin_entry_t *view, bool partial) {
         display.print(view->message);
     }
 
-    draw_hints(display, "[0-9] Digit  [N] Del  [Y] OK");
-    gui_flush(!partial);
+    draw_hints(display, i18n_str(STR_HINT_PIN_INPUT));
+    gui_flush(false);  // Always partial refresh
+}
+
+// ============================================================================
+// Date Input Screen View
+// ============================================================================
+
+void view_date_input_init(view_date_input_t *view, uint8_t day, uint8_t month, uint16_t year) {
+    if (!view) return;
+    view->day = day > 0 ? day : 1;
+    view->month = month > 0 ? month : 1;
+    view->year = year > 0 ? year : 2025;
+    view->field = 0;
+    view->digit = 0;
+}
+
+bool view_date_input_key(view_date_input_t *view, char key) {
+    if (!view || key < '0' || key > '9') return false;
+
+    uint8_t d = key - '0';
+
+    if (view->field == 0) {  // Day (01-31)
+        if (view->digit == 0) {
+            view->day = d * 10 + (view->day % 10);
+            view->digit = 1;
+        } else {
+            view->day = (view->day / 10) * 10 + d;
+            if (view->day > 31) view->day = 31;
+            if (view->day == 0) view->day = 1;
+            view->digit = 0;
+            view->field = 1;  // Auto-advance to month
+        }
+    } else if (view->field == 1) {  // Month (01-12)
+        if (view->digit == 0) {
+            view->month = d * 10 + (view->month % 10);
+            view->digit = 1;
+        } else {
+            view->month = (view->month / 10) * 10 + d;
+            if (view->month > 12) view->month = 12;
+            if (view->month == 0) view->month = 1;
+            view->digit = 0;
+            view->field = 2;  // Auto-advance to year
+        }
+    } else {  // Year (4 digits)
+        uint16_t y = view->year;
+        if (view->digit == 0) {
+            y = d * 1000 + (y % 1000);
+        } else if (view->digit == 1) {
+            y = (y / 1000) * 1000 + d * 100 + (y % 100);
+        } else if (view->digit == 2) {
+            y = (y / 100) * 100 + d * 10 + (y % 10);
+        } else {
+            y = (y / 10) * 10 + d;
+        }
+        view->year = y;
+        view->digit = (view->digit + 1) % 4;
+        if (view->digit == 0) {
+            // Year complete, stay on year field
+        }
+    }
+    return true;
+}
+
+void view_date_input_next_field(view_date_input_t *view) {
+    if (!view) return;
+    view->field = (view->field + 1) % 3;
+    view->digit = 0;
+}
+
+void view_date_input_prev_field(view_date_input_t *view) {
+    if (!view) return;
+    view->field = view->field > 0 ? view->field - 1 : 2;
+    view->digit = 0;
+}
+
+void view_date_input_render(const view_date_input_t *view, bool partial) {
+    if (!view) return;
+
+    Gdey029T94 &display = gui_get_display();
+    gui_clear();
+
+    draw_header(display, "Set Date");
+
+    display.setTextColor(EPD_BLACK);
+    display.setFont(&FreeMonoBold12pt7b);
+
+    // Date display: DD / MM / YYYY
+    char date_str[20];
+    snprintf(date_str, sizeof(date_str), "%02d / %02d / %04d",
+             view->day, view->month, view->year);
+
+    display.setCursor(30, 55);
+    display.print(date_str);
+
+    // Underline current field
+    int underline_x = 30;
+    int underline_w = 26;
+    if (view->field == 0) {
+        underline_x = 30;  // Day
+    } else if (view->field == 1) {
+        underline_x = 30 + 52;  // Month (after "DD / ")
+    } else {
+        underline_x = 30 + 104;  // Year (after "DD / MM / ")
+        underline_w = 52;  // 4 digits
+    }
+    display.fillRect(underline_x, 60, underline_w, 3, EPD_BLACK);
+
+    draw_hints(display, i18n_str(STR_HINT_DATE_TIME));
+    gui_flush(false);
+}
+
+// ============================================================================
+// Time Input Screen View
+// ============================================================================
+
+void view_time_input_init(view_time_input_t *view, uint8_t hour, uint8_t minute) {
+    if (!view) return;
+    view->hour = hour < 24 ? hour : 0;
+    view->minute = minute < 60 ? minute : 0;
+    view->field = 0;
+    view->digit = 0;
+}
+
+bool view_time_input_key(view_time_input_t *view, char key) {
+    if (!view || key < '0' || key > '9') return false;
+
+    uint8_t d = key - '0';
+
+    if (view->field == 0) {  // Hour (00-23)
+        if (view->digit == 0) {
+            view->hour = d * 10 + (view->hour % 10);
+            view->digit = 1;
+        } else {
+            view->hour = (view->hour / 10) * 10 + d;
+            if (view->hour > 23) view->hour = 23;
+            view->digit = 0;
+            view->field = 1;  // Auto-advance to minute
+        }
+    } else {  // Minute (00-59)
+        if (view->digit == 0) {
+            view->minute = d * 10 + (view->minute % 10);
+            view->digit = 1;
+        } else {
+            view->minute = (view->minute / 10) * 10 + d;
+            if (view->minute > 59) view->minute = 59;
+            view->digit = 0;
+            // Stay on minute field after complete
+        }
+    }
+    return true;
+}
+
+void view_time_input_next_field(view_time_input_t *view) {
+    if (!view) return;
+    view->field = (view->field + 1) % 2;
+    view->digit = 0;
+}
+
+void view_time_input_prev_field(view_time_input_t *view) {
+    if (!view) return;
+    view->field = view->field > 0 ? view->field - 1 : 1;
+    view->digit = 0;
+}
+
+void view_time_input_render(const view_time_input_t *view, bool partial) {
+    if (!view) return;
+
+    Gdey029T94 &display = gui_get_display();
+    gui_clear();
+
+    draw_header(display, "Set Time");
+
+    display.setTextColor(EPD_BLACK);
+    display.setFont(&FreeMonoBold12pt7b);
+
+    // Time display: HH : MM
+    char time_str[12];
+    snprintf(time_str, sizeof(time_str), "%02d : %02d",
+             view->hour, view->minute);
+
+    display.setCursor(70, 55);
+    display.print(time_str);
+
+    // Underline current field
+    int underline_x = 70;
+    if (view->field == 1) {
+        underline_x = 70 + 52;  // Minutes (after "HH : ")
+    }
+    display.fillRect(underline_x, 60, 26, 3, EPD_BLACK);
+
+    draw_hints(display, i18n_str(STR_HINT_DATE_TIME));
+    gui_flush(false);
+}
+
+// ============================================================================
+// TOTP Code View (with progress bar)
+// ============================================================================
+
+#define TOTP_PROGRESS_BAR_WIDTH 200
+#define TOTP_PROGRESS_BAR_HEIGHT 10
+#define TOTP_PROGRESS_BAR_X 40
+#define TOTP_PROGRESS_BAR_Y 95
+
+void view_totp_code_init(view_totp_code_t *view, const char *issuer, const char *name,
+                         const char *code, uint8_t digits, uint32_t period,
+                         int8_t remaining, const char *hint) {
+    if (!view) return;
+
+    memset(view, 0, sizeof(*view));
+
+    if (issuer) {
+        strncpy(view->issuer, issuer, VIEW_MAX_TEXT_LEN - 1);
+    }
+    if (name) {
+        strncpy(view->name, name, VIEW_MAX_TEXT_LEN - 1);
+    }
+    if (code) {
+        strncpy(view->code, code, sizeof(view->code) - 1);
+    }
+    view->digits = digits > 0 ? digits : 6;
+    view->period = period > 0 ? period : 30;
+    view->remaining = remaining;
+    view->hint = hint;
+}
+
+void view_totp_code_update(view_totp_code_t *view, const char *code, int8_t remaining) {
+    if (!view) return;
+
+    if (code) {
+        strncpy(view->code, code, sizeof(view->code) - 1);
+    }
+    view->remaining = remaining;
+}
+
+void view_totp_code_render(const view_totp_code_t *view, bool partial) {
+    if (!view) return;
+
+    Gdey029T94 &display = gui_get_display();
+    gui_clear();
+
+    // Header with issuer (or name if no issuer)
+    if (view->issuer[0]) {
+        draw_header(display, view->issuer);
+    } else if (view->name[0]) {
+        draw_header(display, view->name);
+    } else {
+        draw_header(display, "TOTP");
+    }
+
+    display.setFont(&FreeMonoBold9pt7b);
+    display.setTextColor(EPD_BLACK);
+
+    // Show account name below header if issuer was used
+    if (view->issuer[0] && view->name[0]) {
+        display.setCursor(10, 42);
+        display.print(view->name);
+    }
+
+    // Format code with space in middle: "123 456" or "1234 5678"
+    char formatted[12];
+    if (view->code[0]) {
+        if (view->digits == 8) {
+            snprintf(formatted, sizeof(formatted), "%.4s %.4s", view->code, view->code + 4);
+        } else {
+            snprintf(formatted, sizeof(formatted), "%.3s %.3s", view->code, view->code + 3);
+        }
+    } else {
+        strcpy(formatted, "--- ---");
+    }
+
+    // Large code display (centered)
+    display.setFont(&FreeMonoBold12pt7b);
+    display.setCursor(50, 75);
+    display.print(formatted);
+
+    // Time remaining progress bar
+    display.setFont(&FreeMonoBold9pt7b);
+
+    if (view->remaining >= 0) {
+        // Calculate filled portion
+        int filled = (view->remaining * TOTP_PROGRESS_BAR_WIDTH) / view->period;
+        if (filled > TOTP_PROGRESS_BAR_WIDTH) filled = TOTP_PROGRESS_BAR_WIDTH;
+
+        // Draw progress bar outline
+        display.drawRect(TOTP_PROGRESS_BAR_X, TOTP_PROGRESS_BAR_Y,
+                         TOTP_PROGRESS_BAR_WIDTH, TOTP_PROGRESS_BAR_HEIGHT, EPD_BLACK);
+
+        // Draw filled portion
+        if (filled > 0) {
+            display.fillRect(TOTP_PROGRESS_BAR_X, TOTP_PROGRESS_BAR_Y,
+                             filled, TOTP_PROGRESS_BAR_HEIGHT, EPD_BLACK);
+        }
+
+        // Show seconds remaining
+        char sec_str[8];
+        snprintf(sec_str, sizeof(sec_str), "%ds", view->remaining);
+        display.setCursor(TOTP_PROGRESS_BAR_X + TOTP_PROGRESS_BAR_WIDTH + 5, 103);
+        display.print(sec_str);
+    } else {
+        // Time not synced warning
+        display.setCursor(30, 100);
+        display.print(i18n_str(STR_TIME_NOT_SYNCED));
+    }
+
+    draw_hints(display, view->hint ? view->hint : i18n_str(STR_HINT_BACK));
+    gui_flush(false);
 }
 
 // ============================================================================
@@ -863,4 +1333,111 @@ void view_toast_error(const char *message, uint16_t duration_ms) {
 
     // Block for duration
     delay(duration_ms);
+}
+
+// ============================================================================
+// Context Menu Overlay
+// ============================================================================
+
+#define CTX_BOX_WIDTH 140
+#define CTX_TITLE_HEIGHT 18
+#define CTX_ITEM_HEIGHT 16
+#define CTX_PADDING 4
+
+void view_context_menu_init(view_context_menu_t *menu, const char *title,
+                            const view_context_item_t *items, uint8_t count) {
+    if (!menu) return;
+    // Copy title to avoid dangling pointer from stack variables
+    if (title) {
+        strncpy(menu->title, title, VIEW_CONTEXT_TITLE_LEN - 1);
+        menu->title[VIEW_CONTEXT_TITLE_LEN - 1] = '\0';
+    } else {
+        menu->title[0] = '\0';
+    }
+    menu->items = items;
+    menu->item_count = (count > VIEW_CONTEXT_MAX_ITEMS) ? VIEW_CONTEXT_MAX_ITEMS : count;
+    menu->selection = 0;
+    menu->visible = false;
+}
+
+void view_context_menu_show(view_context_menu_t *menu) {
+    if (!menu) return;
+    menu->visible = true;
+    menu->selection = 0;
+    view_context_menu_render(menu);
+}
+
+void view_context_menu_hide(view_context_menu_t *menu) {
+    if (!menu) return;
+    menu->visible = false;
+}
+
+void view_context_menu_navigate(view_context_menu_t *menu, bool down) {
+    if (!menu || menu->item_count == 0) return;
+
+    if (down) {
+        menu->selection = (menu->selection + 1) % menu->item_count;
+    } else {
+        menu->selection = (menu->selection == 0) ? menu->item_count - 1 : menu->selection - 1;
+    }
+}
+
+void view_context_menu_render(const view_context_menu_t *menu) {
+    if (!menu || !menu->visible || !menu->items) return;
+
+    Gdey029T94 &display = gui_get_display();
+
+    int box_height = CTX_TITLE_HEIGHT + (menu->item_count * CTX_ITEM_HEIGHT) + CTX_PADDING * 2;
+    int box_x = (display.width() - CTX_BOX_WIDTH) / 2;
+    int box_y = (display.height() - box_height) / 2;
+
+    // White box with border
+    display.fillRect(box_x, box_y, CTX_BOX_WIDTH, box_height, EPD_WHITE);
+    display.drawRect(box_x, box_y, CTX_BOX_WIDTH, box_height, EPD_BLACK);
+    display.drawRect(box_x + 1, box_y + 1, CTX_BOX_WIDTH - 2, box_height - 2, EPD_BLACK);
+
+    // Title bar (inverted)
+    display.fillRect(box_x + 2, box_y + 2, CTX_BOX_WIDTH - 4, CTX_TITLE_HEIGHT - 2, EPD_BLACK);
+    display.setFont(&FreeMonoBold9pt7b);
+    display.setTextColor(EPD_WHITE);
+    display.setCursor(box_x + CTX_PADDING + 2, box_y + 13);
+    if (menu->title[0]) {
+        display.print(menu->title);
+    }
+
+    // Menu items
+    int y = box_y + CTX_TITLE_HEIGHT + CTX_PADDING;
+    for (uint8_t i = 0; i < menu->item_count; i++) {
+        bool is_selected = (i == menu->selection);
+
+        if (is_selected) {
+            display.fillRect(box_x + 2, y - 2, CTX_BOX_WIDTH - 4, CTX_ITEM_HEIGHT, EPD_BLACK);
+            display.setTextColor(EPD_WHITE);
+        } else {
+            display.setTextColor(EPD_BLACK);
+        }
+
+        display.setCursor(box_x + CTX_PADDING + 4, y + 10);
+        if (is_selected) {
+            display.print("> ");
+        } else {
+            display.print("  ");
+        }
+        if (menu->items[i].label) {
+            display.print(menu->items[i].label);
+        }
+
+        y += CTX_ITEM_HEIGHT;
+    }
+
+    gui_flush_sync(false);
+}
+
+uint8_t view_context_menu_get_action(const view_context_menu_t *menu) {
+    if (!menu || !menu->items || menu->selection >= menu->item_count) return 0;
+    return menu->items[menu->selection].action_id;
+}
+
+bool view_context_menu_is_visible(const view_context_menu_t *menu) {
+    return menu && menu->visible;
 }

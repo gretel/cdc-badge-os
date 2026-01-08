@@ -1,13 +1,26 @@
+# macOS
 .DS_Store
+
+# IDE
 .vscode
+.idea
+
+# Build artifacts
 .pio
 build
 managed_components
 dependencies.lock
 CMakeCache.txt
 CMakeFiles
+cmake-build-*/
+
 # Patch marker files
 components/*/.patched
+
+# Backup/temp files
+*.bak
+*.orig
+*~
 
 # Legacy code
 legacy/
@@ -15,3 +28,5 @@ legacy/
 # Claude config
 CLAUDE.md
 agents.md
+.claude/
+plan.md

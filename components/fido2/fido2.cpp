@@ -1,0 +1,236 @@
+// FIDO2/WebAuthn Module
+// Main interface for credential management and user presence
+
+#include "fido2.h"
+#include "fido2_storage.h"
+#include "ctap2.h"
+#include "ctaphid.h"
+#include "u2f.h"
+#include "usb_hid.h"
+#include "cdc_log.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <string.h>
+
+// ============================================================================
+// State
+// ============================================================================
+
+static struct {
+    bool initialized;
+    fido2_user_presence_cb_t user_presence_cb;
+    TaskHandle_t task_handle;
+    bool pin_verified;  // PIN was verified via ClientPIN protocol
+} g_fido2 = {};
+
+// ============================================================================
+// FIDO Processing Task
+// ============================================================================
+
+static void fido2_task(void* arg) {
+    (void)arg;
+    uint8_t packet[64];
+
+    LOG_I("FIDO2", "Processing task started");
+
+    while (1) {
+        // Process incoming packets and drain responses immediately to avoid overwriting
+        while (usb_fido::available()) {
+            // If we still owe a response and USB isn't ready, pause input to avoid overwrite
+            if (ctaphid_has_response() && !usb_fido::ready()) {
+                break;
+            }
+
+            if (usb_fido::read(packet) == 64) {
+                ctaphid_process_packet(packet);
+            }
+
+            // Send pending responses before reading more packets
+            while (ctaphid_has_response()) {
+                if (usb_fido::ready()) {
+                    uint8_t response[64];
+                    if (ctaphid_get_response_packet(response)) {
+                        if (!usb_fido::write(response)) {
+                            LOG_W("FIDO2", "USB FIDO write failed");
+                            break;
+                        }
+                        LOG_D("FIDO2", "Sent response packet");
+                        vTaskDelay(pdMS_TO_TICKS(1));
+                    }
+                } else {
+                    LOG_D("FIDO2", "USB not ready, waiting...");
+                    break;
+                }
+            }
+
+            // If response still pending, stop reading more packets this cycle
+            if (ctaphid_has_response()) {
+                break;
+            }
+        }
+
+        // Send any remaining response packets
+        while (ctaphid_has_response()) {
+            if (usb_fido::ready()) {
+                uint8_t response[64];
+                if (ctaphid_get_response_packet(response)) {
+                    if (!usb_fido::write(response)) {
+                        LOG_W("FIDO2", "USB FIDO write failed (outer)");
+                        break;
+                    }
+                    LOG_D("FIDO2", "Sent response packet (outer)");
+                    vTaskDelay(pdMS_TO_TICKS(1));
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Check timeouts
+        ctaphid_check_timeout();
+
+        // Poll rate
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+bool fido2_init(void) {
+    LOG_I("FIDO2", "Initializing...");
+
+    memset(&g_fido2, 0, sizeof(g_fido2));
+
+    // Initialize storage layer
+    uint8_t cred_count = fido2_storage_init();
+    LOG_I("FIDO2", "Storage initialized, %d credentials", cred_count);
+
+    // Initialize CTAP2 protocol handler
+    if (!ctap2_init()) {
+        LOG_E("FIDO2", "CTAP2 init failed");
+        return false;
+    }
+
+    // Initialize CTAPHID transport
+    if (!ctaphid_init()) {
+        LOG_E("FIDO2", "CTAPHID init failed");
+        return false;
+    }
+
+    // Initialize U2F attestation certificate
+    if (!u2f_init_attestation()) {
+        LOG_W("FIDO2", "U2F attestation init failed (non-fatal)");
+        // Continue anyway - FIDO2 will still work, U2F might not
+    }
+
+    // Start FIDO2 processing task
+    xTaskCreate(fido2_task, "fido2", 8192, nullptr,
+                configMAX_PRIORITIES - 2, &g_fido2.task_handle);
+
+    g_fido2.initialized = true;
+    LOG_I("FIDO2", "Initialized");
+    return true;
+}
+
+void fido2_set_user_presence_callback(fido2_user_presence_cb_t cb) {
+    g_fido2.user_presence_cb = cb;
+}
+
+fido2_user_presence_result_t fido2_request_user_presence(
+    const char *rp_id,
+    fido2_action_t action,
+    const char *user_name
+) {
+    if (g_fido2.user_presence_cb) {
+        return g_fido2.user_presence_cb(rp_id, action, user_name);
+    }
+    // No callback set - auto-approve (unsafe, but allows testing)
+    LOG_W("FIDO2", "No user presence callback - auto-approving");
+    return FIDO2_UP_APPROVED;
+}
+
+void fido2_set_pin_verified(bool verified) {
+    g_fido2.pin_verified = verified;
+    if (verified) {
+        LOG_I("FIDO2", "PIN verified via ClientPIN - device PIN will be skipped");
+    }
+}
+
+bool fido2_is_pin_verified(void) {
+    return g_fido2.pin_verified;
+}
+
+// ============================================================================
+// Credential Management
+// ============================================================================
+
+uint8_t fido2_get_credential_count(void) {
+    return fido2_storage_count();
+}
+
+bool fido2_get_credential_info(uint8_t index, fido2_credential_info_t *info) {
+    if (!info) return false;
+
+    // Map index to slot
+    uint8_t found = 0;
+    for (uint8_t slot = 0; slot <= FIDO2_MAX_CREDENTIALS; slot++) {
+        if (fido2_storage_slot_used(slot)) {
+            if (found == index) {
+                return fido2_storage_get_credential(slot, info);
+            }
+            found++;
+        }
+    }
+
+    return false;
+}
+
+uint8_t fido2_find_credentials_by_rp(const uint8_t *rp_id_hash,
+                                      uint8_t *out_indices, uint8_t max_indices) {
+    return fido2_storage_find_by_rp(rp_id_hash, out_indices, max_indices);
+}
+
+bool fido2_delete_credential(uint8_t slot) {
+    return fido2_storage_delete_credential(slot);
+}
+
+bool fido2_factory_reset(void) {
+    LOG_W("FIDO2", "Factory reset requested");
+
+    // Delete all credentials
+    for (uint8_t slot = 0; slot <= FIDO2_MAX_CREDENTIALS; slot++) {
+        if (fido2_storage_slot_used(slot)) {
+            fido2_storage_delete_credential(slot);
+        }
+    }
+
+    LOG_I("FIDO2", "Factory reset complete");
+    return true;
+}
+
+// ============================================================================
+// Authentication Counter
+// ============================================================================
+
+uint32_t fido2_get_auth_counter(void) {
+    return fido2_storage_counter_get();
+}
+
+void fido2_increment_auth_counter(void) {
+    fido2_storage_counter_increment();
+}
+
+// ============================================================================
+// Status
+// ============================================================================
+
+bool fido2_is_initialized(void) {
+    return g_fido2.initialized;
+}
+
+uint8_t fido2_get_available_slots(void) {
+    uint8_t used = fido2_storage_count();
+    return (FIDO2_MAX_CREDENTIALS > used) ? (FIDO2_MAX_CREDENTIALS - used) : 0;
+}

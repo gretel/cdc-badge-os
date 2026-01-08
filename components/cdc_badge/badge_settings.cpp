@@ -11,11 +11,13 @@
 #define NVS_KEY_NAME "name"
 #define NVS_KEY_INFO "info"
 #define NVS_KEY_INFO2 "info2"
+#define NVS_KEY_TIMEZONE "tz"
 
 // Internal buffers
 static char g_name[BADGE_TEXT_MAX_LEN + 1] = "CDC Badge";
 static char g_info[BADGE_TEXT_MAX_LEN + 1] = "";
 static char g_info2[BADGE_TEXT_MAX_LEN + 1] = "";
+static int8_t g_timezone = 1;  // Default: UTC+1 (CET)
 static bool g_loaded = false;
 
 void badge_settings_load(void) {
@@ -37,6 +39,12 @@ void badge_settings_load(void) {
             LOG_I("BADGE", "Loaded info2: %s", g_info2);
         }
 
+        int8_t tz;
+        if (nvs_get_i8(nvs, NVS_KEY_TIMEZONE, &tz) == ESP_OK) {
+            g_timezone = tz;
+            LOG_I("BADGE", "Loaded timezone: UTC%+d", g_timezone);
+        }
+
         nvs_close(nvs);
     }
 
@@ -50,6 +58,7 @@ void badge_settings_save(void) {
         nvs_set_str(nvs, NVS_KEY_NAME, g_name);
         nvs_set_str(nvs, NVS_KEY_INFO, g_info);
         nvs_set_str(nvs, NVS_KEY_INFO2, g_info2);
+        nvs_set_i8(nvs, NVS_KEY_TIMEZONE, g_timezone);
         nvs_commit(nvs);
         nvs_close(nvs);
         LOG_I("BADGE", "Saved settings");
@@ -87,4 +96,15 @@ void badge_settings_set_info2(const char *info2) {
     if (!info2) return;
     strncpy(g_info2, info2, BADGE_TEXT_MAX_LEN);
     g_info2[BADGE_TEXT_MAX_LEN] = '\0';
+}
+
+int8_t badge_settings_get_timezone(void) {
+    if (!g_loaded) badge_settings_load();
+    return g_timezone;
+}
+
+void badge_settings_set_timezone(int8_t tz_offset) {
+    if (tz_offset < -12) tz_offset = -12;
+    if (tz_offset > 14) tz_offset = 14;
+    g_timezone = tz_offset;
 }

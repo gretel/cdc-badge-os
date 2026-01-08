@@ -1,117 +1,240 @@
-# CDC Badge OS - Developer Demonstrator
+# CDC Badge OS
 
-Demonstrator firmware for the CDC Badge v1.0, base for CDCBos
+Hardware security key firmware for the CDC Badge v1.0 featuring TROPIC01 secure element.
+
+> **Early Alpha** - This firmware is in early development and **not production ready**. Security hardening is incomplete and known vulnerabilities exist. Do not use for protecting critical accounts. See [SECURITY.md](SECURITY.md) for hardening steps required before production use.
+
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| **FIDO2/WebAuthn** | Passwordless authentication (USB HID) - works with Chrome, Firefox, Edge |
+| **U2F** | Legacy two-factor authentication |
+| **TOTP Authenticator** | Time-based one-time passwords (100 accounts, Google Authenticator compatible) |
+| **USB Keyboard** | Auto-type TOTP codes via HID |
+| **WiFi + NTP** | Time synchronization over WiFi |
+| **E-Paper Display** | 2.9" low-power display with backlight |
+| **12-Button Keypad** | Phone-style T9 input |
+| **Multi-Language** | English and German UI |
+
+## Security Architecture
+
+| Feature | Implementation |
+|---------|----------------|
+| **Key Storage** | All private keys stored in TROPIC01 secure element |
+| **Key Generation** | P-256 keys generated on-chip, never exported |
+| **PIN Protection** | 4-6 digit PIN with 3 attempt lockout |
+| **FIDO2 ClientPIN** | Full Protocol 2 support with HKDF-SHA256 |
+| **Attestation** | Self-signed attestation (device-unique AAGUID) |
+| **User Verification** | PIN verified via device or ClientPIN protocol |
+
+### TROPIC01 Secure Element
+
+The TROPIC01 provides hardware-backed security:
+- 32 ECC key slots (P-256)
+- 256 R-Memory slots (2KB each)
+- Hardware random number generator
+- Tamper-resistant key storage
+- Keys cannot be extracted or cloned
+
+### FIDO2 Compliance
+
+Supported CTAP2 operations:
+- `authenticatorMakeCredential` - Register new credentials
+- `authenticatorGetAssertion` - Authenticate with existing credentials
+- `authenticatorGetInfo` - Device capabilities
+- `authenticatorClientPIN` - PIN management (Protocol 1 & 2)
+- `authenticatorReset` - Factory reset
+
+## Storage Map
+
+### TROPIC01 ECC Key Slots (32 Slots)
+
+| Slot | Purpose |
+|------|---------|
+| 0-26 | FIDO2 Credentials (P-256) |
+| 27-29 | Reserved (SSH Keys, Ed25519) |
+| 30 | FIDO2 Attestation Key |
+| 31 | CA Root Key |
+
+### TROPIC01 R-Memory Slots (256 × 128 Bytes)
+
+| Slot | Purpose |
+|------|---------|
+| 0-26 | FIDO2 Credential Metadata |
+| 27-29 | Reserved |
+| 30 | PIN Hash (SHA-256) |
+| 31-32 | Device Config |
+| 33-132 | TOTP Accounts (max 100) |
+| 133 | CA Metadata |
+| 134-255 | Free |
+
+### NVS (ESP32 Flash)
+
+| Namespace | Key | Description |
+|-----------|-----|-------------|
+| `rtc` | `time_set` | Flag if time was set |
+| `display` | `backlight` | Backlight brightness |
+| `badge` | `name`, `info`, `info2` | Display text |
+| `fido2` | `auth_count` | Global auth counter |
 
 ## Hardware
 
-For hardware details, schematics and PCB design see: https://github.com/riatlabs/cdc-badge
-
-| Component | Description |
-|-----------|-------------|
+| Component | Model |
+|-----------|-------|
 | MCU | ESP32-S3-WROOM-1 |
-| Display | GDEY029T94-FL03 (2.9" E-Paper with Frontlight) |
+| Display | GDEY029T94-FL03 (2.9" E-Paper + Frontlight) |
 | Secure Element | TROPIC01 |
-| I/O Expander | TCA9535 (12-Button Keypad) |
-| Power | BQ25895 (LiPo Charger) |
+| I/O Expander | TCA9535 (Keypad) |
+| Power IC | BQ25895 (LiPo Charger) |
 
-## Features Demonstrated
+For schematics and PCB design: https://github.com/riatlabs/cdc-badge
 
-### Power Management Best Practices
+## Getting Started
 
-- **Light Sleep Mode**: Device enters light sleep on lock screen, waking every 25s for clock updates
-- **Deep Sleep Mode**: Hold N for 5s on lock screen - display cleared, only Y key wakes device
-- **Shipping Mode**: Hold BOOT button for 3s - battery disconnected, minimal power draw
-- **GPIO Wakeup**: Instant wake on keypad press via I/O expander interrupt
-- **PWM Backlight**: Configurable brightness (0-1023) with NVS persistence
-- **WiFi Power Control**: WiFi disabled by default, only enabled when needed
-- **Charging Safety**: BQ25895 configured for safe 512mA charging (vs. 2048mA default)
+### First-Time Setup
 
-### Async Display Rendering
+1. **Change the default PIN** (Settings -> Change PIN)
+   - Default PIN: `1234`
+   - FIDO2 requires a non-default PIN
 
-- Background FreeRTOS task handles e-paper updates
-- UI remains responsive during slow e-paper refresh cycles
-- Partial refresh support for faster updates
+2. **Set the time** via WiFi NTP or serial command:
+   ```bash
+   echo "SET_DATE $(date +%s)" > /dev/ttyACM0
+   ```
 
-### Async Keypad Input
+3. **Register your first WebAuthn credential** at a supported site
 
-- Dedicated keypad task at high priority
-- Key presses buffered via queue (e.g., enter full PIN without display wait)
-- Debouncing handled in task
+### Using FIDO2/WebAuthn
 
-### Secure Element Integration
+1. Navigate to a WebAuthn-enabled site (e.g., GitHub, Google)
+2. When prompted, the badge displays the site name
+3. Press **Y** to approve, **N** to deny
+4. If device was locked, enter PIN on badge (or via browser if prompted)
 
-- TROPIC01 chip for secure key storage
-- PSA Crypto API abstraction
-- PIN storage in secure memory
+### Using TOTP
 
-### NVS Persistence
+1. Add accounts via manual entry (serial is much more easy to use)
+2. View codes in the TOTP menu
+3. Press **Y** to auto-type code via USB keyboard
 
-- Backlight level saved to NVS
-- Badge name/info text stored persistently
-- RTC time backed up to NVS for power loss recovery
+## Power Management
 
-## Implemented Views
-
-Reusable UI components in `components/cdc_badge/views.h`:
-
-| View | Description |
-|------|-------------|
-| **Lock Screen** | Status display with battery, clock, 3 editable text lines, lock icon |
-| **PIN Entry** | Secure PIN input with masked digits, attempt counter, lockout |
-| **List Screen** | Selectable menu with scrolling, max 4 visible items |
-| **Info Screen** | Scrollable long text display for help/info content |
-| **T9 Input** | Text input with T9 multi-tap (phone-style), cursor timeout |
-| **Slider** | Value adjustment with visual bar (e.g., brightness) |
-| **Toast** | Temporary overlay messages (success/error/info) |
-
-All views support partial refresh for fast updates.
+| Mode | Trigger | Wake |
+|------|---------|------|
+| Active | Normal use | - |
+| Light Sleep | Lock screen idle | Any key |
+| Deep Sleep | Hold N 5s on lock | Y key only |
+| Shipping | Hold BOOT 3s | USB power |
 
 ## Build & Flash
 
 Requires PlatformIO with ESP-IDF framework.
 
 ```bash
-# Initialize submodules (CalEPD, libtropic, Adafruit-GFX)
 git submodule update --init --recursive
-
-# Build
 pio run
-
-# Flash
 pio run -t upload
-
-# Monitor serial output
-pio device monitor
 ```
+
+## UI Components
+
+Reusable view components for the E-Paper display:
+
+| View | Description |
+|------|-------------|
+| **Lock Screen** | Status display with battery, clock, name, status icons |
+| **List Screen** | Scrollable selection menu (max 32 items, 4 visible) |
+| **Info Screen** | Scrollable long text display |
+| **T9 Input** | Text input with phone-style T9 multi-tap |
+| **PIN Entry** | Secure PIN input with attempt counter |
+| **Slider** | Value adjustment with visual progress bar |
+| **Date Input** | Date entry (DD.MM.YYYY) |
+| **Time Input** | Time entry (HH:MM) |
+| **TOTP Code** | Code display with countdown progress bar |
+| **Context Menu** | Popup overlay menu |
+| **Toast** | Success/error message overlay |
+
+Status bar icons: Lock, Deep Sleep, Light Sleep, Backlight, USB, BLE, WiFi
 
 ## Serial Commands
 
-Connect at 115200 baud:
+Connect at 115200 baud via USB CDC.
 
+### System
 | Command | Description |
 |---------|-------------|
-| `SET_TIME HH:MM:SS` | Set current time |
-| `SET_DATE YYYY-MM-DD` | Set current date |
+| `HELP` | Show all commands |
+| `PING` | Connection test (returns PONG) |
+| `STATUS` | Badge status overview |
+
+### Time
+| Command | Description |
+|---------|-------------|
+| `SET_TIME HH:MM:SS` | Set time |
+| `SET_DATE YYYY-MM-DD` | Set date |
 | `SET_DATE <timestamp>` | Set from Unix timestamp |
-| `SET_NAME text` | Set name line on display |
-| `SET_INFO text` | Set info line on display |
-| `SET_INFO2 text` | Set info2 line on display |
 | `GET_TIME` | Get current time |
 | `GET_DATE` | Get current date |
-| `HELP` | Show available commands |
 
-### Quick Time Sync
+### Display
+| Command | Description |
+|---------|-------------|
+| `SET_NAME text` | Set display name |
+| `SET_INFO text` | Set info line |
+| `SET_INFO2 text` | Set second info line |
 
-Set time from host system in one command:
+### TOTP
+| Command | Description |
+|---------|-------------|
+| `TOTP_LIST` | List all accounts |
+| `TOTP_ADD name secret [issuer] [digits] [period] [algo]` | Add account |
+| `TOTP_DEL <index>` | Delete account |
+| `TOTP_GET <index>` | Generate code |
+| `TOTP_TYPE <index> [enter]` | Type code via USB keyboard |
 
-```bash
-echo "SET_DATE $(date +%s)" > /dev/ttyACM0
-```
+### FIDO2
+| Command | Description |
+|---------|-------------|
+| `FIDO_STATUS` | FIDO2 module status |
+| `FIDO_LIST` | List all credentials |
+| `FIDO_DEL <index>` | Delete credential |
+| `FIDO_RESET` | Factory reset (requires CONFIRM) |
+
+### TROPIC01
+| Command | Description |
+|---------|-------------|
+| `TR01_STATUS` | Secure element status |
+| `TR01_INFO` | Chip ID and firmware version |
+| `TR01_SLOTS` | Show slot usage |
+| `TR01_RESYNC` | Resync cache from chip |
+| `TR01_RMEM_READ <slot>` | Read and dump R-memory slot |
+| `TR01_ECC_DEL <slot>` | Delete ECC key |
+| `TR01_RMEM_DEL <slot>` | Delete R-memory slot |
+| `TR01_WIPE` | Factory reset all user data (requires CONFIRM) |
+
+### CA (Certificate Authority)
+*WORK IN PROGRESS! NOT FOR USAGE! COMPLETLY UNTESTED FIRST ITERATION! WILL DEFINITIVELY CONTAIN BUGS! YOU'VE BEEN WARNED!*
+| Command | Description |
+|---------|-------------|
+| `CA_STATUS` | CA status |
+| `CA_INIT [cn]` | Initialize CA with common name |
+| `CA_LIST` | List issued certificates |
+| `CA_EXPORT_ROOT` | Export root certificate (PEM) |
+| `CA_SIGN_CSR` | Sign CSR (paste PEM, end with `---`) |
+| `CA_RESET` | Factory reset CA |
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 - see [LICENSE.md](LICENSE.md) for details.
+GNU General Public License v3.0 - see [LICENSE.md](LICENSE.md)
 
 ---
 
-*This firmware was co-developed with [Claude Code](https://claude.ai/code) by Anthropic.*
+## Disclaimer
+
+*Co-developed with [Claude Code](https://claude.ai/code) by Anthropic.*  
+This repository is a **proof-of-concept / demonstrator**. It may contain **serious bugs**, incomplete edge-case handling, and other “sharp edges”. Do **not** use it as-is for production or security-critical deployments.
+
+While I’m experienced with cryptography and encryption concepts, this is my first project implemented directly on the ESP32. For ESP-IDF/embedded best practices I relied heavily on external guidance and reviews. As a result, you may still find non-idiomatic ESP32 code, suboptimal design patterns, duplication, or refactoring debt.
+
+The intent is to clean this up before the first major release (v1.0.0), once I have more routine in ESP32 development and can consolidate patterns, structure, and implementation details specific for this device

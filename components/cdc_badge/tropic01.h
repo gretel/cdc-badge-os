@@ -3,23 +3,80 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // R-Memory slot definitions
-#define TR01_RMEM_SLOT_PIN      30    // PIN hash storage
-#define TR01_RMEM_SLOT_CONFIG   31    // Device config
+#define TR01_RMEM_SLOT_PIN       30    // PIN hash storage
+#define TR01_RMEM_SLOT_CONFIG    31    // Device config
+#define TR01_RMEM_SLOT_FIDO_START 0    // FIDO2 credentials: 0-26
+#define TR01_RMEM_SLOT_FIDO_END   26
+#define TR01_RMEM_SLOT_TOTP_START 33   // TOTP accounts: 33-132
+#define TR01_RMEM_SLOT_TOTP_END   132
+
+// ECC slot definitions
+#define TR01_ECC_SLOT_FIDO_START  0    // FIDO2 keys: 0-26
+#define TR01_ECC_SLOT_FIDO_END    26
+#define TR01_ECC_SLOT_ATTEST      30   // FIDO2 attestation key
+#define TR01_ECC_SLOT_COUNT       32
+
+// ECC curve types (use CDC_ prefix to avoid collision with libtropic enums)
+#define CDC_CURVE_ED25519  0
+#define CDC_CURVE_P256     1
 
 // Initialize TROPIC01 secure element
 bool tropic01_init(void);
 
-// Start secure session (required before R-Memory access)
+// Start secure session (required before operations)
 bool tropic01_session_start(void);
 
 // Check if session is active
 bool tropic01_session_active(void);
 
-// Put TROPIC01 to sleep (call when idle)
+// Abort session (use before deep sleep)
+void tropic01_session_abort(void);
+
+// Put TROPIC01 to sleep (manual - normally auto-sleep via R-Config)
 void tropic01_sleep(void);
 
 // R-Memory operations
 bool tropic01_rmem_read(uint16_t slot, uint8_t *data, uint16_t max_size, uint16_t *read_size);
 bool tropic01_rmem_write(uint16_t slot, const uint8_t *data, uint16_t size);
 bool tropic01_rmem_erase(uint16_t slot);
+
+// ECC key operations
+bool tropic01_ecc_key_generate(uint8_t slot, uint8_t curve);
+bool tropic01_ecc_key_read(uint8_t slot, uint8_t *pubkey, uint8_t pubkey_size,
+                           uint8_t *curve, uint8_t *origin);
+bool tropic01_ecc_key_erase(uint8_t slot);
+
+// Signing operations
+bool tropic01_ecdsa_sign(uint8_t slot, const uint8_t *hash, uint32_t hash_len,
+                         uint8_t *signature);
+bool tropic01_eddsa_sign(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
+                         uint8_t *signature);
+
+// Random number generator
+bool tropic01_get_random(uint8_t *buffer, uint16_t size);
+
+// Diagnostics API
+bool tropic01_get_chip_id(uint8_t *serial_num, uint8_t serial_size);
+bool tropic01_get_fw_version(uint8_t *riscv_ver, uint8_t *spect_ver);
+
+// ECC status structure
+typedef struct {
+    bool slot_used[TR01_ECC_SLOT_COUNT];
+    uint8_t slot_curve[TR01_ECC_SLOT_COUNT];
+} tropic01_ecc_status_t;
+
+bool tropic01_get_ecc_status(tropic01_ecc_status_t *status);
+
+// R-Config operations (reversible chip configuration)
+bool tropic01_rconfig_read(uint8_t addr, uint32_t *value);
+bool tropic01_rconfig_write(uint8_t addr, uint32_t value);
+bool tropic01_rconfig_erase(void);
+
+#ifdef __cplusplus
+}
+#endif

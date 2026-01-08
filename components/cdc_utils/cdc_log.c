@@ -1,8 +1,29 @@
 #include "cdc_log.h"
 #include <string.h>
+#include <stdbool.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include "sdkconfig.h"
+
+#if CONFIG_TINYUSB_CDC_ENABLED
+#include "tusb.h"
+#endif
 
 static log_level_t s_log_level = LOG_LEVEL_DEBUG;
-static log_backend_t s_log_backend = LOG_BACKEND_PRINTF;
+#if CONFIG_TINYUSB_CDC_ENABLED
+static log_backend_t s_log_backend = LOG_BACKEND_CDC;  // Default to CDC if available
+#else
+static log_backend_t s_log_backend = LOG_BACKEND_PRINTF;  // Fallback to printf
+#endif
+static bool s_console_initialized = false;
+
+// Track which input source was last used for proper echo routing
+typedef enum {
+    INPUT_SOURCE_NONE,
+    INPUT_SOURCE_CDC,
+    INPUT_SOURCE_UART
+} input_source_t;
+static input_source_t s_last_input_source = INPUT_SOURCE_NONE;
 
 // Level prefixes
 static const char* level_str[] = {
@@ -40,12 +61,13 @@ void log_write_v(log_level_t level, const char* tag, const char* fmt, va_list ar
         return;
     }
 
-    // For now, always use printf (USB_SERIAL_JTAG compatible)
-    // CDC backend can be added later when TinyUSB is properly initialized
-    printf("[%s][%s] ", level_str[level], tag ? tag : "???");
-    vprintf(fmt, args);
-    printf("\n");
-    log_flush();
+    char buf[256];
+    int len = vsnprintf(buf, sizeof(buf), fmt, args);
+    if (len >= (int)sizeof(buf)) {
+        buf[sizeof(buf) - 1] = '\0';
+    }
+
+    console_printf("[%s][%s] %s\n", level_str[level], tag ? tag : "???", buf);
 }
 
 void log_write(log_level_t level, const char* tag, const char* fmt, ...) {
@@ -59,18 +81,24 @@ void log_raw(const char* fmt, ...) {
     if (s_log_backend == LOG_BACKEND_NONE) {
         return;
     }
+    char buf[256];
     va_list args;
     va_start(args, fmt);
-    vprintf(fmt, args);
+    int len = vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
-    log_flush();
+    if (len > 0) {
+        if (len >= (int)sizeof(buf)) {
+            buf[sizeof(buf) - 1] = '\0';
+        }
+        console_print(buf);
+    }
 }
 
 void log_flush(void) {
     if (s_log_backend == LOG_BACKEND_NONE) {
         return;
     }
-    fflush(stdout);
+    console_flush();
 }
 
 void log_hex(const char* tag, const char* label, const uint8_t* data, size_t len) {
@@ -78,15 +106,156 @@ void log_hex(const char* tag, const char* label, const uint8_t* data, size_t len
         return;
     }
 
-    printf("[D][%s] %s (%zu bytes): ", tag ? tag : "HEX", label ? label : "data", len);
+    console_printf("[D][%s] %s (%zu bytes): ", tag ? tag : "HEX", label ? label : "data", len);
     for (size_t i = 0; i < len; i++) {
-        printf("%02X", data[i]);
+        console_printf("%02X", data[i]);
         if ((i + 1) % 32 == 0 && (i + 1) < len) {
-            printf("\n      ");
+            console_print("\n      ");
         } else if ((i + 1) % 4 == 0 && (i + 1) < len) {
-            printf(" ");
+            console_putchar(' ');
         }
     }
-    printf("\n");
-    log_flush();
+    console_print("\n");
+    console_flush();
+}
+
+// ============================================================================
+// Console I/O Implementation
+// Uses TinyUSB CDC if available, otherwise falls back to printf/stdout
+// ============================================================================
+
+void console_init(void) {
+    if (s_console_initialized) return;
+
+    // Set stdin to non-blocking for UART/JTAG fallback
+    int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    if (flags >= 0) {
+        fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+    }
+
+    s_console_initialized = true;
+#if CONFIG_TINYUSB_CDC_ENABLED
+    s_log_backend = LOG_BACKEND_CDC;
+#else
+    s_log_backend = LOG_BACKEND_PRINTF;
+#endif
+}
+
+bool console_available(void) {
+    if (!s_console_initialized) return false;
+
+#if CONFIG_TINYUSB_CDC_ENABLED
+    // Try TinyUSB CDC first
+    if (tud_cdc_connected() && tud_cdc_available() > 0) {
+        return true;
+    }
+#endif
+
+    // Fallback: check UART/JTAG via stdin (non-blocking)
+    // Note: fgetc is blocking on ESP-IDF, so we use a different approach
+    // For JTAG USB-Serial, data comes through stdin which uses UART driver
+    return false;  // UART non-blocking check not easily available
+}
+
+int console_getchar(void) {
+    if (!s_console_initialized) return -1;
+
+#if CONFIG_TINYUSB_CDC_ENABLED
+    // Try TinyUSB CDC first if connected
+    if (tud_cdc_connected() && tud_cdc_available()) {
+        s_last_input_source = INPUT_SOURCE_CDC;
+        return tud_cdc_read_char();
+    }
+#endif
+
+    // Fallback: read from UART/JTAG via stdin (non-blocking)
+    // This uses the ESP-IDF VFS layer which routes to the appropriate driver
+    int c = getchar();
+    // getchar returns EOF (-1) when no data or error
+    if (c != EOF) {
+        s_last_input_source = INPUT_SOURCE_UART;
+        return c;
+    }
+    return -1;
+}
+
+void console_print(const char* str) {
+    if (!str) return;
+#if CONFIG_TINYUSB_CDC_ENABLED
+    // Route output to the same place input came from (for interactive responses)
+    if (!s_console_initialized || s_last_input_source == INPUT_SOURCE_UART) {
+        // Use JTAG/UART via printf
+        printf("%s", str);
+        fflush(stdout);
+        return;
+    }
+    if (tud_cdc_connected()) {
+        size_t len = strlen(str);
+        size_t written = 0;
+        while (written < len) {
+            size_t avail = tud_cdc_write_available();
+            if (avail == 0) {
+                tud_cdc_write_flush();
+                continue;
+            }
+            size_t to_write = len - written;
+            if (to_write > avail) to_write = avail;
+            written += tud_cdc_write(str + written, to_write);
+        }
+        tud_cdc_write_flush();
+    }
+#else
+    printf("%s", str);
+#endif
+}
+
+void console_printf(const char* fmt, ...) {
+    if (!fmt) return;
+
+    char buf[256];
+    va_list args;
+    va_start(args, fmt);
+    int len = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    if (len > 0) {
+        if (len >= (int)sizeof(buf)) {
+            // Truncated, but print what we have
+            buf[sizeof(buf) - 1] = '\0';
+        }
+        console_print(buf);
+    }
+}
+
+void console_putchar(char c) {
+#if CONFIG_TINYUSB_CDC_ENABLED
+    // Route output to the same place input came from
+    // This ensures echo works correctly when using JTAG/UART while CDC is also connected
+    if (!s_console_initialized || s_last_input_source == INPUT_SOURCE_UART) {
+        putchar(c);
+        fflush(stdout);  // Ensure immediate output for JTAG/UART
+        return;
+    }
+    if (tud_cdc_connected()) {
+        tud_cdc_write_char(c);
+        if (c == '\n') {
+            tud_cdc_write_flush();
+        }
+    }
+#else
+    putchar(c);
+    fflush(stdout);  // Ensure immediate output
+#endif
+}
+
+void console_flush(void) {
+#if CONFIG_TINYUSB_CDC_ENABLED
+    if (!s_console_initialized || !tud_cdc_connected()) {
+        fflush(stdout);
+        return;
+    }
+    tud_cdc_write_flush();
+#else
+    fflush(stdout);
+#endif
 }

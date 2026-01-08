@@ -11,6 +11,29 @@
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "cdc_log.h"
+
+// Debug flag for raw SPI logging (0=off, 1=verbose hex dumps)
+#ifndef TR01_SPI_DEBUG
+#define TR01_SPI_DEBUG 0
+#endif
+
+// Helper to dump hex data
+#if TR01_SPI_DEBUG
+static void dump_hex(const char* prefix, const uint8_t* data, size_t len) {
+    if (len == 0) return;
+    char buf[256];
+    size_t pos = 0;
+    size_t max_bytes = (len > 32) ? 32 : len;  // Limit to 32 bytes
+    for (size_t i = 0; i < max_bytes && pos < sizeof(buf) - 4; i++) {
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "%02X ", data[i]);
+    }
+    if (len > 32) {
+        snprintf(buf + pos, sizeof(buf) - pos, "...[%zu more]", len - 32);
+    }
+    LOG_D("TR01-SPI", "%s (%zu bytes): %s", prefix, len, buf);
+}
+#endif
 
 extern "C" lt_ret_t lt_port_init(lt_l2_state_t *s2) {
     if (!s2 || !s2->device) {
@@ -68,6 +91,20 @@ extern "C" lt_ret_t lt_port_spi_csn_low(lt_l2_state_t *s2) {
         return LT_PARAM_ERR;
     }
     lt_dev_esp32_t *device = static_cast<lt_dev_esp32_t *>(s2->device);
+
+    // Acquire exclusive SPI bus access before asserting CS
+    // This prevents display from interfering during TROPIC01 operations
+    if (device->spi) {
+        esp_err_t err = spi_device_acquire_bus(device->spi, portMAX_DELAY);
+        if (err != ESP_OK) {
+            LOG_E("TR01-SPI", "Failed to acquire SPI bus: %d", err);
+            return LT_L1_SPI_ERROR;
+        }
+    }
+
+#if TR01_SPI_DEBUG
+    LOG_D("TR01-SPI", "CS LOW (pin %d)", device->cs_pin);
+#endif
     gpio_set_level(device->cs_pin, 0);
     return LT_OK;
 }
@@ -77,7 +114,15 @@ extern "C" lt_ret_t lt_port_spi_csn_high(lt_l2_state_t *s2) {
         return LT_PARAM_ERR;
     }
     lt_dev_esp32_t *device = static_cast<lt_dev_esp32_t *>(s2->device);
+#if TR01_SPI_DEBUG
+    LOG_D("TR01-SPI", "CS HIGH (pin %d)", device->cs_pin);
+#endif
     gpio_set_level(device->cs_pin, 1);
+
+    // Release SPI bus after deasserting CS
+    if (device->spi) {
+        spi_device_release_bus(device->spi);
+    }
     return LT_OK;
 }
 
@@ -85,12 +130,19 @@ extern "C" lt_ret_t lt_port_spi_transfer(lt_l2_state_t *s2, uint8_t offset, uint
                                          uint32_t timeout_ms) {
     (void)timeout_ms;
     if (!s2 || !s2->device) {
+        LOG_E("TR01-SPI", "spi_transfer: NULL s2 or device");
         return LT_PARAM_ERR;
     }
     lt_dev_esp32_t *device = static_cast<lt_dev_esp32_t *>(s2->device);
     if (!device->spi) {
+        LOG_E("TR01-SPI", "spi_transfer: SPI not initialized");
         return LT_L1_SPI_ERROR;
     }
+
+#if TR01_SPI_DEBUG
+    // Log TX data before transfer
+    dump_hex("TX", s2->buff + offset, tx_len);
+#endif
 
     // In-place SPI transfer (TX/RX share buffer)
     spi_transaction_t t = {};
@@ -98,7 +150,26 @@ extern "C" lt_ret_t lt_port_spi_transfer(lt_l2_state_t *s2, uint8_t offset, uint
     t.tx_buffer = s2->buff + offset;
     t.rx_buffer = s2->buff + offset;
     esp_err_t err = spi_device_polling_transmit(device->spi, &t);
+
+#if TR01_SPI_DEBUG
+    // Log RX data after transfer
+    dump_hex("RX", s2->buff + offset, tx_len);
+
+    // Check for suspicious patterns (all 0xFF = possible MISO issue)
+    bool all_ff = true;
+    for (uint16_t i = 0; i < tx_len && i < 8; i++) {
+        if (s2->buff[offset + i] != 0xFF) {
+            all_ff = false;
+            break;
+        }
+    }
+    if (all_ff && tx_len > 0) {
+        LOG_W("TR01-SPI", "WARNING: RX data is all 0xFF - possible MISO/connection issue!");
+    }
+#endif
+
     if (err != ESP_OK) {
+        LOG_E("TR01-SPI", "spi_device_polling_transmit failed: %d", err);
         return LT_L1_SPI_ERROR;
     }
     return LT_OK;

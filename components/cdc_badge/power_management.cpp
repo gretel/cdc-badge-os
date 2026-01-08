@@ -315,7 +315,14 @@ uint8_t power_get_battery_percent(void) {
 }
 
 bool power_is_usb_connected(void) {
-    return power_get_vbus_status() != VBUS_STATUS_NONE;
+    // DPDM detection is disabled, so VBUS_STAT is always 0.
+    // Use PG_STAT (Power Good) bit instead - indicates valid VBUS voltage.
+    uint8_t reg0b = 0;
+    if (read_reg(BQ_REG_SYS_STATUS, &reg0b) != ESP_OK) {
+        return false;
+    }
+    bool pg_stat = (reg0b >> 2) & 0x01;
+    return pg_stat;
 }
 
 vbus_status_t power_get_vbus_status(void) {

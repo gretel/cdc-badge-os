@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,6 +50,32 @@ void log_hex(const char* tag, const char* label, const uint8_t* data, size_t len
 
 // Flush output buffer
 void log_flush(void);
+
+// ============================================================================
+// Console I/O (for serial command interface)
+// These functions route through TinyUSB CDC when backend is LOG_BACKEND_CDC
+// ============================================================================
+
+// Initialize console (call after USB is ready)
+void console_init(void);
+
+// Check if console input is available
+bool console_available(void);
+
+// Read single character from console (non-blocking, returns -1 if none)
+int console_getchar(void);
+
+// Write string to console
+void console_print(const char* str);
+
+// Write formatted string to console
+void console_printf(const char* fmt, ...);
+
+// Write single character to console
+void console_putchar(char c);
+
+// Flush console output
+void console_flush(void);
 
 #ifdef __cplusplus
 }
