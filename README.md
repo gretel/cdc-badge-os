@@ -34,7 +34,7 @@ Hardware security key firmware for the CDC Badge v1.0 featuring TROPIC01 secure 
 
 The TROPIC01 provides hardware-backed security:
 - 32 ECC key slots (P-256)
-- 256 R-Memory slots (2KB each)
+- 512 R-Memory slots (444B each)
 - Hardware random number generator
 - Tamper-resistant key storage
 - Keys cannot be extracted or cloned
@@ -59,7 +59,7 @@ Supported CTAP2 operations:
 | 30 | FIDO2 Attestation Key |
 | 31 | CA Root Key |
 
-### TROPIC01 R-Memory Slots (256 × 128 Bytes)
+### TROPIC01 R-Memory Slots (512 × 444 Bytes)
 
 | Slot | Purpose |
 |------|---------|
@@ -69,7 +69,7 @@ Supported CTAP2 operations:
 | 31-32 | Device Config |
 | 33-132 | TOTP Accounts (max 100) |
 | 133 | CA Metadata |
-| 134-255 | Free |
+| 134-511 | Free |
 
 ### NVS (ESP32 Flash)
 
