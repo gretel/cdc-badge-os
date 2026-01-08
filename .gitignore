@@ -25,6 +25,10 @@ components/*/.patched
 # Legacy code
 legacy/
 
+# Submodule working tree noise (status ignored via .gitmodules)
+components/CalEPD/
+third_party/libtropic/
+
 # Claude config
 CLAUDE.md
 agents.md

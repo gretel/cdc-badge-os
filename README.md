@@ -4,6 +4,8 @@ Hardware security key firmware for the CDC Badge v1.0 featuring TROPIC01 secure 
 
 > **Early Alpha** - This firmware is in early development and **not production ready**. Security hardening is incomplete and known vulnerabilities exist. Do not use for protecting critical accounts. See [SECURITY.md](SECURITY.md) for hardening steps required before production use.
 
+> **Development note** - Active development happens on GitLab. GitHub receives periodic bulk pushes of the `release` branch only (for reasons). ;)
+
 ## Features
 
 | Feature | Description |
