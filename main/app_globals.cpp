@@ -14,6 +14,7 @@ view_list_screen_t g_badge_texts_menu;
 view_info_screen_t g_info_view;
 view_slider_t g_slider;
 view_t9_input_t g_t9_input;
+view_ip_input_t g_ip_input;
 view_qr_code_t g_qr_view;
 
 #if FEATURE_TOTP
@@ -198,4 +199,3 @@ view_list_item_t g_ca_validity_items[] = {
     {"25 Years"}
 };
 #endif
-

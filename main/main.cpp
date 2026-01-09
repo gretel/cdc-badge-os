@@ -58,9 +58,38 @@
 // Light sleep: wait on lock screen before sleeping
 #define LIGHT_SLEEP_DELAY_MS 120000  // Wait 120s on lock screen before sleeping
 
+// UI idle refresh: prevent e-paper ghosting in menus
+#define UI_IDLE_REFRESH_MS 15000  // 15s
+
 // Track key-hold times in main loop
 static uint32_t g_n_key_press_start = 0;
 static uint32_t g_lock_n_press_start = 0;
+static uint32_t g_last_ui_refresh_ms = 0;
+
+static bool app_state_uses_t9(app_state_t state) {
+    switch (state) {
+        case APP_STATE_T9_DEMO:
+        case APP_STATE_BADGE_EDIT_NAME:
+        case APP_STATE_BADGE_EDIT_INFO:
+        case APP_STATE_BADGE_EDIT_INFO2:
+        case APP_STATE_TOTP_ADD_NAME:
+        case APP_STATE_TOTP_ADD_SECRET:
+        case APP_STATE_TOTP_ADD_ISSUER:
+        case APP_STATE_WIFI_ADD_SSID:
+        case APP_STATE_WIFI_ADD_PASSWORD:
+#if FEATURE_CA
+        case APP_STATE_CA_WIZARD_CN:
+        case APP_STATE_CA_WIZARD_ORG:
+        case APP_STATE_CA_WIZARD_OU:
+        case APP_STATE_CA_WIZARD_COUNTRY:
+        case APP_STATE_CA_WIZARD_LOCALITY:
+        case APP_STATE_CA_WIZARD_STATE:
+#endif
+            return true;
+        default:
+            return false;
+    }
+}
 
 // ============================================================================
 // Main Entry Point
@@ -186,6 +215,18 @@ extern "C" void app_main(void) {
                 LOG_I("LOCK", "Auto-lock: elapsed=%lu, last=%lu, now=%lu",
                       (unsigned long)elapsed, (unsigned long)g_last_activity_ms, (unsigned long)millis());
                 go_to_lock_screen();
+            }
+        }
+
+        // Periodic idle refresh to prevent menu title ghosting
+        if (g_app_state != APP_STATE_LOCK_SCREEN &&
+            g_app_state != APP_STATE_LOCKOUT &&
+            g_last_activity_ms > 0) {
+            uint32_t now = millis();
+            if ((now - g_last_activity_ms) >= UI_IDLE_REFRESH_MS &&
+                (now - g_last_ui_refresh_ms) >= UI_IDLE_REFRESH_MS) {
+                g_last_ui_refresh_ms = now;
+                render_current_state(true);
             }
         }
 
@@ -435,18 +476,13 @@ extern "C" void app_main(void) {
             // (BLE UART is used for wireless serial console, not FIDO2)
         }
 
-        // Update T9 state (for cursor timeout)
-        // T9 input states - update display and check for 2s N abort
-        bool is_t9_state = (g_app_state == APP_STATE_T9_DEMO ||
-                            g_app_state == APP_STATE_BADGE_EDIT_NAME ||
-                            g_app_state == APP_STATE_BADGE_EDIT_INFO ||
-                            g_app_state == APP_STATE_BADGE_EDIT_INFO2 ||
-                            g_app_state == APP_STATE_TOTP_ADD_NAME ||
-                            g_app_state == APP_STATE_TOTP_ADD_SECRET ||
-                            g_app_state == APP_STATE_TOTP_ADD_ISSUER);
-        if (is_t9_state) {
-            view_t9_input_update(&g_t9_input);
+        // Update T9 state globally (cursor timeout).
+        if (view_t9_input_update(&g_t9_input)) {
+            render_current_state(true);
+        }
 
+        // T9 input states - check for 2s N abort
+        if (app_state_uses_t9(g_app_state)) {
             // Check for N long-press abort (2s)
             if (pin_expander_is_key_down('N')) {
                 if (g_n_key_press_start == 0) {
@@ -467,6 +503,8 @@ extern "C" void app_main(void) {
             } else {
                 g_n_key_press_start = 0;
             }
+        } else {
+            g_n_key_press_start = 0;
         }
 
         // Check for keypad input

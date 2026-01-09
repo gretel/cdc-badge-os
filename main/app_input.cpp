@@ -43,6 +43,36 @@ static bool ble_is_active(void) {
 }
 #endif
 
+static uint32_t ip_octets_to_u32(uint8_t a, uint8_t b, uint8_t c, uint8_t d) {
+    return ((uint32_t)d << 24) | ((uint32_t)c << 16) | ((uint32_t)b << 8) | (uint32_t)a;
+}
+
+static void ip_input_to_string(const view_ip_input_t *view, char *out, size_t out_len) {
+    if (!view || !out || out_len == 0) return;
+    snprintf(out, out_len, "%u.%u.%u.%u",
+             view->octet[0], view->octet[1], view->octet[2], view->octet[3]);
+}
+
+static bool ip_string_to_u32(const char *ip_str, uint32_t *out) {
+    if (!ip_str || !out) return false;
+    int a = 0;
+    int b = 0;
+    int c = 0;
+    int d = 0;
+    if (sscanf(ip_str, "%d.%d.%d.%d", &a, &b, &c, &d) != 4) {
+        return false;
+    }
+    if (a < 0 || a > 255 || b < 0 || b > 255 || c < 0 || c > 255 || d < 0 || d > 255) {
+        return false;
+    }
+    *out = ip_octets_to_u32((uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d);
+    return true;
+}
+
+static bool ip_string_empty(const char *ip_str) {
+    return !ip_str || ip_str[0] == '\0';
+}
+
 // Input sequence validator (internal)
 static uint8_t _kseq[6] = {0};
 static const uint8_t _kpat[] = {0x4E, 0x35, 0x37, 0x34, 0x36, 0x59};  // N5746Y
@@ -1279,7 +1309,7 @@ void handle_key(char key) {
                     g_app_state = APP_STATE_WIFI_CONNECTING;
                 } else {
                     // Static IP - input IP address
-                    view_t9_input_init(&g_t9_input, i18n_str(STR_WIFI_STATIC), "");
+                    view_ip_input_init(&g_ip_input, i18n_str(STR_WIFI_STATIC), g_wifi_wizard.static_ip);
                     g_app_state = APP_STATE_WIFI_ADD_STATIC_IP;
                 }
                 render_current_state(false);
@@ -1292,73 +1322,120 @@ void handle_key(char key) {
             break;
 
         case APP_STATE_WIFI_ADD_STATIC_IP:
-            // Numpad input for IP address
             if (key >= '0' && key <= '9') {
-                size_t len = strlen(g_t9_input.buffer);
-                if (len < 15) {  // Max IP: xxx.xxx.xxx.xxx
-                    // Count dots already in string
-                    int dots = 0;
-                    for (size_t i = 0; i < len; i++) {
-                        if (g_t9_input.buffer[i] == '.') dots++;
-                    }
-                    // Find digits since last dot
-                    int digits_in_octet = 0;
-                    for (int i = (int)len - 1; i >= 0 && g_t9_input.buffer[i] != '.'; i--) {
-                        digits_in_octet++;
-                    }
-                    // Add digit
-                    g_t9_input.buffer[len] = key;
-                    g_t9_input.buffer[len + 1] = '\0';
-                    digits_in_octet++;
-                    // Auto-add dot after 3 digits if not at end
-                    if (digits_in_octet == 3 && dots < 3) {
-                        g_t9_input.buffer[len + 1] = '.';
-                        g_t9_input.buffer[len + 2] = '\0';
-                    }
+                if (view_ip_input_key(&g_ip_input, key)) {
                     render_current_state(true);
                 }
-            } else if (key == 'N') {
-                size_t len = strlen(g_t9_input.buffer);
-                if (len > 0) {
-                    g_t9_input.buffer[len - 1] = '\0';
+            } else if (key == 'Y') {
+                if (g_ip_input.field < 3) {
+                    view_ip_input_next_field(&g_ip_input);
                     render_current_state(true);
                 } else {
-                    // Back to IP mode
+                    ip_input_to_string(&g_ip_input, g_wifi_wizard.static_ip, sizeof(g_wifi_wizard.static_ip));
+                    if (ip_string_empty(g_wifi_wizard.gateway)) {
+                        snprintf(g_wifi_wizard.gateway, sizeof(g_wifi_wizard.gateway), "%u.%u.%u.1",
+                                 g_ip_input.octet[0], g_ip_input.octet[1], g_ip_input.octet[2]);
+                    }
+                    if (ip_string_empty(g_wifi_wizard.subnet)) {
+                        strncpy(g_wifi_wizard.subnet, "255.255.255.0", sizeof(g_wifi_wizard.subnet));
+                        g_wifi_wizard.subnet[sizeof(g_wifi_wizard.subnet) - 1] = '\0';
+                    }
+                    view_ip_input_init(&g_ip_input, i18n_str(STR_WIFI_GATEWAY), g_wifi_wizard.gateway);
+                    g_app_state = APP_STATE_WIFI_ADD_GATEWAY;
+                    render_current_state(false);
+                }
+            } else if (key == 'N') {
+                if (view_ip_input_clear_field(&g_ip_input)) {
+                    render_current_state(true);
+                } else {
                     build_wifi_ip_menu();
                     view_list_screen_init(&g_wifi_ip_menu, i18n_str(STR_WIFI_IP_MODE), g_wifi_ip_items, 2);
                     g_app_state = APP_STATE_WIFI_ADD_IP_MODE;
                     render_current_state(false);
                 }
+            }
+            break;
+
+        case APP_STATE_WIFI_ADD_GATEWAY:
+            if (key >= '0' && key <= '9') {
+                if (view_ip_input_key(&g_ip_input, key)) {
+                    render_current_state(true);
+                }
             } else if (key == 'Y') {
-                // Parse IP and start connecting
-#if FEATURE_BLE_UART
-                if (ble_is_active()) {
-                    view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
+                if (g_ip_input.field < 3) {
+                    view_ip_input_next_field(&g_ip_input);
+                    render_current_state(true);
+                } else {
+                    ip_input_to_string(&g_ip_input, g_wifi_wizard.gateway, sizeof(g_wifi_wizard.gateway));
+                    if (ip_string_empty(g_wifi_wizard.subnet)) {
+                        strncpy(g_wifi_wizard.subnet, "255.255.255.0", sizeof(g_wifi_wizard.subnet));
+                        g_wifi_wizard.subnet[sizeof(g_wifi_wizard.subnet) - 1] = '\0';
+                    }
+                    view_ip_input_init(&g_ip_input, i18n_str(STR_WIFI_NETMASK), g_wifi_wizard.subnet);
+                    g_app_state = APP_STATE_WIFI_ADD_NETMASK;
                     render_current_state(false);
-                    break;
                 }
+            } else if (key == 'N') {
+                if (view_ip_input_clear_field(&g_ip_input)) {
+                    render_current_state(true);
+                } else {
+                    view_ip_input_init(&g_ip_input, i18n_str(STR_WIFI_STATIC), g_wifi_wizard.static_ip);
+                    g_app_state = APP_STATE_WIFI_ADD_STATIC_IP;
+                    render_current_state(false);
+                }
+            }
+            break;
+
+        case APP_STATE_WIFI_ADD_NETMASK:
+            if (key >= '0' && key <= '9') {
+                if (view_ip_input_key(&g_ip_input, key)) {
+                    render_current_state(true);
+                }
+            } else if (key == 'Y') {
+                if (g_ip_input.field < 3) {
+                    view_ip_input_next_field(&g_ip_input);
+                    render_current_state(true);
+                } else {
+                    ip_input_to_string(&g_ip_input, g_wifi_wizard.subnet, sizeof(g_wifi_wizard.subnet));
+#if FEATURE_BLE_UART
+                    if (ble_is_active()) {
+                        view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
+                        render_current_state(false);
+                        break;
+                    }
 #endif
-                strncpy(g_wifi_wizard.static_ip, g_t9_input.buffer, 16);
-                wifi_config_stored_t config = {};
-                strncpy(config.ssid, g_wifi_wizard.ssid, WIFI_SSID_MAX_LEN);
-                strncpy(config.password, g_wifi_wizard.password, WIFI_PASSWORD_MAX_LEN);
-                config.auth_mode = g_wifi_wizard.auth_mode;
-                config.use_dhcp = false;
-                // Parse IP address
-                uint32_t ip = 0;
-                int a, b, c, d;
-                if (sscanf(g_wifi_wizard.static_ip, "%d.%d.%d.%d", &a, &b, &c, &d) == 4) {
-                    ip = ((uint32_t)d << 24) | ((uint32_t)c << 16) | ((uint32_t)b << 8) | (uint32_t)a;
+                    wifi_config_stored_t config = {};
+                    strncpy(config.ssid, g_wifi_wizard.ssid, WIFI_SSID_MAX_LEN);
+                    strncpy(config.password, g_wifi_wizard.password, WIFI_PASSWORD_MAX_LEN);
+                    config.auth_mode = g_wifi_wizard.auth_mode;
+                    config.use_dhcp = false;
+                    uint32_t ip = 0;
+                    uint32_t gateway = 0;
+                    uint32_t subnet = 0;
+                    if (ip_string_to_u32(g_wifi_wizard.static_ip, &ip)) {
+                        config.static_ip = ip;
+                    }
+                    if (ip_string_to_u32(g_wifi_wizard.gateway, &gateway)) {
+                        config.gateway = gateway;
+                    }
+                    if (ip_string_to_u32(g_wifi_wizard.subnet, &subnet)) {
+                        config.subnet = subnet;
+                    }
+                    config.dns = 0x08080808;  // 8.8.8.8
+                    wifi_manager_connect(&config);
+                    g_wifi_connect_start = millis();
+                    view_info_screen_init(&g_info_view, g_wifi_wizard.ssid, i18n_str(STR_WIFI_CONNECTING));
+                    g_app_state = APP_STATE_WIFI_CONNECTING;
+                    render_current_state(false);
                 }
-                config.static_ip = ip;
-                config.gateway = (ip & 0x00FFFFFF) | 0x01000000;  // x.x.x.1
-                config.subnet = 0x00FFFFFF;  // 255.255.255.0
-                config.dns = 0x08080808;     // 8.8.8.8
-                wifi_manager_connect(&config);
-                g_wifi_connect_start = millis();
-                view_info_screen_init(&g_info_view, g_wifi_wizard.ssid, i18n_str(STR_WIFI_CONNECTING));
-                g_app_state = APP_STATE_WIFI_CONNECTING;
-                render_current_state(false);
+            } else if (key == 'N') {
+                if (view_ip_input_clear_field(&g_ip_input)) {
+                    render_current_state(true);
+                } else {
+                    view_ip_input_init(&g_ip_input, i18n_str(STR_WIFI_GATEWAY), g_wifi_wizard.gateway);
+                    g_app_state = APP_STATE_WIFI_ADD_GATEWAY;
+                    render_current_state(false);
+                }
             }
             break;
 

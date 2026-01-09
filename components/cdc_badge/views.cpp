@@ -657,14 +657,16 @@ void view_t9_input_backspace(view_t9_input_t *view) {
     view->cursor_active = false;
 }
 
-void view_t9_input_update(view_t9_input_t *view) {
-    if (!view || view->last_key == 0) return;
+bool view_t9_input_update(view_t9_input_t *view) {
+    if (!view || view->last_key == 0) return false;
 
     uint32_t now = millis();
     if ((now - view->last_press_ms) > VIEW_T9_TIMEOUT_MS) {
         view->last_key = 0;
         view->cursor_active = false;
+        return true;
     }
+    return false;
 }
 
 const char* view_t9_input_get_text(const view_t9_input_t *view) {
@@ -1177,6 +1179,161 @@ void view_time_input_render(const view_time_input_t *view, bool partial) {
     display.fillRect(underline_x, 60, 26, 3, EPD_BLACK);
 
     draw_hints(display, i18n_str(STR_HINT_DATE_TIME));
+    gui_flush(false);
+}
+
+// ============================================================================
+// IP Input Screen View
+// ============================================================================
+
+static bool parse_ip_string(const char *ip_str, uint8_t octet[4]) {
+    if (!ip_str || !octet) return false;
+
+    int a = 0;
+    int b = 0;
+    int c = 0;
+    int d = 0;
+    if (sscanf(ip_str, "%d.%d.%d.%d", &a, &b, &c, &d) != 4) {
+        return false;
+    }
+
+    if (a < 0 || a > 255 || b < 0 || b > 255 || c < 0 || c > 255 || d < 0 || d > 255) {
+        return false;
+    }
+
+    octet[0] = (uint8_t)a;
+    octet[1] = (uint8_t)b;
+    octet[2] = (uint8_t)c;
+    octet[3] = (uint8_t)d;
+    return true;
+}
+
+void view_ip_input_init(view_ip_input_t *view, const char *title, const char *initial_ip) {
+    if (!view) return;
+
+    view->title = title;
+    view->field = 0;
+    view->digit = 0;
+    view->octet[0] = 0;
+    view->octet[1] = 0;
+    view->octet[2] = 0;
+    view->octet[3] = 0;
+
+    if (initial_ip && initial_ip[0]) {
+        parse_ip_string(initial_ip, view->octet);
+    }
+}
+
+bool view_ip_input_key(view_ip_input_t *view, char key) {
+    if (!view || key < '0' || key > '9') return false;
+
+    if (view->field > 3) return false;
+
+    uint8_t d = (uint8_t)(key - '0');
+    uint8_t field = view->field;
+    uint8_t digit = view->digit;
+
+    if (digit == 0) {
+        view->octet[field] = d;
+        view->digit = 1;
+    } else if (digit < 3) {
+        uint16_t value = (uint16_t)view->octet[field] * 10 + d;
+        if (value > 255) value = 255;
+        view->octet[field] = (uint8_t)value;
+        view->digit++;
+    } else {
+        return false;
+    }
+
+    if (view->digit >= 3) {
+        if (view->field < 3) {
+            view->field++;
+            view->digit = 0;
+        } else {
+            view->digit = 3;
+        }
+    }
+
+    return true;
+}
+
+void view_ip_input_next_field(view_ip_input_t *view) {
+    if (!view) return;
+    if (view->field < 3) {
+        view->field++;
+        view->digit = 0;
+    }
+}
+
+void view_ip_input_prev_field(view_ip_input_t *view) {
+    if (!view) return;
+    if (view->field > 0) {
+        view->field--;
+        view->digit = 0;
+    }
+}
+
+bool view_ip_input_clear_field(view_ip_input_t *view) {
+    if (!view) return false;
+
+    if (view->digit > 0) {
+        view->octet[view->field] = 0;
+        view->digit = 0;
+        return true;
+    }
+
+    if (view->field > 0) {
+        view->field--;
+        view->digit = 0;
+        return true;
+    }
+
+    return false;
+}
+
+void view_ip_input_render(const view_ip_input_t *view, bool partial) {
+    if (!view) return;
+
+    Gdey029T94 &display = gui_get_display();
+    gui_clear();
+
+    draw_header(display, view->title ? view->title : "IP");
+
+    display.setTextColor(EPD_BLACK);
+    display.setFont(&FreeMonoBold12pt7b);
+
+    int16_t x1 = 0;
+    int16_t y1 = 0;
+    uint16_t w = 0;
+    uint16_t h = 0;
+    display.getTextBounds("000.000.000.000", 0, 0, &x1, &y1, &w, &h);
+    (void)x1;
+    (void)y1;
+    (void)h;
+    int start_x = (display.width() - (int)w) / 2;
+    int y = 55;
+
+    int field_start[4] = {0, 0, 0, 0};
+    int field_end[4] = {0, 0, 0, 0};
+
+    display.setCursor(start_x, y);
+    for (int i = 0; i < 4; i++) {
+        field_start[i] = display.getCursorX();
+        char buf[4];
+        snprintf(buf, sizeof(buf), "%03u", view->octet[i]);
+        display.print(buf);
+        field_end[i] = display.getCursorX();
+        if (i < 3) {
+            display.print(".");
+        }
+    }
+
+    int underline_x = field_start[view->field];
+    int underline_w = field_end[view->field] - field_start[view->field];
+    if (underline_w < 1) underline_w = 1;
+    display.fillRect(underline_x, y + 5, underline_w, 3, EPD_BLACK);
+
+    draw_hints(display, i18n_str(STR_HINT_IP_INPUT));
     gui_flush(false);
 }
 

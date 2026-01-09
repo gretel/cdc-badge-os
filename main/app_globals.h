@@ -76,7 +76,9 @@ typedef enum {
     APP_STATE_WIFI_ADD_PASSWORD,  // T9: Password input
     APP_STATE_WIFI_ADD_AUTH,      // Auth mode selection
     APP_STATE_WIFI_ADD_IP_MODE,   // DHCP or Static
-    APP_STATE_WIFI_ADD_STATIC_IP, // IP input (numpad)
+    APP_STATE_WIFI_ADD_STATIC_IP, // IP input (numeric)
+    APP_STATE_WIFI_ADD_GATEWAY,   // Gateway input (numeric)
+    APP_STATE_WIFI_ADD_NETMASK,   // Netmask input (numeric)
     APP_STATE_WIFI_CONNECTING,    // Connection in progress
     APP_STATE_WIFI_DETAILS,       // Show WiFi details
     // Tools menu states
@@ -181,6 +183,8 @@ typedef struct {
     wifi_auth_mode_t auth_mode;
     bool use_dhcp;
     char static_ip[16];  // "xxx.xxx.xxx.xxx"
+    char gateway[16];    // "xxx.xxx.xxx.xxx"
+    char subnet[16];     // "xxx.xxx.xxx.xxx"
     bool from_scan;      // true = selected from scan list
 } wifi_wizard_t;
 
@@ -196,6 +200,7 @@ extern view_list_screen_t g_badge_texts_menu;
 extern view_info_screen_t g_info_view;
 extern view_slider_t g_slider;
 extern view_t9_input_t g_t9_input;
+extern view_ip_input_t g_ip_input;
 extern view_qr_code_t g_qr_view;
 
 #if FEATURE_TOTP
