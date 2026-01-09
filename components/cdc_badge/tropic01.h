@@ -10,14 +10,14 @@ extern "C" {
 // R-Memory slot definitions
 #define TR01_RMEM_SLOT_PIN       30    // PIN hash storage
 #define TR01_RMEM_SLOT_CONFIG    31    // Device config
-#define TR01_RMEM_SLOT_FIDO_START 0    // FIDO2 credentials: 0-26
-#define TR01_RMEM_SLOT_FIDO_END   26
+#define TR01_RMEM_SLOT_FIDO_START 0    // FIDO2/SSH credentials: 0-29
+#define TR01_RMEM_SLOT_FIDO_END   29   // Extended from 26 to include SSH keys
 #define TR01_RMEM_SLOT_TOTP_START 33   // TOTP accounts: 33-132
 #define TR01_RMEM_SLOT_TOTP_END   132
 
 // ECC slot definitions
-#define TR01_ECC_SLOT_FIDO_START  0    // FIDO2 keys: 0-26
-#define TR01_ECC_SLOT_FIDO_END    26
+#define TR01_ECC_SLOT_FIDO_START  0    // FIDO2/SSH keys: 0-29 (P-256 or Ed25519)
+#define TR01_ECC_SLOT_FIDO_END    29   // Extended from 26 to include SSH keys
 #define TR01_ECC_SLOT_ATTEST      30   // FIDO2 attestation key
 #define TR01_ECC_SLOT_COUNT       32
 
@@ -50,6 +50,12 @@ bool tropic01_ecc_key_generate(uint8_t slot, uint8_t curve);
 bool tropic01_ecc_key_read(uint8_t slot, uint8_t *pubkey, uint8_t pubkey_size,
                            uint8_t *curve, uint8_t *origin);
 bool tropic01_ecc_key_erase(uint8_t slot);
+
+// Store (import) external private key into TROPIC01
+// WARNING: Private key must be valid for the specified curve
+// For P-256: 32 bytes, for Ed25519: 32 bytes
+bool tropic01_ecc_key_write(uint8_t slot, const uint8_t *privkey,
+                            uint8_t privkey_size, uint8_t curve);
 
 // Signing operations
 bool tropic01_ecdsa_sign(uint8_t slot, const uint8_t *hash, uint32_t hash_len,

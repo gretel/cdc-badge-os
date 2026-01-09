@@ -44,27 +44,28 @@
 #define FEATURE_TOTP 1  // TOTP enabled
 #endif
 
-// FIDO2 can use multiple transports independently
+// FIDO2 over USB HID
 #ifndef FEATURE_FIDO2_USB
 #define FEATURE_FIDO2_USB 1  // FIDO2 over USB HID (requires FEATURE_USB)
 #endif
 
-#ifndef FEATURE_FIDO2_BT
-#define FEATURE_FIDO2_BT 0   // FIDO2 over Bluetooth (BLE CTAP)
+// Convenience: FIDO2 enabled if USB transport is enabled
+#define FEATURE_FIDO2 FEATURE_FIDO2_USB
+
+// BLE UART (Serial over Bluetooth)
+#ifndef FEATURE_BLE_UART
+#define FEATURE_BLE_UART 1   // BLE UART for wireless serial console
 #endif
 
-// Compile-time check: FIDO2 BT requires Bluetooth to be enabled in sdkconfig
-#if FEATURE_FIDO2_BT
+// Compile-time check: BLE UART requires Bluetooth to be enabled in sdkconfig
+#if FEATURE_BLE_UART
   #if !defined(CONFIG_BT_ENABLED) || !CONFIG_BT_ENABLED
-    #error "FEATURE_FIDO2_BT requires CONFIG_BT_ENABLED=y in sdkconfig!"
+    #error "FEATURE_BLE_UART requires CONFIG_BT_ENABLED=y in sdkconfig!"
   #endif
-  #if !defined(CONFIG_BT_NIMBLE_ENABLED) || !CONFIG_BT_NIMBLE_ENABLED
-    #error "FEATURE_FIDO2_BT requires CONFIG_BT_NIMBLE_ENABLED=y in sdkconfig!"
+  #if !defined(CONFIG_BT_BLUEDROID_ENABLED) || !CONFIG_BT_BLUEDROID_ENABLED
+    #error "FEATURE_BLE_UART requires CONFIG_BT_BLUEDROID_ENABLED=y in sdkconfig!"
   #endif
 #endif
-
-// Convenience: FIDO2 enabled if any transport is enabled
-#define FEATURE_FIDO2 (FEATURE_FIDO2_USB || FEATURE_FIDO2_BT)
 
 #ifndef FEATURE_USB_KEYBOARD
 #define FEATURE_USB_KEYBOARD 1  // USB keyboard for TOTP typing
@@ -75,12 +76,15 @@
 #endif
 
 #ifndef FEATURE_CA
-#define FEATURE_CA 0  // DISABLED FOR TESTING
+#define FEATURE_CA 1  // Certificate Authority
 #endif
 
 // PKCS#11 requires wolfPKCS11 evaluation - disabled until proven viable
 #ifndef FEATURE_CA_PKCS11
 #define FEATURE_CA_PKCS11 0
 #endif
+
+// Note: SSH key support is provided via FIDO2 (ed25519-sk keys)
+// No separate FEATURE_SSH needed - use ssh-keygen -t ed25519-sk with the badge
 
 #endif

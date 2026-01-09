@@ -6,6 +6,7 @@
 #include "cdc_log.h"
 #include "cdc_time.h"
 #include "i18n.h"
+#include "pin_expander.h"
 #include <cstring>
 #include <cstdio>
 #include <cmath>
@@ -531,24 +532,6 @@ void view_list_screen_navigate(view_list_screen_t *view, bool down) {
     }
 }
 
-bool view_list_screen_select_by_key(view_list_screen_t *view, char key) {
-    if (!view || !view->items) return false;
-
-    for (uint8_t i = 0; i < view->item_count; i++) {
-        if (view->items[i].shortcut && view->items[i].shortcut[0] == key) {
-            view->selection = i;
-            // Adjust scroll
-            if (view->selection < view->scroll_pos) {
-                view->scroll_pos = view->selection;
-            } else if (view->selection >= view->scroll_pos + VIEW_LIST_VISIBLE_ITEMS) {
-                view->scroll_pos = view->selection - VIEW_LIST_VISIBLE_ITEMS + 1;
-            }
-            return true;
-        }
-    }
-    return false;
-}
-
 uint8_t view_list_screen_get_selection(const view_list_screen_t *view) {
     return view ? view->selection : 0;
 }
@@ -703,15 +686,27 @@ void view_t9_input_render(const view_t9_input_t *view, bool partial) {
     display.setCursor(10, 42);
     display.print("Text:");
 
-    // Current text with cursor
+    // Current text
     display.setCursor(10, 62);
-    for (uint8_t i = 0; i < view->len; i++) {
-        display.print(view->buffer[i]);
-    }
-    // Show cursor
-    if (view->cursor_active) {
+    bool cycling = (view->cursor_active && view->last_key != 0 && view->len > 0);
+
+    if (cycling) {
+        // Still iterating through characters - show all but last char, then last char with underline
+        for (uint8_t i = 0; i < view->len - 1; i++) {
+            display.print(view->buffer[i]);
+        }
+        // Show last character (the one being cycled)
+        display.print(view->buffer[view->len - 1]);
+        // Underline under current character - backspace and draw underscore
+        int16_t cursor_x = display.getCursorX();
+        display.setCursor(cursor_x - 11, 62);  // Move back under last char
         display.print("_");
     } else {
+        // Not cycling - show all text with cursor at end
+        for (uint8_t i = 0; i < view->len; i++) {
+            display.print(view->buffer[i]);
+        }
+        // Show cursor at insert position
         display.print("|");
     }
 
@@ -1014,6 +1009,33 @@ void view_date_input_prev_field(view_date_input_t *view) {
     view->digit = 0;
 }
 
+bool view_date_input_clear_field(view_date_input_t *view) {
+    if (!view) return false;
+
+    // If digit > 0, just reset digit position (backspace within field)
+    if (view->digit > 0) {
+        view->digit = 0;
+        // Reset current field value to default
+        if (view->field == 0) view->day = 1;
+        else if (view->field == 1) view->month = 1;
+        else view->year = 2025;
+        return true;
+    }
+
+    // digit == 0: go to previous field if not at start
+    if (view->field > 0) {
+        view->field--;
+        view->digit = 0;
+        // Reset the field we're now on
+        if (view->field == 0) view->day = 1;
+        else if (view->field == 1) view->month = 1;
+        return true;
+    }
+
+    // At field 0, digit 0: nothing to clear
+    return false;
+}
+
 void view_date_input_render(const view_date_input_t *view, bool partial) {
     if (!view) return;
 
@@ -1101,6 +1123,31 @@ void view_time_input_prev_field(view_time_input_t *view) {
     if (!view) return;
     view->field = view->field > 0 ? view->field - 1 : 1;
     view->digit = 0;
+}
+
+bool view_time_input_clear_field(view_time_input_t *view) {
+    if (!view) return false;
+
+    // If digit > 0, just reset digit position (backspace within field)
+    if (view->digit > 0) {
+        view->digit = 0;
+        // Reset current field value to default
+        if (view->field == 0) view->hour = 0;
+        else view->minute = 0;
+        return true;
+    }
+
+    // digit == 0: go to previous field if not at start
+    if (view->field > 0) {
+        view->field--;
+        view->digit = 0;
+        // Reset the field we're now on
+        view->hour = 0;
+        return true;
+    }
+
+    // At field 0, digit 0: nothing to clear
+    return false;
 }
 
 void view_time_input_render(const view_time_input_t *view, bool partial) {
@@ -1296,6 +1343,18 @@ static void draw_toast_box(Gdey029T94 &display, const char *message, int icon_ty
     display.print(message);
 }
 
+// Wait for duration, but allow early exit on Y/N keypress
+static void toast_wait(uint16_t duration_ms) {
+    uint32_t start = millis();
+    while (millis() - start < duration_ms) {
+        char key = pin_expander_get_key();
+        if (key == 'Y' || key == 'N') {
+            break;  // Early exit on confirmation key
+        }
+        delay(10);  // Small delay to avoid busy-waiting
+    }
+}
+
 void view_toast_show(const char *message, uint16_t duration_ms) {
     if (!message) return;
 
@@ -1305,8 +1364,8 @@ void view_toast_show(const char *message, uint16_t duration_ms) {
     // Synchronous partial update for toast (must block)
     gui_flush_sync(false);
 
-    // Block for duration
-    delay(duration_ms);
+    // Wait for duration (interruptable by Y/N)
+    toast_wait(duration_ms);
 }
 
 void view_toast_success(const char *message, uint16_t duration_ms) {
@@ -1318,8 +1377,8 @@ void view_toast_success(const char *message, uint16_t duration_ms) {
     // Synchronous partial update for toast (must block)
     gui_flush_sync(false);
 
-    // Block for duration
-    delay(duration_ms);
+    // Wait for duration (interruptable by Y/N)
+    toast_wait(duration_ms);
 }
 
 void view_toast_error(const char *message, uint16_t duration_ms) {
@@ -1331,8 +1390,8 @@ void view_toast_error(const char *message, uint16_t duration_ms) {
     // Synchronous partial update for toast (must block)
     gui_flush_sync(false);
 
-    // Block for duration
-    delay(duration_ms);
+    // Wait for duration (interruptable by Y/N)
+    toast_wait(duration_ms);
 }
 
 // ============================================================================
@@ -1440,4 +1499,139 @@ uint8_t view_context_menu_get_action(const view_context_menu_t *menu) {
 
 bool view_context_menu_is_visible(const view_context_menu_t *menu) {
     return menu && menu->visible;
+}
+
+// ============================================================================
+// QR Code View
+// ============================================================================
+
+#include "qrcode.h"
+
+// QR code display callback context
+static struct {
+    int offset_x;
+    int offset_y;
+    int scale;
+} qr_render_ctx;
+
+// QR code display callback - draws directly to e-paper
+static void qr_display_callback(esp_qrcode_handle_t qrcode) {
+    Gdey029T94 &display = gui_get_display();
+    int size = esp_qrcode_get_size(qrcode);
+    int scale = qr_render_ctx.scale;
+    int x0 = qr_render_ctx.offset_x;
+    int y0 = qr_render_ctx.offset_y;
+
+    LOG_D("VIEW", "QR size=%d, scale=%d, pos=(%d,%d)", size, scale, x0, y0);
+
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            bool black = esp_qrcode_get_module(qrcode, x, y);
+            uint16_t color = black ? EPD_BLACK : EPD_WHITE;
+
+            // Draw scaled pixel
+            for (int dy = 0; dy < scale; dy++) {
+                for (int dx = 0; dx < scale; dx++) {
+                    display.drawPixel(x0 + x * scale + dx, y0 + y * scale + dy, color);
+                }
+            }
+        }
+    }
+}
+
+void view_qr_code_init(view_qr_code_t *view, const char *title, const char *data) {
+    if (!view) return;
+    view->title = title;
+    view->data = data;
+    view->scale = 0;  // Auto-calculate
+}
+
+void view_qr_code_render(const view_qr_code_t *view, bool partial) {
+    if (!view || !view->data) return;
+
+    Gdey029T94 &display = gui_get_display();
+    display.fillScreen(EPD_WHITE);
+    display.setTextColor(EPD_BLACK);
+
+    // Display: 296x128 pixels
+    // Layout: QR code on LEFT (max size), title/hint on RIGHT
+    const int display_height = 128;
+    const int display_width = 296;
+    const int qr_margin = 2;  // Small margin around QR
+
+    // QR code max height = display height - margins
+    int max_qr_height = display_height - (qr_margin * 2);
+
+    // Generate QR code with callback
+    esp_qrcode_config_t cfg = {
+        .display_func = qr_display_callback,
+        .max_qrcode_version = 10,
+        .qrcode_ecc_level = ESP_QRCODE_ECC_LOW,
+        .user_data = NULL
+    };
+
+    // QR version n has size 17 + 4*n modules
+    // Version 10 = 57 modules (worst case)
+    // For 124px available: scale = 124/57 = 2.17 -> use 2
+    int est_modules = 57;  // Assume max version for layout
+    int scale = max_qr_height / est_modules;
+    if (scale < 1) scale = 1;
+
+    // Calculate QR pixel size
+    int qr_pixel_size = est_modules * scale;
+
+    // Position QR code on left, vertically centered
+    qr_render_ctx.offset_x = qr_margin;
+    qr_render_ctx.offset_y = (display_height - qr_pixel_size) / 2;
+    qr_render_ctx.scale = scale;
+
+    // Generate and render QR code
+    esp_err_t err = esp_qrcode_generate(&cfg, view->data);
+    if (err != ESP_OK) {
+        LOG_E("VIEW", "QR generate failed: %s", esp_err_to_name(err));
+        display.setFont(NULL);
+        display.setCursor(10, 64);
+        display.print("QR Error");
+        gui_flush_sync(false);
+        return;
+    }
+
+    // Right side text area starts after QR code
+    int text_area_x = qr_margin + qr_pixel_size + 8;
+    int text_area_width = display_width - text_area_x - 4;
+
+    // Draw title on right side (top)
+    if (view->title && view->title[0]) {
+        display.setFont(&FreeMonoBold9pt7b);
+
+        // Word wrap title into text area
+        int y = 14;
+        const char *p = view->title;
+        char line[32];
+        int max_chars = text_area_width / 7;  // Approx char width at 9pt
+
+        while (*p && y < 80) {
+            // Copy up to max_chars or until end
+            int len = 0;
+            while (p[len] && len < max_chars && len < 31) {
+                line[len] = p[len];
+                len++;
+            }
+            line[len] = '\0';
+
+            display.setCursor(text_area_x, y);
+            display.print(line);
+
+            p += len;
+            y += 16;
+        }
+    }
+
+    // Draw hint at bottom right
+    display.setFont(NULL);
+    const char *hint = "NO=Back";
+    display.setCursor(text_area_x, 116);
+    display.print(hint);
+
+    gui_flush_sync(false);
 }

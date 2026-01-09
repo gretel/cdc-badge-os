@@ -8,12 +8,23 @@
 #include "cdc_time.h"
 #include "gui.h"
 #include "i18n.h"
+#include "tropic01.h"
 
 #include <cstring>
 
 // Static buffers for list item labels (must persist)
 static char g_fido_labels[FIDO2_MAX_CREDENTIALS][100];
-static char g_fido_shortcuts[FIDO2_MAX_CREDENTIALS][4];
+
+void build_fido_context_menu(void) {
+    g_fido_context_items_count = 0;
+
+    // Standard items
+    g_fido_context_items_buf[g_fido_context_items_count++] = {"Details", 1};
+    g_fido_context_items_buf[g_fido_context_items_count++] = {"Delete", 2};
+
+    // Cancel is always last
+    g_fido_context_items_buf[g_fido_context_items_count++] = {"Cancel", 0};
+}
 
 static void populate_fido_list(void) {
     uint8_t count = fido2_get_credential_count();
@@ -28,9 +39,7 @@ static void populate_fido_list(void) {
                 snprintf(g_fido_labels[i], sizeof(g_fido_labels[i]),
                          "%.45s", info.rp_id);
             }
-            snprintf(g_fido_shortcuts[i], sizeof(g_fido_shortcuts[i]), "%d", i + 1);
             g_fido_items[i].label = g_fido_labels[i];
-            g_fido_items[i].shortcut = g_fido_shortcuts[i];
         }
     }
     if (count > 0) {
@@ -52,14 +61,20 @@ void show_fido_detail(uint8_t index) {
     g_fido_selected_index = index;
     fido2_credential_info_t info;
     if (fido2_get_credential_info(index, &info)) {
+        // Determine key type: SSH keys have "ssh:" prefix in rp_id
+        const char *key_type = (strncmp(info.rp_id, "ssh:", 4) == 0) ? "SSH" : "WebAuthn";
+        const char *algo_name = (info.curve == CDC_CURVE_ED25519) ? "Ed25519" : "P-256";
+
         snprintf(g_fido_detail_text, sizeof(g_fido_detail_text),
                  "Relying Party:\n%s\n\n"
+                 "Type: %s  Algo: %s\n"
                  "User: %s\n"
                  "Slot: %d\n"
                  "Sign count: %lu\n"
                  "Resident: %s\n\n"
                  "%s",
                  info.rp_id,
+                 key_type, algo_name,
                  strlen(info.user_name) > 0 ? info.user_name : "(none)",
                  info.slot,
                  info.sign_count,

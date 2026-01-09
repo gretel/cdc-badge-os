@@ -26,8 +26,22 @@
 #include "fido2.h"
 #endif
 
+#if FEATURE_BLE_UART
+#include "ble_uart.h"
+#endif
+
+#if FEATURE_CA
+#include "ca.h"
+#endif
+
 #include <cstdio>
 #include <cstring>
+
+#if FEATURE_BLE_UART
+static bool ble_is_active(void) {
+    return g_ble_enabled || ble_uart_is_initialized();
+}
+#endif
 
 // Input sequence validator (internal)
 static uint8_t _kseq[6] = {0};
@@ -55,17 +69,53 @@ void handle_key(char key) {
                 // Turn on backlight temporarily when unlocking
                 gui_backlight_on();
                 go_to_pin_entry();
-            } else if (key == '1') {
-                // Toggle forced backlight state
-                g_backlight_forced_on = !g_backlight_forced_on;
-                if (g_backlight_forced_on) {
-                    gui_backlight_on();
-                } else {
-                    gui_backlight_off();
+            } else if (key == '3') {
+                // Open quick menu (limited - WiFi/BLE moved to main menu)
+                g_lock_quick_items[0] = {"Light", 1};
+                g_lock_quick_items[1] = {"Sleep", 2};
+                view_context_menu_init(&g_lock_quick_menu, "Quick Menu", g_lock_quick_items, 2);
+                view_context_menu_show(&g_lock_quick_menu);
+                g_app_state = APP_STATE_LOCK_QUICK_MENU;
+            }
+            break;
+
+        case APP_STATE_LOCK_QUICK_MENU:
+            if (key == '2') {
+                view_context_menu_navigate(&g_lock_quick_menu, false);
+                view_context_menu_render(&g_lock_quick_menu);
+            } else if (key == '8') {
+                view_context_menu_navigate(&g_lock_quick_menu, true);
+                view_context_menu_render(&g_lock_quick_menu);
+            } else if (key == 'Y') {
+                uint8_t action = view_context_menu_get_action(&g_lock_quick_menu);
+                view_context_menu_hide(&g_lock_quick_menu);
+                switch (action) {
+                    case 1:  // Light
+                        g_backlight_forced_on = !g_backlight_forced_on;
+                        if (g_backlight_forced_on) {
+                            gui_backlight_on();
+                        } else {
+                            gui_backlight_off();
+                        }
+                        LOG_I("KEY", "Backlight forced: %s", g_backlight_forced_on ? "ON" : "OFF");
+                        break;
+                    case 2:  // Deep Sleep
+                        if (power_is_usb_connected()) {
+                            view_toast_error(i18n_str(STR_UNPLUG_USB), 1500);
+                        } else {
+                            enter_deep_sleep();  // Does not return
+                        }
+                        break;
+                    default:  // Cancel (0)
+                        break;
                 }
                 update_lock_screen_data();
-                render_current_state(true);
-                LOG_I("KEY", "Backlight forced: %s", g_backlight_forced_on ? "ON" : "OFF");
+                g_app_state = APP_STATE_LOCK_SCREEN;
+                render_current_state(false);
+            } else if (key == 'N') {
+                view_context_menu_hide(&g_lock_quick_menu);
+                g_app_state = APP_STATE_LOCK_SCREEN;
+                render_current_state(false);
             }
             break;
 
@@ -127,6 +177,14 @@ void handle_key(char key) {
                     go_to_fido_list();
                 } else
 #endif
+#if FEATURE_CA
+                if (sel == MENU_IDX_CA) {
+                    build_ca_menu();
+                    view_list_screen_init(&g_ca_menu, i18n_str(STR_CA_MENU), g_ca_items, CA_IDX_COUNT);
+                    g_app_state = APP_STATE_CA_MENU;
+                    render_current_state(false);
+                } else
+#endif
                 if (sel == MENU_IDX_TOOLS) {
                     build_tools_menu();
                     view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, 2);
@@ -139,17 +197,107 @@ void handle_key(char key) {
                     render_current_state(false);
                 } else if (sel == MENU_IDX_SETTINGS) {
                     go_to_settings_menu();
-                } else if (sel == MENU_IDX_LOCK) {
-                    // Block deep sleep when USB is connected
-                    if (power_is_usb_connected()) {
-                        view_toast_error(i18n_str(STR_UNPLUG_USB), 1500);
-                        render_current_state(false);
-                    } else {
-                        enter_deep_sleep();  // "Sleep" triggers deep sleep
-                    }
                 }
+                // Deep Sleep moved to lock screen quick menu (key 3)
+            } else if (key == '3') {
+                // Open quick menu for WiFi/BLE toggle
+                g_main_quick_items[0] = {"Light", 1};
+                g_main_quick_items[1] = {"Bluetooth", 2};
+                g_main_quick_items[2] = {"WiFi", 3};
+                g_main_quick_items[3] = {"Sleep", 4};
+                view_context_menu_init(&g_main_quick_menu, "Quick Menu", g_main_quick_items, 4);
+                view_context_menu_show(&g_main_quick_menu);
+                g_app_state = APP_STATE_MAIN_QUICK_MENU;
             } else if (key == 'N') {
                 go_to_lock_screen();
+            }
+            break;
+
+        case APP_STATE_MAIN_QUICK_MENU:
+            if (key == '2') {
+                view_context_menu_navigate(&g_main_quick_menu, false);
+                view_context_menu_render(&g_main_quick_menu);
+            } else if (key == '8') {
+                view_context_menu_navigate(&g_main_quick_menu, true);
+                view_context_menu_render(&g_main_quick_menu);
+            } else if (key == 'Y') {
+                uint8_t action = view_context_menu_get_action(&g_main_quick_menu);
+                view_context_menu_hide(&g_main_quick_menu);
+                switch (action) {
+                    case 1:  // Light
+                        g_backlight_forced_on = !g_backlight_forced_on;
+                        if (g_backlight_forced_on) {
+                            gui_backlight_on();
+                            view_toast_show("Light ON", 800);
+                        } else {
+                            gui_backlight_off();
+                            view_toast_show("Light OFF", 800);
+                        }
+                        LOG_I("KEY", "Backlight forced: %s", g_backlight_forced_on ? "ON" : "OFF");
+                        break;
+                    case 2:  // Bluetooth
+#if FEATURE_BLE_UART
+                        if (!g_ble_enabled) {
+                            if (wifi_manager_is_init()) {
+                                view_toast_error(i18n_str(STR_BLUETOOTH_DISABLE_WIFI), 1500);
+                                break;
+                            }
+                            if (!ble_uart_is_initialized()) {
+                                ble_uart_init();
+                            }
+                            ble_uart_set_power_mode(BLE_POWER_ACTIVE);
+                            g_ble_enabled = true;
+                            view_toast_show(i18n_str(STR_BLUETOOTH_ON), 1000);
+                        } else {
+                            ble_uart_set_power_mode(BLE_POWER_OFF);
+                            ble_uart_deinit();
+                            g_ble_enabled = false;
+                            view_toast_show(i18n_str(STR_BLUETOOTH_OFF), 1000);
+                        }
+                        LOG_I("KEY", "BLE: %s", g_ble_enabled ? "ON" : "OFF");
+#else
+                        view_toast_error("BLE disabled", 1000);
+#endif
+                        break;
+                    case 3:  // WiFi
+                        if (wifi_manager_get_state() == WIFI_STATE_CONNECTED) {
+                            wifi_manager_disconnect();
+                            wifi_manager_deinit();
+                            view_toast_show(i18n_str(STR_WIFI_DISCONNECTED), 1000);
+                        } else if (wifi_manager_has_config()) {
+#if FEATURE_BLE_UART
+                            if (ble_is_active()) {
+                                view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
+                                break;
+                            }
+#endif
+                            if (!wifi_manager_is_init()) {
+                                wifi_manager_init();
+                            }
+                            wifi_config_stored_t config;
+                            wifi_manager_load_config(&config);
+                            wifi_manager_connect(&config);
+                            view_toast_show(i18n_str(STR_WIFI_CONNECTING), 1000);
+                        } else {
+                            view_toast_error(i18n_str(STR_WIFI_NO_CONFIG), 1000);
+                        }
+                        break;
+                    case 4:  // Deep Sleep
+                        if (power_is_usb_connected()) {
+                            view_toast_error(i18n_str(STR_UNPLUG_USB), 1500);
+                        } else {
+                            enter_deep_sleep();  // Does not return
+                        }
+                        break;
+                    default:  // Cancel (0)
+                        break;
+                }
+                g_app_state = APP_STATE_MAIN_MENU;
+                render_current_state(false);
+            } else if (key == 'N') {
+                view_context_menu_hide(&g_main_quick_menu);
+                g_app_state = APP_STATE_MAIN_MENU;
+                render_current_state(false);
             }
             break;
 
@@ -197,7 +345,8 @@ void handle_key(char key) {
                         go_to_badge_texts_menu();
                         break;
 
-                    case SETTINGS_IDX_SET_DATE: {
+                    case SETTINGS_IDX_SET_DATETIME: {
+                        // Start Date/Time wizard: Date first, then Time
                         struct tm timeinfo;
                         if (cdc_rtc_is_time_set()) {
                             cdc_rtc_get_time(&timeinfo);
@@ -205,50 +354,26 @@ void handle_key(char key) {
                             timeinfo.tm_mday = 1;
                             timeinfo.tm_mon = 0;
                             timeinfo.tm_year = 125;  // 2025
+                            timeinfo.tm_hour = 12;
+                            timeinfo.tm_min = 0;
                         }
+                        // Initialize both views (time values preserved for wizard step 2)
                         view_date_input_init(&g_date_input,
                                              timeinfo.tm_mday,
                                              timeinfo.tm_mon + 1,
                                              timeinfo.tm_year + 1900);
-                        g_app_state = APP_STATE_SET_DATE;
-                        render_current_state(false);
-                        break;
-                    }
-
-                    case SETTINGS_IDX_SET_TIME: {
-                        struct tm timeinfo;
-                        if (cdc_rtc_is_time_set()) {
-                            cdc_rtc_get_time(&timeinfo);
-                        } else {
-                            timeinfo.tm_hour = 12;
-                            timeinfo.tm_min = 0;
-                        }
                         view_time_input_init(&g_time_input,
                                              timeinfo.tm_hour,
                                              timeinfo.tm_min);
-                        g_app_state = APP_STATE_SET_TIME;
-                        render_current_state(false);
-                        break;
-                    }
-
-                    case SETTINGS_IDX_WIFI_SETUP: {
-                        // Start WiFi scan
-                        wifi_manager_init();
-                        wifi_manager_start_scan();
-                        g_wifi_scan_start = millis();
-                        view_info_screen_init(&g_info_view, "WiFi", i18n_str(STR_WIFI_SCANNING));
-                        g_app_state = APP_STATE_WIFI_SCAN;
+                        g_app_state = APP_STATE_SET_DATE;
                         render_current_state(false);
                         break;
                     }
 
                     case SETTINGS_IDX_LANGUAGE: {
                         // Build language list
-                        static char lang_shortcuts[LANG_COUNT][4];
                         for (int i = 0; i < LANG_COUNT; i++) {
                             g_language_items[i].label = i18n_get_language_name((language_t)i);
-                            snprintf(lang_shortcuts[i], sizeof(lang_shortcuts[i]), "%d", i + 1);
-                            g_language_items[i].shortcut = lang_shortcuts[i];
                         }
                         view_list_screen_init(&g_language_menu, i18n_str(STR_LANGUAGE), g_language_items, LANG_COUNT);
                         // Pre-select current language
@@ -257,10 +382,6 @@ void handle_key(char key) {
                         render_current_state(false);
                         break;
                     }
-
-                    case SETTINGS_IDX_BACK:
-                        go_to_main_menu();
-                        break;
                 }
             } else if (key == 'N') {
                 go_to_main_menu();
@@ -293,10 +414,6 @@ void handle_key(char key) {
                         view_t9_input_init(&g_t9_input, i18n_str(STR_BADGE_INFO2), badge_settings_get_info2());
                         g_app_state = APP_STATE_BADGE_EDIT_INFO2;
                         render_current_state(false);
-                        break;
-
-                    case BADGE_IDX_BACK:
-                        go_to_settings_menu();
                         break;
                 }
             } else if (key == 'N') {
@@ -421,12 +538,17 @@ void handle_key(char key) {
                 view_date_input_prev_field(&g_date_input);
                 render_current_state(true);
             } else if (key == 'Y') {
-                // Save date to RTC
-                cdc_rtc_set_date(g_date_input.year, g_date_input.month, g_date_input.day);
-                view_toast_success(i18n_str(STR_DATE_SAVED), 1000);
-                go_to_settings_menu();
+                // Date confirmed - advance to Time input (wizard step 2)
+                g_app_state = APP_STATE_SET_TIME;
+                render_current_state(false);
             } else if (key == 'N') {
-                go_to_settings_menu();
+                // N = clear current field, or go back if at start
+                if (!view_date_input_clear_field(&g_date_input)) {
+                    // At start of first field - cancel wizard
+                    go_to_settings_menu();
+                } else {
+                    render_current_state(true);
+                }
             }
             break;
 
@@ -441,13 +563,21 @@ void handle_key(char key) {
                 view_time_input_prev_field(&g_time_input);
                 render_current_state(true);
             } else if (key == 'Y') {
-                // Save time to RTC
+                // Save both date and time to RTC
+                cdc_rtc_set_date(g_date_input.year, g_date_input.month, g_date_input.day);
                 cdc_rtc_set_time(g_time_input.hour, g_time_input.minute, 0);
                 g_last_minute = -1;  // Force clock update
-                view_toast_success(i18n_str(STR_TIME_SAVED), 1000);
+                view_toast_success(i18n_str(STR_SAVED), 1000);
                 go_to_settings_menu();
             } else if (key == 'N') {
-                go_to_settings_menu();
+                // N = clear current field, or go back to date if at start
+                if (!view_time_input_clear_field(&g_time_input)) {
+                    // At start of first field - go back to date
+                    g_app_state = APP_STATE_SET_DATE;
+                    render_current_state(false);
+                } else {
+                    render_current_state(true);
+                }
             }
             break;
 
@@ -866,7 +996,8 @@ void handle_key(char key) {
                 g_fido_selected_index = view_list_screen_get_selection(&g_fido_list);
                 fido2_credential_info_t info;
                 if (fido2_get_credential_info(g_fido_selected_index, &info)) {
-                    view_context_menu_init(&g_context_menu, info.rp_id, g_fido_context_items, 3);
+                    build_fido_context_menu();
+                    view_context_menu_init(&g_context_menu, info.rp_id, g_fido_context_items_buf, g_fido_context_items_count);
                     view_context_menu_show(&g_context_menu);
                 }
             } else if (key == 'N') {
@@ -1130,6 +1261,13 @@ void handle_key(char key) {
                 g_wifi_wizard.use_dhcp = (sel == 0);
                 if (g_wifi_wizard.use_dhcp) {
                     // DHCP - start connecting
+#if FEATURE_BLE_UART
+                    if (ble_is_active()) {
+                        view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
+                        render_current_state(false);
+                        break;
+                    }
+#endif
                     wifi_config_stored_t config = {};
                     strncpy(config.ssid, g_wifi_wizard.ssid, WIFI_SSID_MAX_LEN);
                     strncpy(config.password, g_wifi_wizard.password, WIFI_PASSWORD_MAX_LEN);
@@ -1193,6 +1331,13 @@ void handle_key(char key) {
                 }
             } else if (key == 'Y') {
                 // Parse IP and start connecting
+#if FEATURE_BLE_UART
+                if (ble_is_active()) {
+                    view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
+                    render_current_state(false);
+                    break;
+                }
+#endif
                 strncpy(g_wifi_wizard.static_ip, g_t9_input.buffer, 16);
                 wifi_config_stored_t config = {};
                 strncpy(config.ssid, g_wifi_wizard.ssid, WIFI_SSID_MAX_LEN);
@@ -1231,7 +1376,7 @@ void handle_key(char key) {
                 render_current_state(true);
             } else if (key == 'N') {
                 build_tools_wifi_menu();
-                view_list_screen_init(&g_tools_wifi_menu, i18n_str(STR_WIFI_MENU), g_tools_wifi_items, 3);
+                view_list_screen_init(&g_tools_wifi_menu, i18n_str(STR_WIFI_MENU), g_tools_wifi_items, 4);
                 g_app_state = APP_STATE_TOOLS_WIFI_MENU;
                 render_current_state(false);
             }
@@ -1248,26 +1393,46 @@ void handle_key(char key) {
             } else if (key == 'Y' || key == '5') {
                 uint8_t sel = view_list_screen_get_selection(&g_tools_menu);
                 if (sel == 0) {
-                    // NTP Sync - requires WiFi config
-                    if (!wifi_manager_has_config()) {
-                        view_toast_error(i18n_str(STR_WIFI_NO_CONFIG), 1500);
+                    // NTP Sync - check if WiFi already connected
+#if FEATURE_BLE_UART
+                    if (ble_is_active()) {
+                        view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
                         render_current_state(false);
                         break;
                     }
-                    // Start WiFi connection for NTP
-                    wifi_manager_init();
-                    wifi_config_stored_t config;
-                    wifi_manager_load_config(&config);
-                    wifi_manager_connect(&config);
-                    g_wifi_connect_start = millis();
-                    g_ntp_sync_phase = 1;  // Connecting WiFi
-                    view_info_screen_init(&g_info_view, i18n_str(STR_NTP_SYNC), i18n_str(STR_WIFI_CONNECTING));
-                    g_app_state = APP_STATE_TOOLS_NTP_SYNC;
-                    render_current_state(false);
+#endif
+                    if (wifi_manager_get_state() == WIFI_STATE_CONNECTED) {
+                        // WiFi already connected - no session needed, just use existing connection
+                        g_ntp_wifi_session = 0;  // No session = don't disconnect after
+                        uint32_t ntp_server = wifi_manager_get_ntp_server();
+                        ntp_sync_start(ntp_server);
+                        g_ntp_sync_phase = 2;  // Skip to NTP sync phase
+                        view_info_screen_init(&g_info_view, i18n_str(STR_NTP_SYNC), i18n_str(STR_NTP_SYNCING));
+                        g_app_state = APP_STATE_TOOLS_NTP_SYNC;
+                        render_current_state(false);
+                    } else {
+                        // Need to connect WiFi first - acquire session
+                        if (!wifi_manager_has_config()) {
+                            view_toast_error(i18n_str(STR_WIFI_NO_CONFIG), 1500);
+                            render_current_state(false);
+                            break;
+                        }
+                        // Acquire WiFi session for NTP
+                        g_ntp_wifi_session = wifi_manager_session_acquire();
+                        wifi_manager_init();
+                        wifi_config_stored_t config;
+                        wifi_manager_load_config(&config);
+                        wifi_manager_connect(&config);
+                        g_wifi_connect_start = millis();
+                        g_ntp_sync_phase = 1;  // Connecting WiFi
+                        view_info_screen_init(&g_info_view, i18n_str(STR_NTP_SYNC), i18n_str(STR_WIFI_CONNECTING));
+                        g_app_state = APP_STATE_TOOLS_NTP_SYNC;
+                        render_current_state(false);
+                    }
                 } else if (sel == 1) {
                     // WiFi submenu
                     build_tools_wifi_menu();
-                    view_list_screen_init(&g_tools_wifi_menu, i18n_str(STR_WIFI_MENU), g_tools_wifi_items, 3);
+                    view_list_screen_init(&g_tools_wifi_menu, i18n_str(STR_WIFI_MENU), g_tools_wifi_items, 4);
                     g_app_state = APP_STATE_TOOLS_WIFI_MENU;
                     render_current_state(false);
                 }
@@ -1280,7 +1445,11 @@ void handle_key(char key) {
             if (key == 'N') {
                 // Cancel NTP sync - cleanup
                 ntp_sync_stop();
-                wifi_manager_deinit();
+                // Release session (will auto-deinit if we acquired it)
+                if (g_ntp_wifi_session > 0) {
+                    wifi_manager_session_release(g_ntp_wifi_session, true);
+                    g_ntp_wifi_session = 0;
+                }
                 g_ntp_sync_phase = 0;
                 build_tools_menu();
                 view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, 2);
@@ -1301,6 +1470,13 @@ void handle_key(char key) {
                 if (sel == 0) {
                     // Connect - use saved config
                     if (wifi_manager_has_config()) {
+#if FEATURE_BLE_UART
+                        if (ble_is_active()) {
+                            view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
+                            render_current_state(false);
+                            break;
+                        }
+#endif
                         wifi_manager_init();
                         wifi_config_stored_t config;
                         wifi_manager_load_config(&config);
@@ -1314,6 +1490,21 @@ void handle_key(char key) {
                         render_current_state(false);
                     }
                 } else if (sel == 1) {
+                    // Setup - start WiFi scan
+#if FEATURE_BLE_UART
+                    if (ble_is_active()) {
+                        view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
+                        render_current_state(false);
+                        break;
+                    }
+#endif
+                    wifi_manager_init();
+                    wifi_manager_start_scan();
+                    g_wifi_scan_start = millis();
+                    view_info_screen_init(&g_info_view, i18n_str(STR_WIFI_MENU), i18n_str(STR_WIFI_SCANNING));
+                    g_app_state = APP_STATE_WIFI_SCAN;
+                    render_current_state(false);
+                } else if (sel == 2) {
                     // Details
                     char details[512];
                     wifi_state_t state = wifi_manager_get_state();
@@ -1367,7 +1558,7 @@ void handle_key(char key) {
                     view_info_screen_init(&g_info_view, i18n_str(STR_WIFI_DETAILS), details);
                     g_app_state = APP_STATE_WIFI_DETAILS;
                     render_current_state(false);
-                } else if (sel == 2) {
+                } else if (sel == 3) {
                     // Disconnect
                     wifi_manager_disconnect();
                     wifi_manager_deinit();
@@ -1381,6 +1572,341 @@ void handle_key(char key) {
                 render_current_state(false);
             }
             break;
+
+#if FEATURE_CA
+        case APP_STATE_CA_MENU:
+            if (key == '2') {
+                view_list_screen_navigate(&g_ca_menu, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_ca_menu, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                uint8_t sel = view_list_screen_get_selection(&g_ca_menu);
+                switch (sel) {
+                    case CA_IDX_STATUS: {
+                        // Show CA status details
+                        ca_status_t status;
+                        if (ca_get_status(&status) && status.initialized) {
+                            snprintf(g_ca_detail_text, sizeof(g_ca_detail_text),
+                                "%s: %s\n\n"
+                                "%s: %s\n\n"
+                                "%s: %lu\n\n"
+                                "%s: %lu",
+                                i18n_str(STR_CA_COMMON_NAME), status.common_name,
+                                i18n_str(STR_CA_INITIALIZED), i18n_str(STR_OK),
+                                i18n_str(STR_CA_ISSUED_CERTS), (unsigned long)status.issued_count,
+                                i18n_str(STR_CA_SERIAL), (unsigned long)status.serial_counter);
+                        } else {
+                            snprintf(g_ca_detail_text, sizeof(g_ca_detail_text),
+                                "%s", i18n_str(STR_CA_NOT_INIT));
+                        }
+                        view_info_screen_init(&g_info_view, i18n_str(STR_CA_STATUS), g_ca_detail_text);
+                        g_app_state = APP_STATE_CA_DETAILS;
+                        render_current_state(false);
+                        break;
+                    }
+                    case CA_IDX_GENERATE:
+                        if (ca_is_initialized()) {
+                            // CA exists - show reset confirmation
+                            view_info_screen_init(&g_info_view, i18n_str(STR_CA_RESET),
+                                i18n_str(STR_CA_RESET_CONFIRM));
+                            g_app_state = APP_STATE_CA_RESET_CONFIRM;
+                            render_current_state(false);
+                        } else {
+                            // No CA - start wizard with Common Name
+                            memset(&g_ca_wizard, 0, sizeof(g_ca_wizard));
+                            g_ca_wizard.validity_years = 10;  // Default 10 years
+                            view_t9_input_init(&g_t9_input, i18n_str(STR_CA_ENTER_CN), "");
+                            g_app_state = APP_STATE_CA_WIZARD_CN;
+                            render_current_state(false);
+                        }
+                        break;
+                    case CA_IDX_EXPORT:
+                        if (!ca_is_initialized()) {
+                            view_toast_error(i18n_str(STR_CA_NOT_INIT), 1500);
+                        } else {
+                            size_t out_len;
+                            if (ca_export_root_cert_pem(g_ca_detail_text, sizeof(g_ca_detail_text), &out_len)) {
+                                view_info_screen_init(&g_info_view, i18n_str(STR_CA_EXPORT), g_ca_detail_text);
+                                g_app_state = APP_STATE_CA_DETAILS;
+                                render_current_state(false);
+                            } else {
+                                view_toast_error("Export failed", 1500);
+                            }
+                        }
+                        break;
+                    case CA_IDX_QR_CODE:
+                        if (!ca_is_initialized()) {
+                            view_toast_error(i18n_str(STR_CA_NOT_INIT), 1500);
+                        } else {
+                            size_t out_len = 0;
+                            if (ca_export_pubkey_base64(g_ca_detail_text, sizeof(g_ca_detail_text), &out_len)) {
+                                view_qr_code_init(&g_qr_view, "CA Public Key", g_ca_detail_text);
+                                g_app_state = APP_STATE_CA_QR_CODE;
+                                render_current_state(false);
+                            } else {
+                                view_toast_error("Export failed", 1500);
+                            }
+                        }
+                        break;
+                }
+            } else if (key == 'N') {
+                go_to_main_menu();
+            }
+            break;
+
+        case APP_STATE_CA_DETAILS:
+            if (key == '2') {
+                view_info_screen_scroll(&g_info_view, false);  // Scroll up
+                render_current_state(true);
+            } else if (key == '8') {
+                view_info_screen_scroll(&g_info_view, true);   // Scroll down
+                render_current_state(true);
+            } else if (key == 'N') {
+                g_app_state = APP_STATE_CA_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_CA_GENERATING:
+            // Wait for generation to complete, no key handling
+            break;
+
+        case APP_STATE_CA_QR_CODE:
+            if (key == 'N') {
+                g_app_state = APP_STATE_CA_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_CA_RESET_CONFIRM:
+            if (key == 'Y') {
+                // User confirmed reset - delete CA
+                if (ca_factory_reset()) {
+                    view_toast_success(i18n_str(STR_CA_RESET_SUCCESS), 1500);
+                } else {
+                    view_toast_error("Reset failed", 1500);
+                }
+                build_ca_menu();
+                view_list_screen_init(&g_ca_menu, i18n_str(STR_CA_MENU), g_ca_items, CA_IDX_COUNT);
+                g_app_state = APP_STATE_CA_MENU;
+                render_current_state(false);
+            } else if (key == 'N') {
+                // User cancelled
+                g_app_state = APP_STATE_CA_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        // CA Wizard: Common Name (required)
+        case APP_STATE_CA_WIZARD_CN:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (g_t9_input.len > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    // Cancel wizard - go back to menu
+                    g_app_state = APP_STATE_CA_MENU;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                const char *text = view_t9_input_get_text(&g_t9_input);
+                if (strlen(text) == 0) {
+                    view_toast_error("CN required", 1500);
+                } else {
+                    strncpy(g_ca_wizard.cn, text, CA_FIELD_MAX_LEN - 1);
+                    // Next: Organization
+                    view_t9_input_init(&g_t9_input, i18n_str(STR_CA_ENTER_ORG), g_ca_wizard.org);
+                    g_app_state = APP_STATE_CA_WIZARD_ORG;
+                    render_current_state(false);
+                }
+            }
+            break;
+
+        // CA Wizard: Organization (optional)
+        case APP_STATE_CA_WIZARD_ORG:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (g_t9_input.len > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    // Back to CN
+                    view_t9_input_init(&g_t9_input, i18n_str(STR_CA_ENTER_CN), g_ca_wizard.cn);
+                    g_app_state = APP_STATE_CA_WIZARD_CN;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                strncpy(g_ca_wizard.org, view_t9_input_get_text(&g_t9_input), CA_FIELD_MAX_LEN - 1);
+                // Next: Org Unit
+                view_t9_input_init(&g_t9_input, i18n_str(STR_CA_ENTER_OU), g_ca_wizard.ou);
+                g_app_state = APP_STATE_CA_WIZARD_OU;
+                render_current_state(false);
+            }
+            break;
+
+        // CA Wizard: Organizational Unit (optional)
+        case APP_STATE_CA_WIZARD_OU:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (g_t9_input.len > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    // Back to Org
+                    view_t9_input_init(&g_t9_input, i18n_str(STR_CA_ENTER_ORG), g_ca_wizard.org);
+                    g_app_state = APP_STATE_CA_WIZARD_ORG;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                strncpy(g_ca_wizard.ou, view_t9_input_get_text(&g_t9_input), CA_FIELD_MAX_LEN - 1);
+                // Next: Country
+                view_t9_input_init(&g_t9_input, i18n_str(STR_CA_ENTER_COUNTRY), g_ca_wizard.country);
+                g_app_state = APP_STATE_CA_WIZARD_COUNTRY;
+                render_current_state(false);
+            }
+            break;
+
+        // CA Wizard: Country (optional, 2 letters)
+        case APP_STATE_CA_WIZARD_COUNTRY:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (g_t9_input.len > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    // Back to OU
+                    view_t9_input_init(&g_t9_input, i18n_str(STR_CA_ENTER_OU), g_ca_wizard.ou);
+                    g_app_state = APP_STATE_CA_WIZARD_OU;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                strncpy(g_ca_wizard.country, view_t9_input_get_text(&g_t9_input), 2);
+                // Next: Locality
+                view_t9_input_init(&g_t9_input, i18n_str(STR_CA_ENTER_LOCALITY), g_ca_wizard.locality);
+                g_app_state = APP_STATE_CA_WIZARD_LOCALITY;
+                render_current_state(false);
+            }
+            break;
+
+        // CA Wizard: Locality/City (optional)
+        case APP_STATE_CA_WIZARD_LOCALITY:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (g_t9_input.len > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    // Back to Country
+                    view_t9_input_init(&g_t9_input, i18n_str(STR_CA_ENTER_COUNTRY), g_ca_wizard.country);
+                    g_app_state = APP_STATE_CA_WIZARD_COUNTRY;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                strncpy(g_ca_wizard.locality, view_t9_input_get_text(&g_t9_input), CA_FIELD_MAX_LEN - 1);
+                // Next: State/Province
+                view_t9_input_init(&g_t9_input, i18n_str(STR_CA_ENTER_STATE), g_ca_wizard.state);
+                g_app_state = APP_STATE_CA_WIZARD_STATE;
+                render_current_state(false);
+            }
+            break;
+
+        // CA Wizard: State/Province (optional)
+        case APP_STATE_CA_WIZARD_STATE:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (g_t9_input.len > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    // Back to Locality
+                    view_t9_input_init(&g_t9_input, i18n_str(STR_CA_ENTER_LOCALITY), g_ca_wizard.locality);
+                    g_app_state = APP_STATE_CA_WIZARD_LOCALITY;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                strncpy(g_ca_wizard.state, view_t9_input_get_text(&g_t9_input), CA_FIELD_MAX_LEN - 1);
+                // Next: Validity selection
+                view_list_screen_init(&g_ca_validity_menu, i18n_str(STR_CA_VALIDITY_YEARS),
+                    g_ca_validity_items, 6);
+                // Pre-select 10 years (index 2)
+                g_ca_validity_menu.selection = 2;
+                g_app_state = APP_STATE_CA_WIZARD_VALIDITY;
+                render_current_state(false);
+            }
+            break;
+
+        // CA Wizard: Validity Years selection
+        case APP_STATE_CA_WIZARD_VALIDITY:
+            if (key == '2') {
+                view_list_screen_navigate(&g_ca_validity_menu, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_ca_validity_menu, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                // Get selected validity
+                uint8_t sel = view_list_screen_get_selection(&g_ca_validity_menu);
+                static const uint8_t validity_values[] = {1, 5, 10, 15, 20, 25};
+                g_ca_wizard.validity_years = validity_values[sel];
+
+                // Generate CA with wizard data
+                view_info_screen_init(&g_info_view, i18n_str(STR_CA_GENERATE),
+                    i18n_str(STR_CA_GENERATING));
+                g_app_state = APP_STATE_CA_GENERATING;
+                render_current_state(false);
+
+                // Build DN string from wizard data
+                char dn[256];
+                int pos = 0;
+                pos += snprintf(dn + pos, sizeof(dn) - pos, "CN=%s", g_ca_wizard.cn);
+                if (g_ca_wizard.org[0]) {
+                    pos += snprintf(dn + pos, sizeof(dn) - pos, ",O=%s", g_ca_wizard.org);
+                }
+                if (g_ca_wizard.ou[0]) {
+                    pos += snprintf(dn + pos, sizeof(dn) - pos, ",OU=%s", g_ca_wizard.ou);
+                }
+                if (g_ca_wizard.country[0]) {
+                    pos += snprintf(dn + pos, sizeof(dn) - pos, ",C=%s", g_ca_wizard.country);
+                }
+                if (g_ca_wizard.locality[0]) {
+                    pos += snprintf(dn + pos, sizeof(dn) - pos, ",L=%s", g_ca_wizard.locality);
+                }
+                if (g_ca_wizard.state[0]) {
+                    pos += snprintf(dn + pos, sizeof(dn) - pos, ",ST=%s", g_ca_wizard.state);
+                }
+
+                // Generate CA
+                if (ca_setup(dn)) {
+                    view_toast_success(i18n_str(STR_CA_GENERATED), 1500);
+                } else {
+                    view_toast_error(i18n_str(STR_CA_GENERATE_FAILED), 1500);
+                }
+                build_ca_menu();
+                view_list_screen_init(&g_ca_menu, i18n_str(STR_CA_MENU), g_ca_items, CA_IDX_COUNT);
+                g_app_state = APP_STATE_CA_MENU;
+                render_current_state(false);
+            } else if (key == 'N') {
+                // Back to State
+                view_t9_input_init(&g_t9_input, i18n_str(STR_CA_ENTER_STATE), g_ca_wizard.state);
+                g_app_state = APP_STATE_CA_WIZARD_STATE;
+                render_current_state(false);
+            }
+            break;
+#endif
     }
 }
-

@@ -9,6 +9,11 @@
 #include "tusb.h"
 #endif
 
+// BLE UART callbacks (registered via console_register_ble_uart)
+static ble_uart_send_func_t s_ble_uart_send = nullptr;
+static ble_uart_ready_func_t s_ble_uart_ready = nullptr;
+static ble_uart_getchar_func_t s_ble_uart_getchar = nullptr;
+
 static log_level_t s_log_level = LOG_LEVEL_DEBUG;
 #if CONFIG_TINYUSB_CDC_ENABLED
 static log_backend_t s_log_backend = LOG_BACKEND_CDC;  // Default to CDC if available
@@ -32,7 +37,8 @@ static size_t s_log_ring_count = 0;
 typedef enum {
     INPUT_SOURCE_NONE,
     INPUT_SOURCE_CDC,
-    INPUT_SOURCE_UART
+    INPUT_SOURCE_UART,
+    INPUT_SOURCE_BLE
 } input_source_t;
 static input_source_t s_last_input_source = INPUT_SOURCE_NONE;
 
@@ -234,6 +240,15 @@ int console_getchar(void) {
     }
 #endif
 
+    // Try BLE UART if registered
+    if (s_ble_uart_getchar) {
+        int ble_char = s_ble_uart_getchar();
+        if (ble_char >= 0) {
+            s_last_input_source = INPUT_SOURCE_BLE;
+            return ble_char;
+        }
+    }
+
     // Fallback: read from UART/JTAG via stdin (non-blocking)
     // This uses the ESP-IDF VFS layer which routes to the appropriate driver
     int c = getchar();
@@ -247,16 +262,16 @@ int console_getchar(void) {
 
 void console_print(const char* str) {
     if (!str) return;
-#if CONFIG_TINYUSB_CDC_ENABLED
-    // Route output to the same place input came from (for interactive responses)
-    if (!s_console_initialized || s_last_input_source == INPUT_SOURCE_UART) {
-        // Use JTAG/UART via printf
-        printf("%s", str);
-        fflush(stdout);
-        return;
+    size_t len = strlen(str);
+
+    // Always send to BLE UART if connected (parallel output)
+    if (s_ble_uart_ready && s_ble_uart_send && s_ble_uart_ready()) {
+        s_ble_uart_send((const uint8_t*)str, len);
     }
-    if (tud_cdc_connected()) {
-        size_t len = strlen(str);
+
+#if CONFIG_TINYUSB_CDC_ENABLED
+    // Always try CDC first if connected (for logs and responses)
+    if (s_console_initialized && tud_cdc_connected()) {
         size_t written = 0;
         while (written < len) {
             size_t avail = tud_cdc_write_available();
@@ -269,6 +284,10 @@ void console_print(const char* str) {
             written += tud_cdc_write(str + written, to_write);
         }
         tud_cdc_write_flush();
+    } else {
+        // Fallback to JTAG/UART via printf
+        printf("%s", str);
+        fflush(stdout);
     }
 #else
     printf("%s", str);
@@ -295,18 +314,15 @@ void console_printf(const char* fmt, ...) {
 
 void console_putchar(char c) {
 #if CONFIG_TINYUSB_CDC_ENABLED
-    // Route output to the same place input came from
-    // This ensures echo works correctly when using JTAG/UART while CDC is also connected
-    if (!s_console_initialized || s_last_input_source == INPUT_SOURCE_UART) {
-        putchar(c);
-        fflush(stdout);  // Ensure immediate output for JTAG/UART
-        return;
-    }
-    if (tud_cdc_connected()) {
+    // Always try CDC first if connected
+    if (s_console_initialized && tud_cdc_connected()) {
         tud_cdc_write_char(c);
         if (c == '\n') {
             tud_cdc_write_flush();
         }
+    } else {
+        putchar(c);
+        fflush(stdout);  // Ensure immediate output for JTAG/UART
     }
 #else
     putchar(c);
@@ -324,4 +340,16 @@ void console_flush(void) {
 #else
     fflush(stdout);
 #endif
+}
+
+// ============================================================================
+// BLE UART Integration
+// ============================================================================
+
+void console_register_ble_uart(ble_uart_send_func_t send_func,
+                               ble_uart_ready_func_t ready_func,
+                               ble_uart_getchar_func_t getchar_func) {
+    s_ble_uart_send = send_func;
+    s_ble_uart_ready = ready_func;
+    s_ble_uart_getchar = getchar_func;
 }

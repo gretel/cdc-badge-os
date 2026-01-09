@@ -11,7 +11,6 @@
 
 // Static buffers for list item labels (must persist)
 static char g_totp_labels[TOTP_MAX_ACCOUNTS][72];
-static char g_totp_shortcuts[TOTP_MAX_ACCOUNTS][4];
 
 static void populate_totp_list(void) {
     uint8_t count = totp_store_count();
@@ -26,9 +25,7 @@ static void populate_totp_list(void) {
                 snprintf(g_totp_labels[i], sizeof(g_totp_labels[i]),
                          "%.30s", info.name);
             }
-            snprintf(g_totp_shortcuts[i], sizeof(g_totp_shortcuts[i]), "%d", i + 1);
             g_totp_items[i].label = g_totp_labels[i];
-            g_totp_items[i].shortcut = g_totp_shortcuts[i];
         }
     }
     if (count > 0) {

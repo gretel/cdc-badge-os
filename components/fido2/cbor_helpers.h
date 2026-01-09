@@ -77,6 +77,14 @@ void cbor_encode_map(cbor_writer_t *w, size_t count);
 // Encode COSE key (P-256 public key)
 void cbor_encode_cose_key_p256(cbor_writer_t *w, const uint8_t *x, const uint8_t *y);
 
+// Encode COSE key (Ed25519 public key)
+// COSE_Key format for OKP (Octet Key Pair):
+// 1 (kty): 1 (OKP)
+// 3 (alg): -8 (EdDSA)
+// -1 (crv): 6 (Ed25519)
+// -2 (x): 32-byte public key
+void cbor_encode_cose_key_ed25519(cbor_writer_t *w, const uint8_t *pubkey);
+
 // ============================================================================
 // CBOR Reader
 // ============================================================================

@@ -96,7 +96,6 @@ void view_info_screen_render(const view_info_screen_t *view, bool partial);
 
 typedef struct {
     const char *label;
-    const char *shortcut;       // Optional: "1", "2", etc.
 } view_list_item_t;
 
 typedef struct {
@@ -115,8 +114,6 @@ void view_list_screen_init(view_list_screen_t *view, const char *title,
 // Navigate up/down (key 2 = up, key 8 = down)
 void view_list_screen_navigate(view_list_screen_t *view, bool down);
 
-// Select item by shortcut key (returns true if found)
-bool view_list_screen_select_by_key(view_list_screen_t *view, char key);
 
 // Get currently selected index
 uint8_t view_list_screen_get_selection(const view_list_screen_t *view);
@@ -260,6 +257,9 @@ bool view_date_input_key(view_date_input_t *view, char key);
 void view_date_input_next_field(view_date_input_t *view);
 void view_date_input_prev_field(view_date_input_t *view);
 
+// Clear current field (N key) - returns true if cleared, false if already at start
+bool view_date_input_clear_field(view_date_input_t *view);
+
 // Render
 void view_date_input_render(const view_date_input_t *view, bool partial);
 
@@ -283,6 +283,9 @@ bool view_time_input_key(view_time_input_t *view, char key);
 // Move to next/prev field (key 6 = next, key 4 = prev)
 void view_time_input_next_field(view_time_input_t *view);
 void view_time_input_prev_field(view_time_input_t *view);
+
+// Clear current field (N key) - returns true if cleared, false if already at start
+bool view_time_input_clear_field(view_time_input_t *view);
 
 // Render
 void view_time_input_render(const view_time_input_t *view, bool partial);
@@ -378,6 +381,22 @@ uint8_t view_context_menu_get_action(const view_context_menu_t *menu);
 
 // Check if visible
 bool view_context_menu_is_visible(const view_context_menu_t *menu);
+
+// ============================================================================
+// QR Code View
+// ============================================================================
+
+typedef struct {
+    const char *title;          // Title shown at top (can be NULL)
+    const char *data;           // Data to encode in QR code
+    uint8_t scale;              // Pixels per QR module (1-3, auto-calculated if 0)
+} view_qr_code_t;
+
+// Initialize QR code view
+void view_qr_code_init(view_qr_code_t *view, const char *title, const char *data);
+
+// Render QR code (always full refresh due to complexity)
+void view_qr_code_render(const view_qr_code_t *view, bool partial);
 
 #ifdef __cplusplus
 }

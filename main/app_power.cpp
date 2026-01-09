@@ -33,6 +33,12 @@ void enter_light_sleep(void) {
     // Prepare GPIO before sleep (disable interrupt to avoid conflicts)
     power_prepare_gpio_for_sleep();
 
+    // Note: Backlight (LEDC) continues running during light sleep when g_backlight_forced_on
+    // is set, because gui.cpp configures LEDC with LEDC_SLEEP_MODE_KEEP_ALIVE and XTAL clock
+    if (g_backlight_forced_on) {
+        LOG_D("SLEEP", "Backlight stays ON during sleep (LEDC keep-alive)");
+    }
+
     // Enter light sleep
     esp_light_sleep_start();
 

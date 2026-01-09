@@ -19,11 +19,38 @@
 #if FEATURE_FIDO2
 #include "fido2.h"
 #endif
-#if FEATURE_FIDO2_BT
-#include "ble_ctap.h"
+#if FEATURE_BLE_UART
+#include "ble_uart.h"
+#include "views.h"
+#include <cstdio>
+#endif
+#if FEATURE_CA
+#include "ca.h"
 #endif
 
 #include "esp_system.h"
+
+// ============================================================================
+// BLE Callbacks
+// ============================================================================
+
+#if FEATURE_BLE_UART
+void ble_passkey_display(uint32_t passkey) {
+    // Display the 6-digit passkey via toast
+    // User needs to enter this code on their phone to complete pairing
+    // Toast can be dismissed early with Y/N key
+    char msg[32];
+    snprintf(msg, sizeof(msg), "PIN: %06lu", (unsigned long)passkey);
+    LOG_I("BLE", "Pairing passkey: %06lu", (unsigned long)passkey);
+    view_toast_show(msg, 60000);  // 60 seconds max, dismissible with Y/N
+}
+
+void ble_auth_complete(bool success) {
+    // Called from BLE callback after pairing completes
+    // The passkey toast is already dismissed (user pressed Y/N or timeout)
+    LOG_I("BLE", "Auth complete: %s", success ? "paired" : "failed");
+}
+#endif
 
 // ============================================================================
 // Serial Callbacks
@@ -75,6 +102,11 @@ void system_init(void) {
 
             // Load PIN from TROPIC01
             pin_storage_load();
+
+#if FEATURE_CA
+            // Initialize CA module (loads state from TROPIC01)
+            ca_init();
+#endif
         } else {
             LOG_E("INIT", "TROPIC01 session failed");
         }
@@ -118,13 +150,12 @@ void system_init(void) {
     }
 #endif
 
-    // Initialize BLE FIDO2 transport
-#if FEATURE_FIDO2_BT
-    if (ble_ctap_init()) {
-        LOG_I("INIT", "BLE FIDO2 OK");
-    } else {
-        LOG_E("INIT", "BLE FIDO2 init failed");
-    }
+    // BLE UART stays OFF at boot; user can enable via UI.
+#if FEATURE_BLE_UART
+    // Register BLE callbacks (will be used when BLE is enabled later)
+    ble_uart_set_passkey_display_callback(ble_passkey_display);
+    ble_uart_set_auth_complete_callback(ble_auth_complete);
+    LOG_I("INIT", "BLE UART disabled at boot (passkey auth enabled)");
 #endif
 
     LOG_I("INIT", "system_init() complete");

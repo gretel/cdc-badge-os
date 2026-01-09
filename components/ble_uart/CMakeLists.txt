@@ -1,30 +1,31 @@
-# Check if CA is enabled
-set(FEATURE_CA 0)  # Default disabled
+# Check if BLE_UART is enabled
+set(FEATURE_BLE_UART 0)  # Default disabled
 
 # Read feature flag from header
 file(READ "${CMAKE_CURRENT_LIST_DIR}/../cdc_badge/feature_flags.h" FEATURE_FLAGS_CONTENT)
-string(REGEX MATCH "#define FEATURE_CA ([01])" _ ${FEATURE_FLAGS_CONTENT})
+string(REGEX MATCH "#define FEATURE_BLE_UART[ \t]+([01])" _ ${FEATURE_FLAGS_CONTENT})
 if(CMAKE_MATCH_1)
-    set(FEATURE_CA ${CMAKE_MATCH_1})
+    set(FEATURE_BLE_UART ${CMAKE_MATCH_1})
 endif()
 
-if(FEATURE_CA)
+message(STATUS "BLE_UART feature flag: ${FEATURE_BLE_UART}")
+
+if(FEATURE_BLE_UART)
     idf_component_register(
         SRCS
-            "ca.cpp"
+            "ble_uart.cpp"
         INCLUDE_DIRS "."
         REQUIRES
             cdc_badge
             cdc_utils
+            bt
             nvs_flash
-            mbedtls
+            freertos
     )
-    # Note: MBEDTLS_X509_CRT_WRITE_C, MBEDTLS_X509_CSR_WRITE_C, MBEDTLS_X509_CREATE_C
-    # are already enabled in mbedTLS 3.x default config
 else()
     # Register empty component so dependencies don't break
     idf_component_register(
         INCLUDE_DIRS "."
     )
-    message(STATUS "CA component DISABLED")
+    message(STATUS "BLE_UART component DISABLED")
 endif()

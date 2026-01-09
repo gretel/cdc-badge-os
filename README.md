@@ -10,21 +10,36 @@ Hardware security key firmware for the CDC Badge v1.0 featuring TROPIC01 secure 
 
 | Feature | Description |
 |---------|-------------|
-| **FIDO2/WebAuthn** | Passwordless authentication (USB HID) - works with Chrome, Firefox, Edge |
+| **FIDO2/WebAuthn** | Passwordless authentication (USB HID) - Chrome, Firefox, Edge |
+| **SSH Hardware Keys** | Native SSH via ed25519-sk (OpenSSH 8.2+, no driver needed) |
+| **Certificate Authority** | On-device CA with CSR signing, root import/export |
 | **U2F** | Legacy two-factor authentication |
 | **TOTP Authenticator** | Time-based one-time passwords (100 accounts, Google Authenticator compatible) |
 | **USB Keyboard** | Auto-type TOTP codes via HID |
+| **BLE UART** | Wireless serial console via Bluetooth (Nordic UART Service) |
 | **WiFi + NTP** | Time synchronization over WiFi |
 | **E-Paper Display** | 2.9" low-power display with backlight |
 | **12-Button Keypad** | Phone-style T9 input |
 | **Multi-Language** | English and German UI |
+
+> **Note:** WiFi and Bluetooth are currently **mutually exclusive** (enable one at a time).
+
+### Bluetooth Serial (BLE UART)
+
+BLE UART uses the Nordic UART Service (NUS).  
+Android app: **Serial Bluetooth Terminal** (Kai Morich) on Google Play. citeturn0search4turn0search0
+
+Google Play:
+```
+https://play.google.com/store/apps/details?id=de.kai_morich.serial_bluetooth_terminal
+```
 
 ## Security Architecture
 
 | Feature | Implementation |
 |---------|----------------|
 | **Key Storage** | All private keys stored in TROPIC01 secure element |
-| **Key Generation** | P-256 keys generated on-chip, never exported |
+| **Key Generation** | P-256 and Ed25519 keys generated on-chip, never exported |
 | **PIN Protection** | 4-6 digit PIN with 3 attempt lockout |
 | **FIDO2 ClientPIN** | Full Protocol 2 support with HKDF-SHA256 |
 | **Attestation** | Self-signed attestation (device-unique AAGUID) |
@@ -33,8 +48,8 @@ Hardware security key firmware for the CDC Badge v1.0 featuring TROPIC01 secure 
 ### TROPIC01 Secure Element
 
 The TROPIC01 provides hardware-backed security:
-- 32 ECC key slots (P-256)
-- 512 R-Memory slots (444B each)
+- 32 ECC key slots (P-256 and Ed25519)
+- 512 R-Memory slots (444 bytes each)
 - Hardware random number generator
 - Tamper-resistant key storage
 - Keys cannot be extracted or cloned
@@ -54,8 +69,7 @@ Supported CTAP2 operations:
 
 | Slot | Purpose |
 |------|---------|
-| 0-26 | FIDO2 Credentials (P-256) |
-| 27-29 | Reserved (SSH Keys, Ed25519) |
+| 0-29 | FIDO2/WebAuthn/SSH (P-256 or Ed25519) |
 | 30 | FIDO2 Attestation Key |
 | 31 | CA Root Key |
 
@@ -63,13 +77,12 @@ Supported CTAP2 operations:
 
 | Slot | Purpose |
 |------|---------|
-| 0-26 | FIDO2 Credential Metadata |
-| 27-29 | Reserved |
+| 0-29 | FIDO2 Credential Metadata |
 | 30 | PIN Hash (SHA-256) |
-| 31-32 | Device Config |
+| 31 | Device Config |
+| 32 | CA Metadata |
 | 33-132 | TOTP Accounts (max 100) |
-| 133 | CA Metadata |
-| 134-511 | Free |
+| 133-511 | Free |
 
 ### NVS (ESP32 Flash)
 
@@ -113,6 +126,23 @@ For schematics and PCB design: https://github.com/riatlabs/cdc-badge
 2. When prompted, the badge displays the site name
 3. Press **Y** to approve, **N** to deny
 4. If device was locked, enter PIN on badge (or via browser if prompted)
+
+### Using SSH Hardware Keys
+
+SSH support works via FIDO2 (OpenSSH 8.2+ required, no driver needed):
+
+```bash
+# Generate Ed25519-SK resident key on badge
+ssh-keygen -t ed25519-sk -O resident -O application=ssh:myserver
+
+# Export public keys from badge
+ssh-keygen -K
+
+# Connect (badge prompts for confirmation)
+ssh user@server
+```
+
+The badge stores the private key in the TROPIC01 secure element. Each SSH connection requires physical confirmation (press Y on badge).
 
 ### Using TOTP
 
@@ -216,14 +246,15 @@ Connect at 115200 baud via USB CDC.
 | `TR01_WIPE` | Factory reset all user data (requires CONFIRM) |
 
 ### CA (Certificate Authority)
-*WORK IN PROGRESS! NOT FOR USAGE! COMPLETLY UNTESTED FIRST ITERATION! WILL DEFINITIVELY CONTAIN BUGS! YOU'VE BEEN WARNED!*
 | Command | Description |
 |---------|-------------|
-| `CA_STATUS` | CA status |
-| `CA_INIT [cn]` | Initialize CA with common name |
+| `CA_STATUS` | CA status (CN, validity, issued count) |
+| `CA_INIT [cn]` | Initialize new CA with common name |
+| `CA_IMPORT` | Import existing CA (private key + cert PEM) |
 | `CA_LIST` | List issued certificates |
 | `CA_EXPORT_ROOT` | Export root certificate (PEM) |
 | `CA_SIGN_CSR` | Sign CSR (paste PEM, end with `---`) |
+| `CA_SIGN_CERT` | Re-sign existing certificate (cross-sign) |
 | `CA_RESET` | Factory reset CA |
 
 ## License
