@@ -195,11 +195,15 @@ static void show_help(void) {
     console_printf("  CA_STATUS            - CA status\r\n");
 #if FEATURE_SECURE_SERIAL
     console_printf("  CA_INIT [cn]         - Initialize CA (auth req.)\r\n");
+    console_printf("  CA_IMPORT            - Import existing CA (auth req.)\r\n");
     console_printf("  CA_SIGN_CSR          - Sign CSR (auth req., paste PEM)\r\n");
+    console_printf("  CA_SIGN_CERT         - Re-sign cert (auth req., paste PEM)\r\n");
     console_printf("  CA_RESET             - Factory reset CA (auth req.)\r\n");
 #else
     console_printf("  CA_INIT [cn]         - Initialize CA\r\n");
+    console_printf("  CA_IMPORT            - Import existing CA (key+cert PEM)\r\n");
     console_printf("  CA_SIGN_CSR          - Sign CSR (paste PEM, end with ---)\r\n");
+    console_printf("  CA_SIGN_CERT         - Re-sign certificate (paste PEM)\r\n");
     console_printf("  CA_RESET             - Factory reset CA\r\n");
 #endif
     console_printf("  CA_LIST              - List issued certificates\r\n");
@@ -1015,9 +1019,26 @@ static void cmd_ca_export_root(void) {
     console_flush();
 }
 
-// CSR signing buffer (for multi-line input)
-static char g_csr_buffer[4096];
-static int g_csr_buffer_pos = 0;
+// Multi-line input buffer (for CSR, cert import, etc.)
+static char g_pem_buffer[4096];
+static int g_pem_buffer_pos = 0;
+
+// Input modes
+typedef enum {
+    PEM_INPUT_NONE = 0,
+    PEM_INPUT_CSR,          // CA_SIGN_CSR
+    PEM_INPUT_CERT,         // CA_SIGN_CERT (re-sign)
+    PEM_INPUT_IMPORT_KEY,   // CA_IMPORT (waiting for key)
+    PEM_INPUT_IMPORT_CERT   // CA_IMPORT (waiting for cert after key)
+} pem_input_mode_t;
+
+static pem_input_mode_t g_pem_input_mode = PEM_INPUT_NONE;
+
+// For CA_IMPORT: store key while waiting for cert
+static char g_import_key_buffer[2048];
+static size_t g_import_key_len = 0;
+
+// Legacy compatibility
 static bool g_csr_input_mode = false;
 
 static void cmd_ca_sign_csr_start(void) {
@@ -1027,43 +1048,144 @@ static void cmd_ca_sign_csr_start(void) {
     }
 
     console_printf("Paste CSR in PEM format, end with '---' on a new line:\r\n");
-    g_csr_buffer_pos = 0;
-    g_csr_input_mode = true;
+    g_pem_buffer_pos = 0;
+    g_pem_input_mode = PEM_INPUT_CSR;
+    g_csr_input_mode = true;  // Legacy compatibility
 }
 
-static void cmd_ca_sign_csr_process(char *line) {
+static void cmd_ca_sign_cert_start(void) {
+    if (!ca_is_initialized()) {
+        console_printf("ERROR: CA not initialized\r\n");
+        return;
+    }
+
+    console_printf("Paste certificate in PEM format, end with '---' on a new line:\r\n");
+    g_pem_buffer_pos = 0;
+    g_pem_input_mode = PEM_INPUT_CERT;
+    g_csr_input_mode = true;  // Legacy compatibility (reuse same input handler)
+}
+
+static void cmd_ca_import_start(void) {
+    if (ca_is_initialized()) {
+        console_printf("ERROR: CA already initialized. Use CA_RESET first.\r\n");
+        return;
+    }
+
+    console_printf("CA Import - Step 1/2\r\n");
+    console_printf("Paste PRIVATE KEY in PEM format, end with '---' on a new line:\r\n");
+    g_pem_buffer_pos = 0;
+    g_import_key_len = 0;
+    g_pem_input_mode = PEM_INPUT_IMPORT_KEY;
+    g_csr_input_mode = true;  // Legacy compatibility
+}
+
+static void cmd_pem_input_process(char *line) {
     // Check for end marker
     if (strncmp(line, "---", 3) == 0) {
-        g_csr_input_mode = false;
-        g_csr_buffer[g_csr_buffer_pos] = '\0';
+        g_pem_buffer[g_pem_buffer_pos] = '\0';
 
-        console_printf("Processing CSR...\r\n");
-        console_flush();
+        switch (g_pem_input_mode) {
+            case PEM_INPUT_CSR: {
+                g_csr_input_mode = false;
+                g_pem_input_mode = PEM_INPUT_NONE;
 
-        static char cert_pem[4096];
-        size_t cert_len;
+                console_printf("Processing CSR...\r\n");
+                console_flush();
 
-        if (ca_sign_csr(g_csr_buffer, cert_pem, sizeof(cert_pem), &cert_len, 365)) {
-            console_printf("OK: Certificate issued:\r\n");
-            console_printf("%s", cert_pem);
-        } else {
-            console_printf("ERROR: Failed to sign CSR\r\n");
+                static char cert_pem[4096];
+                size_t cert_len;
+
+                if (ca_sign_csr(g_pem_buffer, cert_pem, sizeof(cert_pem), &cert_len, 365)) {
+                    console_printf("OK: Certificate issued:\r\n");
+                    console_printf("%s", cert_pem);
+                } else {
+                    console_printf("ERROR: Failed to sign CSR\r\n");
+                }
+                break;
+            }
+
+            case PEM_INPUT_CERT: {
+                g_csr_input_mode = false;
+                g_pem_input_mode = PEM_INPUT_NONE;
+
+                console_printf("Processing certificate for re-signing...\r\n");
+                console_flush();
+
+                static char cert_pem[4096];
+                size_t cert_len;
+
+                if (ca_sign_cert(g_pem_buffer, cert_pem, sizeof(cert_pem), &cert_len, 365)) {
+                    console_printf("OK: Certificate re-signed:\r\n");
+                    console_printf("%s", cert_pem);
+                } else {
+                    console_printf("ERROR: Failed to re-sign certificate\r\n");
+                }
+                break;
+            }
+
+            case PEM_INPUT_IMPORT_KEY: {
+                // Store key and prompt for certificate
+                if ((size_t)g_pem_buffer_pos < sizeof(g_import_key_buffer)) {
+                    memcpy(g_import_key_buffer, g_pem_buffer, g_pem_buffer_pos + 1);
+                    g_import_key_len = g_pem_buffer_pos;
+
+                    console_printf("Private key received (%d bytes).\r\n", g_pem_buffer_pos);
+                    console_printf("CA Import - Step 2/2\r\n");
+                    console_printf("Paste CERTIFICATE in PEM format, end with '---' on a new line:\r\n");
+                    g_pem_buffer_pos = 0;
+                    g_pem_input_mode = PEM_INPUT_IMPORT_CERT;
+                } else {
+                    console_printf("ERROR: Private key too large\r\n");
+                    g_csr_input_mode = false;
+                    g_pem_input_mode = PEM_INPUT_NONE;
+                }
+                break;
+            }
+
+            case PEM_INPUT_IMPORT_CERT: {
+                g_csr_input_mode = false;
+                g_pem_input_mode = PEM_INPUT_NONE;
+
+                console_printf("Importing CA...\r\n");
+                console_flush();
+
+                if (ca_import_root_pem(g_import_key_buffer, g_pem_buffer)) {
+                    console_printf("OK: CA imported successfully\r\n");
+                    ca_status_t status;
+                    if (ca_get_status(&status)) {
+                        console_printf("Common Name: %s\r\n", status.common_name);
+                    }
+                } else {
+                    console_printf("ERROR: Failed to import CA\r\n");
+                }
+
+                // Clear sensitive key data
+                memset(g_import_key_buffer, 0, sizeof(g_import_key_buffer));
+                g_import_key_len = 0;
+                break;
+            }
+
+            default:
+                g_csr_input_mode = false;
+                g_pem_input_mode = PEM_INPUT_NONE;
+                break;
         }
 
-        g_csr_buffer_pos = 0;
+        g_pem_buffer_pos = 0;
         return;
     }
 
     // Append line to buffer
     size_t line_len = strlen(line);
-    if (g_csr_buffer_pos + line_len + 2 < sizeof(g_csr_buffer)) {
-        memcpy(g_csr_buffer + g_csr_buffer_pos, line, line_len);
-        g_csr_buffer_pos += line_len;
-        g_csr_buffer[g_csr_buffer_pos++] = '\n';
+    if (g_pem_buffer_pos + line_len + 2 < (int)sizeof(g_pem_buffer)) {
+        memcpy(g_pem_buffer + g_pem_buffer_pos, line, line_len);
+        g_pem_buffer_pos += line_len;
+        g_pem_buffer[g_pem_buffer_pos++] = '\n';
     } else {
-        console_printf("ERROR: CSR too large\r\n");
+        console_printf("ERROR: Input too large\r\n");
         g_csr_input_mode = false;
-        g_csr_buffer_pos = 0;
+        g_pem_input_mode = PEM_INPUT_NONE;
+        g_pem_buffer_pos = 0;
     }
 }
 
@@ -1089,7 +1211,7 @@ bool serial_cmd_in_csr_mode(void) {
 }
 
 void serial_cmd_csr_line(char *line) {
-    cmd_ca_sign_csr_process(line);
+    cmd_pem_input_process(line);
 }
 
 #endif // FEATURE_CA
@@ -1281,6 +1403,8 @@ static void execute_command(char *cmd) {
     if (strcasecmp(cmd, "CA_LIST") == 0) { cmd_ca_list(); return; }
     if (strcasecmp(cmd, "CA_EXPORT_ROOT") == 0) { cmd_ca_export_root(); return; }
     if (strcasecmp(cmd, "CA_SIGN_CSR") == 0) { cmd_ca_sign_csr_start(); return; }
+    if (strcasecmp(cmd, "CA_SIGN_CERT") == 0) { cmd_ca_sign_cert_start(); return; }
+    if (strcasecmp(cmd, "CA_IMPORT") == 0) { cmd_ca_import_start(); return; }
     if (strcasecmp(cmd, "CA_RESET") == 0) { cmd_ca_reset(); return; }
 #endif
 

@@ -395,39 +395,39 @@ static void debug_query_chip_status(void) {
     // Read the buffer to get CHIP_STATUS
     uint8_t* buff = tr01_handle.l2.buff;
     if (buff) {
-        TR01_DBG( "L2 buffer[0-7]: %02X %02X %02X %02X %02X %02X %02X %02X",
+        LOG_I("TR01", "L2 buffer[0-7]: %02X %02X %02X %02X %02X %02X %02X %02X",
               buff[0], buff[1], buff[2], buff[3], buff[4], buff[5], buff[6], buff[7]);
     }
 }
 
 bool tropic01_ecc_key_generate(uint8_t slot, uint8_t curve) {
-    TR01_DBG( "=== ECC KEY GENERATE START ===");
-    TR01_DBG( "Requested: slot=%d, curve=%d (%s)",
+    LOG_I("TR01", "=== ECC KEY GENERATE START ===");
+    LOG_I("TR01", "Requested: slot=%d, curve=%d (%s)",
           slot, curve, (curve == CDC_CURVE_ED25519) ? "Ed25519" : "P-256");
 
     Tr01Lock lock;
     if (!lock.ok()) {
-        LOG_E("TR01-DBG", "Mutex lock failed!");
+        LOG_E("TR01", "Mutex lock failed!");
         return false;
     }
-    TR01_DBG( "Mutex acquired");
+    LOG_I("TR01", "Mutex acquired");
 
-    TR01_DBG( "Session state before ensure_session: %s",
+    LOG_I("TR01", "Session state before ensure_session: %s",
           session_active ? "ACTIVE" : "INACTIVE");
 
     if (!ensure_session("ecc_key_generate")) {
-        LOG_E("TR01-DBG", "ensure_session failed!");
+        LOG_E("TR01", "ensure_session failed!");
         return false;
     }
-    TR01_DBG( "Session state after ensure_session: %s",
+    LOG_I("TR01", "Session state after ensure_session: %s",
           session_active ? "ACTIVE" : "INACTIVE");
 
     // Map our curve constants to libtropic enum
     lt_ecc_curve_type_t lt_curve = (curve == CDC_CURVE_ED25519)
         ? TR01_CURVE_ED25519 : TR01_CURVE_P256;
 
-    TR01_DBG( "Calling lt_ecc_key_generate(slot=%d, curve=%d)...", slot, lt_curve);
-    TR01_DBG( "Handle state: session_status=%d, buff=%p, buff_len=%d",
+    LOG_I("TR01", "Calling lt_ecc_key_generate(slot=%d, lt_curve=%d)...", slot, lt_curve);
+    LOG_I("TR01", "Handle state: session_status=%d, buff=%p, buff_len=%d",
           tr01_handle.l3.session_status,
           tr01_handle.l3.buff,
           tr01_handle.l3.buff_len);
@@ -437,7 +437,7 @@ bool tropic01_ecc_key_generate(uint8_t slot, uint8_t curve) {
 
     lt_ret_t ret = lt_ecc_key_generate(&tr01_handle, (lt_ecc_slot_t)slot, lt_curve);
 
-    TR01_DBG( "lt_ecc_key_generate returned: %d (%s)", ret, lt_ret_verbose(ret));
+    LOG_I("TR01", "lt_ecc_key_generate returned: %d (%s)", ret, lt_ret_verbose(ret));
 
     // Debug: Show buffer after operation
     debug_query_chip_status();
@@ -464,18 +464,18 @@ bool tropic01_ecc_key_generate(uint8_t slot, uint8_t curve) {
     uint8_t pubkey[64];
     lt_ecc_curve_type_t read_curve;
     lt_ecc_key_origin_t read_origin;
-    TR01_DBG( "Reading back generated key...");
+    LOG_I("TR01", "Reading back generated key...");
     ret = lt_ecc_key_read(&tr01_handle, (lt_ecc_slot_t)slot,
                           pubkey, sizeof(pubkey), &read_curve, &read_origin);
     if (ret == LT_OK) {
         tropic01_cache_ecc_update(slot, pubkey, curve);
-        TR01_DBG( "Key read back OK, cache updated");
+        LOG_I("TR01", "Key read back OK, cache updated");
     } else {
-        LOG_W("TR01", "Could not read back key for cache (slot=%d)", slot);
+        LOG_W("TR01", "Could not read back key for cache (slot=%d), ret=%d (%s)", slot, ret, lt_ret_verbose(ret));
     }
 
     LOG_I("TR01", "ECC key generated slot=%d curve=%d", slot, curve);
-    TR01_DBG( "=== ECC KEY GENERATE SUCCESS ===");
+    LOG_I("TR01", "=== ECC KEY GENERATE SUCCESS ===");
     return true;
 }
 
@@ -523,6 +523,49 @@ bool tropic01_ecc_key_erase(uint8_t slot) {
     tropic01_cache_ecc_invalidate(slot);
 
     LOG_I("TR01", "ECC key erased slot=%d", slot);
+    return true;
+}
+
+bool tropic01_ecc_key_write(uint8_t slot, const uint8_t *privkey,
+                            uint8_t privkey_size, uint8_t curve) {
+    if (!privkey || privkey_size != 32) {
+        LOG_E("TR01", "Invalid private key (size must be 32 bytes)");
+        return false;
+    }
+
+    Tr01Lock lock;
+    if (!lock.ok()) return false;
+    if (!ensure_session("ecc_key_write")) return false;
+
+    // Map our curve constants to libtropic enum
+    lt_ecc_curve_type_t lt_curve = (curve == CDC_CURVE_ED25519)
+        ? TR01_CURVE_ED25519 : TR01_CURVE_P256;
+
+    LOG_I("TR01", "Storing ECC key slot=%d curve=%d", slot, curve);
+
+    lt_ret_t ret = lt_ecc_key_store(&tr01_handle, (lt_ecc_slot_t)slot,
+                                     lt_curve, privkey);
+
+    if (ret != LT_OK) {
+        LOG_E("TR01", "ECC key store failed slot=%d (%s)", slot, lt_ret_verbose(ret));
+        handle_session_error(ret);
+        return false;
+    }
+
+    // Read back public key and update cache
+    uint8_t pubkey[64];
+    lt_ecc_curve_type_t read_curve;
+    lt_ecc_key_origin_t read_origin;
+    ret = lt_ecc_key_read(&tr01_handle, (lt_ecc_slot_t)slot,
+                          pubkey, sizeof(pubkey), &read_curve, &read_origin);
+    if (ret == LT_OK) {
+        tropic01_cache_ecc_update(slot, pubkey, curve);
+        LOG_D("TR01", "Key read back OK, cache updated, origin=%d", read_origin);
+    } else {
+        LOG_W("TR01", "Could not read back key for cache (slot=%d)", slot);
+    }
+
+    LOG_I("TR01", "ECC key stored slot=%d curve=%d", slot, curve);
     return true;
 }
 

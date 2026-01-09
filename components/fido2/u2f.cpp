@@ -417,7 +417,7 @@ static uint16_t u2f_register(const uint8_t *challenge, const uint8_t *applicatio
 
         if (!fido2_storage_create_credential(
                 rp_id, application, user_id, 1, "U2F",
-                false, 0, &slot, cred_id, pubkey)) {
+                false, 0, CDC_CURVE_P256, &slot, cred_id, pubkey)) {
             LOG_E("U2F", "Failed to create credential");
             return u2f_response_error(response, U2F_SW_WRONG_DATA);
         }

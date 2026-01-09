@@ -30,7 +30,8 @@ typedef struct {
     uint8_t cred_id_nonce[16];              // Random nonce for credential ID
     uint8_t flags;                          // Flags (resident, cred_protect, etc.)
     uint8_t cred_protect;                   // Credential protection level
-    uint8_t reserved[8];                    // Reserved for future use
+    uint8_t curve;                          // CDC_CURVE_P256 or CDC_CURVE_ED25519
+    uint8_t reserved[7];                    // Reserved for future use
 } fido2_stored_cred_t;                      // Total: ~180 bytes
 #pragma pack(pop)
 
@@ -58,6 +59,7 @@ static struct {
         uint32_t sign_count;
         bool resident;
         uint8_t cred_protect;
+        uint8_t curve;  // CDC_CURVE_P256 or CDC_CURVE_ED25519
     } creds[FIDO2_MAX_CREDENTIALS];
 
     uint8_t cred_count;
@@ -133,9 +135,10 @@ uint8_t fido2_storage_init(void) {
                         g_storage.creds[i].sign_count = stored->sign_count;
                         g_storage.creds[i].resident = (stored->flags & FIDO2_FLAG_RESIDENT) != 0;
                         g_storage.creds[i].cred_protect = stored->cred_protect;
+                        g_storage.creds[i].curve = stored->curve;  // Load curve type
                         g_storage.cred_count++;
 
-                        LOG_D("FIDO2", "Found credential %d: %s", i, stored->rp_id);
+                        LOG_D("FIDO2", "Found credential %d: %s (curve=%d)", i, stored->rp_id, stored->curve);
                     }
                 }
             }
@@ -324,6 +327,7 @@ bool fido2_storage_get_credential(uint8_t slot, fido2_credential_info_t *info) {
     info->sign_count = g_storage.creds[slot].sign_count;
     info->resident_key = g_storage.creds[slot].resident;
     info->cred_protect = g_storage.creds[slot].cred_protect;
+    info->curve = g_storage.creds[slot].curve;
 
     // Load user ID from R-Memory (not cached)
     uint8_t user_id_len = 0;
@@ -335,6 +339,13 @@ bool fido2_storage_get_credential(uint8_t slot, fido2_credential_info_t *info) {
     return true;
 }
 
+uint8_t fido2_storage_get_curve(uint8_t slot) {
+    if (slot > FIDO2_ECC_SLOT_MAX || !g_storage.creds[slot].valid) {
+        return 0xFF;  // Invalid
+    }
+    return g_storage.creds[slot].curve;
+}
+
 bool fido2_storage_create_credential(
     const char *rp_id,
     const uint8_t *rp_id_hash,
@@ -343,6 +354,7 @@ bool fido2_storage_create_credential(
     const char *user_name,
     bool resident_key,
     uint8_t cred_protect,
+    uint8_t curve,
     uint8_t *out_slot,
     uint8_t *out_cred_id,
     uint8_t *out_pubkey
@@ -359,23 +371,27 @@ bool fido2_storage_create_credential(
         return false;
     }
 
-    LOG_I("FIDO2", "Creating credential in slot %d for %s", slot, rp_id);
+    const char *curve_name = (curve == CDC_CURVE_ED25519) ? "Ed25519" : "P-256";
+    LOG_I("FIDO2", "Creating %s credential in slot %d for %s", curve_name, slot, rp_id);
 
     // Explicitly erase slot first to ensure it's empty
     // (handles cache/chip state mismatch)
     LOG_D("FIDO2", "Erasing slot %d before key generation", slot);
     tropic01_ecc_key_erase(slot);
 
-    // Generate ECC key (P-256)
-    if (!tropic01_ecc_key_generate(slot, CDC_CURVE_P256)) {
-        LOG_E("FIDO2", "Failed to generate key in slot %d", slot);
+    // Generate ECC key with requested curve
+    if (!tropic01_ecc_key_generate(slot, curve)) {
+        LOG_E("FIDO2", "Failed to generate %s key in slot %d", curve_name, slot);
         return false;
     }
 
     // Read public key
-    uint8_t pubkey[64];  // TROPIC01 returns X||Y without 0x04 prefix
-    uint8_t curve, origin;
-    if (!tropic01_ecc_key_read(slot, pubkey, 64, &curve, &origin)) {
+    // P-256: 64 bytes (X||Y without 0x04 prefix)
+    // Ed25519: 32 bytes
+    uint8_t pubkey[64];
+    uint8_t read_curve, origin;
+    uint8_t pubkey_size = (curve == CDC_CURVE_ED25519) ? 32 : 64;
+    if (!tropic01_ecc_key_read(slot, pubkey, pubkey_size, &read_curve, &origin)) {
         LOG_E("FIDO2", "Failed to read public key from slot %d", slot);
         tropic01_ecc_key_erase(slot);
         return false;
@@ -415,6 +431,7 @@ bool fido2_storage_create_credential(
     memcpy(stored.cred_id_nonce, nonce, 16);
     stored.flags = resident_key ? FIDO2_FLAG_RESIDENT : 0;
     stored.cred_protect = cred_protect;
+    stored.curve = curve;
 
     // Write to R-Memory (cache is automatically updated)
     uint16_t rmem_slot = FIDO2_RMEM_SLOT_BASE + slot;
@@ -438,13 +455,14 @@ bool fido2_storage_create_credential(
     g_storage.creds[slot].sign_count = 0;
     g_storage.creds[slot].resident = resident_key;
     g_storage.creds[slot].cred_protect = cred_protect;
+    g_storage.creds[slot].curve = curve;
     g_storage.cred_count++;
 
-    // Copy public key output
-    memcpy(out_pubkey, pubkey, 64);
+    // Copy public key output (32 bytes for Ed25519, 64 for P-256)
+    memcpy(out_pubkey, pubkey, pubkey_size);
     *out_slot = slot;
 
-    LOG_I("FIDO2", "Created credential in slot %d", slot);
+    LOG_I("FIDO2", "Created %s credential in slot %d", curve_name, slot);
     return true;
 }
 
@@ -581,16 +599,29 @@ bool fido2_storage_sign_raw(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
         return false;
     }
 
-    // ECDSA sign: TROPIC01 hashes the message internally with SHA-256
-    // Returns raw signature: r (32 bytes) || s (32 bytes) = 64 bytes
-    // This is the format required by CTAP2/WebAuthn (IEEE P1363)
-    if (!tropic01_ecdsa_sign(slot, msg, msg_len, signature)) {
-        LOG_E("FIDO2", "ECDSA sign failed for slot %d", slot);
-        return false;
+    uint8_t curve = g_storage.creds[slot].curve;
+
+    if (curve == CDC_CURVE_ED25519) {
+        // EdDSA sign: TROPIC01 signs the message directly (no hashing)
+        // Returns raw signature: 64 bytes
+        if (!tropic01_eddsa_sign(slot, msg, msg_len, signature)) {
+            LOG_E("FIDO2", "EdDSA sign failed for slot %d", slot);
+            return false;
+        }
+        *sig_len = 64;  // Ed25519 signature is always 64 bytes
+        LOG_D("FIDO2", "EdDSA signed %d bytes with slot %d", msg_len, slot);
+    } else {
+        // ECDSA sign: TROPIC01 hashes the message internally with SHA-256
+        // Returns raw signature: r (32 bytes) || s (32 bytes) = 64 bytes
+        // This is the format required by CTAP2/WebAuthn (IEEE P1363)
+        if (!tropic01_ecdsa_sign(slot, msg, msg_len, signature)) {
+            LOG_E("FIDO2", "ECDSA sign failed for slot %d", slot);
+            return false;
+        }
+        *sig_len = 64;  // Raw signature is always 64 bytes for P-256
+        LOG_D("FIDO2", "ECDSA signed %d bytes with slot %d", msg_len, slot);
     }
 
-    *sig_len = 64;  // Raw signature is always 64 bytes for P-256
-    LOG_D("FIDO2", "Signed raw %d bytes with slot %d, sig_len=%d", msg_len, slot, *sig_len);
     return true;
 }
 

@@ -31,11 +31,18 @@
 // State
 // ============================================================================
 
+// Maximum concurrent sessions
+#define WIFI_MAX_SESSIONS 8
+
 static struct {
     bool initialized;
     wifi_state_t state;
     EventGroupHandle_t event_group;
     esp_netif_t *netif;
+
+    // Event handler instances (for proper cleanup)
+    esp_event_handler_instance_t wifi_handler_instance;
+    esp_event_handler_instance_t ip_handler_instance;
 
     // Scan results (deduplicated)
     wifi_network_t networks[WIFI_MAX_NETWORKS];
@@ -52,6 +59,10 @@ static struct {
     uint8_t bssid[6];
     char connected_ssid[WIFI_SSID_MAX_LEN];
     wifi_auth_mode_t connected_auth;
+
+    // Session management (bitmask of active sessions)
+    uint8_t active_sessions;
+    uint8_t next_session_id;
 } g_wifi = {};
 
 // ============================================================================
@@ -67,7 +78,15 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                 break;
 
             case WIFI_EVENT_STA_DISCONNECTED:
-                LOG_W("WiFi", "Disconnected");
+                {
+                    int reason = -1;
+                    const wifi_event_sta_disconnected_t *disc =
+                        (const wifi_event_sta_disconnected_t *)event_data;
+                    if (disc) {
+                        reason = disc->reason;
+                    }
+                    LOG_W("WiFi", "Disconnected (reason=%d)", reason);
+                }
                 g_wifi.state = WIFI_STATE_FAILED;
                 g_wifi.ip_addr = 0;
                 xEventGroupSetBits(g_wifi.event_group, WIFI_FAIL_BIT);
@@ -203,11 +222,13 @@ bool wifi_manager_init(void) {
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    // Register event handlers
+    // Register event handlers (store handles for cleanup)
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
+        WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL,
+        &g_wifi.wifi_handler_instance));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
+        IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL,
+        &g_wifi.ip_handler_instance));
 
     // Set mode to STA
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
@@ -341,7 +362,39 @@ void wifi_manager_connect(const wifi_config_stored_t *config) {
     wifi_config_t wifi_config = {};
     strncpy((char *)wifi_config.sta.ssid, config->ssid, sizeof(wifi_config.sta.ssid) - 1);
     strncpy((char *)wifi_config.sta.password, config->password, sizeof(wifi_config.sta.password) - 1);
-    wifi_config.sta.threshold.authmode = config->auth_mode;
+    // Set minimum authmode based on selected config to allow OPEN/WPA/WPA2/WPA3 correctly.
+    switch (config->auth_mode) {
+        case WIFI_AUTH_OPEN:
+            wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
+            break;
+        case WIFI_AUTH_WEP:
+            wifi_config.sta.threshold.authmode = WIFI_AUTH_WEP;
+            break;
+        case WIFI_AUTH_WPA_PSK:
+            wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA_PSK;
+            break;
+        case WIFI_AUTH_WPA2_PSK:
+            wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+            break;
+        case WIFI_AUTH_WPA_WPA2_PSK:
+            // Minimum for mixed WPA/WPA2
+            wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA_PSK;
+            break;
+        case WIFI_AUTH_WPA3_PSK:
+            wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA3_PSK;
+            wifi_config.sta.pmf_cfg.capable = true;
+            wifi_config.sta.pmf_cfg.required = true;
+            break;
+        case WIFI_AUTH_WPA2_WPA3_PSK:
+            // Minimum for WPA2/WPA3 transition
+            wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+            wifi_config.sta.pmf_cfg.capable = true;
+            wifi_config.sta.pmf_cfg.required = false;
+            break;
+        default:
+            wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
+            break;
+    }
 
     // Store connected info
     strncpy(g_wifi.connected_ssid, config->ssid, WIFI_SSID_MAX_LEN - 1);
@@ -525,4 +578,54 @@ const char *wifi_auth_mode_to_string(wifi_auth_mode_t mode) {
         case WIFI_AUTH_WAPI_PSK:        return "WAPI";
         default:                        return "Unknown";
     }
+}
+
+// ============================================================================
+// Session Management
+// ============================================================================
+
+uint8_t wifi_manager_session_acquire(void) {
+    // Find first free session slot (bit not set)
+    for (uint8_t i = 0; i < WIFI_MAX_SESSIONS; i++) {
+        uint8_t mask = (1 << i);
+        if (!(g_wifi.active_sessions & mask)) {
+            g_wifi.active_sessions |= mask;
+            uint8_t session_id = i + 1;  // 1-based ID
+            LOG_I("WiFi", "Session %d acquired (active: 0x%02x)", session_id, g_wifi.active_sessions);
+            return session_id;
+        }
+    }
+    LOG_W("WiFi", "No free sessions available");
+    return 0;  // No free session
+}
+
+void wifi_manager_session_release(uint8_t session_id, bool auto_deinit) {
+    if (session_id == 0 || session_id > WIFI_MAX_SESSIONS) {
+        return;
+    }
+
+    uint8_t mask = (1 << (session_id - 1));
+    if (!(g_wifi.active_sessions & mask)) {
+        LOG_W("WiFi", "Session %d not active", session_id);
+        return;
+    }
+
+    g_wifi.active_sessions &= ~mask;
+    LOG_I("WiFi", "Session %d released (active: 0x%02x)", session_id, g_wifi.active_sessions);
+
+    // Auto-deinit when last session released
+    if (auto_deinit && g_wifi.active_sessions == 0 && g_wifi.initialized) {
+        LOG_I("WiFi", "Last session released, deinitializing");
+        wifi_manager_deinit();
+    }
+}
+
+uint8_t wifi_manager_session_count(void) {
+    uint8_t count = 0;
+    uint8_t sessions = g_wifi.active_sessions;
+    while (sessions) {
+        count += (sessions & 1);
+        sessions >>= 1;
+    }
+    return count;
 }

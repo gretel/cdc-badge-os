@@ -15,7 +15,7 @@ extern "C" {
 // Constants
 // ============================================================================
 
-#define FIDO2_MAX_CREDENTIALS   27      // ECC slots 0-26
+#define FIDO2_MAX_CREDENTIALS   30      // ECC slots 0-29 (P-256 or Ed25519)
 #define FIDO2_RP_ID_MAX_LEN     64
 #define FIDO2_USER_ID_MAX_LEN   64
 #define FIDO2_USER_NAME_MAX_LEN 32
@@ -40,8 +40,8 @@ typedef enum {
 
 // Credential info (for listing - no private key data)
 typedef struct {
-    uint8_t slot;                           // ECC slot index (0-26)
-    char rp_id[FIDO2_RP_ID_MAX_LEN];        // Relying Party ID (e.g., "github.com")
+    uint8_t slot;                           // ECC slot index (0-29)
+    char rp_id[FIDO2_RP_ID_MAX_LEN];        // Relying Party ID (e.g., "github.com" or "ssh:server")
     uint8_t rp_id_hash[32];                 // SHA-256 of RP ID
     char user_name[FIDO2_USER_NAME_MAX_LEN]; // Display name
     uint8_t user_id[FIDO2_USER_ID_MAX_LEN]; // User handle
@@ -49,6 +49,7 @@ typedef struct {
     uint32_t sign_count;                    // Per-credential counter
     bool resident_key;                      // Is discoverable credential
     uint8_t cred_protect;                   // Credential protection level
+    uint8_t curve;                          // CDC_CURVE_P256 or CDC_CURVE_ED25519
 } fido2_credential_info_t;
 
 // User presence callback type
@@ -132,7 +133,7 @@ uint8_t fido2_find_credentials_by_rp(const uint8_t *rp_id_hash,
 /**
  * Delete credential by slot.
  *
- * @param slot ECC slot index (0-26)
+ * @param slot ECC slot index (0-29)
  * @return true on success
  */
 bool fido2_delete_credential(uint8_t slot);

@@ -153,6 +153,29 @@ void cbor_encode_cose_key_p256(cbor_writer_t *w, const uint8_t *x, const uint8_t
     cbor_encode_bytes(w, y, 32);
 }
 
+void cbor_encode_cose_key_ed25519(cbor_writer_t *w, const uint8_t *pubkey) {
+    // COSE_Key for Ed25519 (OKP - Octet Key Pair):
+    // {
+    //   1: 1,        // kty: OKP
+    //   3: -8,       // alg: EdDSA
+    //   -1: 6,       // crv: Ed25519
+    //   -2: x        // x: public key (32 bytes)
+    // }
+    cbor_encode_map(w, 4);
+
+    cbor_encode_uint(w, 1);    // kty
+    cbor_encode_uint(w, 1);    // OKP (Octet Key Pair)
+
+    cbor_encode_uint(w, 3);    // alg
+    cbor_encode_int(w, -8);    // EdDSA
+
+    cbor_encode_int(w, -1);    // crv
+    cbor_encode_uint(w, 6);    // Ed25519
+
+    cbor_encode_int(w, -2);    // x (public key)
+    cbor_encode_bytes(w, pubkey, 32);
+}
+
 // ============================================================================
 // Reader Implementation
 // ============================================================================

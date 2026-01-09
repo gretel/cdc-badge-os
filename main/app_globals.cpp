@@ -14,6 +14,7 @@ view_list_screen_t g_badge_texts_menu;
 view_info_screen_t g_info_view;
 view_slider_t g_slider;
 view_t9_input_t g_t9_input;
+view_qr_code_t g_qr_view;
 
 #if FEATURE_TOTP
 view_list_screen_t g_totp_list;
@@ -38,20 +39,20 @@ totp_wizard_t g_totp_wizard;
 // TOTP add wizard selection views
 view_list_screen_t g_totp_digits_menu;
 view_list_item_t g_totp_digits_items[] = {
-    {"6 Ziffern", "1"},  // Default, most common
-    {"4 Ziffern", "2"},
-    {"8 Ziffern", "3"}
+    {"6 Digits"},
+    {"4 Digits"},
+    {"8 Digits"}
 };
 view_list_screen_t g_totp_period_menu;
 view_list_item_t g_totp_period_items[] = {
-    {"30 Sekunden", "1"},  // Default
-    {"60 Sekunden", "2"}
+    {"30 Seconds"},
+    {"60 Seconds"}
 };
 view_list_screen_t g_totp_algo_menu;
 view_list_item_t g_totp_algo_items[] = {
-    {"SHA-1", "1"},       // Default, most common
-    {"SHA-256", "2"},
-    {"SHA-512", "3"}
+    {"SHA-1"},
+    {"SHA-256"},
+    {"SHA-512"}
 };
 #endif
 
@@ -63,11 +64,9 @@ char g_fido_detail_text[256];
 
 // Context menu for FIDO2 list
 view_context_menu_t g_context_menu;
-const view_context_item_t g_fido_context_items[] = {
-    {"Details", 1},
-    {"Delete", 2},
-    {"Cancel", 0}
-};
+// Dynamic menu items (allows adding BLE toggle when feature is enabled)
+view_context_item_t g_fido_context_items_buf[5];
+uint8_t g_fido_context_items_count = 0;
 
 // FIDO2 user presence prompt state
 SemaphoreHandle_t g_fido_prompt_sem = NULL;
@@ -95,12 +94,12 @@ wifi_wizard_t g_wifi_wizard;
 // WiFi auth mode selection
 view_list_screen_t g_wifi_auth_menu;
 view_list_item_t g_wifi_auth_items[] = {
-    {"WPA2 Personal", "1"},
-    {"WPA/WPA2", "2"},
-    {"WPA3 Personal", "3"},
-    {"WPA Personal", "4"},
-    {"Open", "5"},
-    {"WEP", "6"}
+    {"WPA2 Personal"},
+    {"WPA/WPA2"},
+    {"WPA3 Personal"},
+    {"WPA Personal"},
+    {"Open"},
+    {"WEP"}
 };
 
 // WiFi IP mode selection
@@ -113,7 +112,7 @@ view_list_item_t g_tools_items[2];
 
 // Tools WiFi submenu
 view_list_screen_t g_tools_wifi_menu;
-view_list_item_t g_tools_wifi_items[3];
+view_list_item_t g_tools_wifi_items[4];  // Connect, Setup, Details, Disconnect
 
 // WiFi connection timing
 uint32_t g_wifi_connect_start = 0;
@@ -121,6 +120,8 @@ uint32_t g_wifi_scan_start = 0;
 
 // NTP sync state: 0=idle, 1=connecting WiFi, 2=syncing NTP
 uint8_t g_ntp_sync_phase = 0;
+// WiFi session ID for NTP sync (0 = no session, >0 = active session)
+uint8_t g_ntp_wifi_session = 0;
 
 // Main Menu items (built dynamically for i18n)
 view_list_item_t g_menu_items[8];
@@ -167,4 +168,34 @@ uint32_t g_last_activity_ms = 0;
 
 // Store init results for selftest display
 hw_status_t g_hw_status = {false, false, false, false, false};
+
+// BLE UART state
+#if FEATURE_BLE_UART
+bool g_ble_enabled = false;
+#endif
+
+// Lock screen quick menu
+view_context_menu_t g_lock_quick_menu;
+view_context_item_t g_lock_quick_items[4];
+
+// Main menu quick menu (key 3)
+view_context_menu_t g_main_quick_menu;
+view_context_item_t g_main_quick_items[4];
+
+// CA (Certificate Authority) state
+#if FEATURE_CA
+view_list_screen_t g_ca_menu;
+view_list_item_t g_ca_items[CA_IDX_COUNT];
+char g_ca_detail_text[512];
+ca_wizard_t g_ca_wizard;
+view_list_screen_t g_ca_validity_menu;
+view_list_item_t g_ca_validity_items[] = {
+    {"1 Year"},
+    {"5 Years"},
+    {"10 Years"},
+    {"15 Years"},
+    {"20 Years"},
+    {"25 Years"}
+};
+#endif
 

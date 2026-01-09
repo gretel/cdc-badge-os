@@ -37,6 +37,7 @@ static const char* strings_en[] = {
     "Brightness",       // STR_BRIGHTNESS
     "Set Date",         // STR_SET_DATE
     "Set Time",         // STR_SET_TIME
+    "Set Date/Time",    // STR_SET_DATETIME
     "Language",         // STR_LANGUAGE
     "Back",             // STR_BACK
 
@@ -52,7 +53,7 @@ static const char* strings_en[] = {
     "Confirm PIN",      // STR_CONFIRM_PIN
 
     // Lock screen
-    "[Y] Unlock  [1] Light",  // STR_UNLOCK
+    "[Y] Unlock  [3] Menu",   // STR_UNLOCK
     "Press any key",    // STR_PRESS_ANY_KEY
 
     // Date/Time
@@ -150,6 +151,44 @@ static const char* strings_en[] = {
 
     // Settings
     "Timezone",                     // STR_TIMEZONE
+
+    // Bluetooth
+    "Bluetooth ON",                 // STR_BLUETOOTH_ON
+    "Bluetooth OFF",                // STR_BLUETOOTH_OFF
+    "BLE Auto-Off",                 // STR_BLUETOOTH_AUTO_OFF
+    "WiFi off first",               // STR_BLUETOOTH_DISABLE_WIFI
+    "BT off first",                 // STR_WIFI_DISABLE_BLUETOOTH
+
+    // Certificate Authority (CA)
+    "CA Management",                // STR_CA_MENU
+    "CA Status",                    // STR_CA_STATUS
+    "Generate Root CA",             // STR_CA_GENERATE
+    "Import Root CA",               // STR_CA_IMPORT
+    "Show Cert",                    // STR_CA_EXPORT
+    "Sign CSR",                     // STR_CA_SIGN_CSR
+    "CA not initialized",           // STR_CA_NOT_INIT
+    "CA initialized",               // STR_CA_INITIALIZED
+    "Generating...",                // STR_CA_GENERATING
+    "CA generated!",                // STR_CA_GENERATED
+    "Generation failed",            // STR_CA_GENERATE_FAILED
+    "Common Name",                  // STR_CA_COMMON_NAME
+    "Created",                      // STR_CA_CREATED
+    "Valid until",                  // STR_CA_VALID_UNTIL
+    "Issued certs",                 // STR_CA_ISSUED_CERTS
+    "Next serial",                  // STR_CA_SERIAL
+    "Show QR Code",                 // STR_CA_SHOW_QR
+    "CA Public Key",                // STR_CA_QR_PUBKEY
+    "Reset Root CA",                // STR_CA_RESET
+    "Delete CA? Y=Yes N=No",        // STR_CA_RESET_CONFIRM
+    "CA deleted",                   // STR_CA_RESET_SUCCESS
+    // CA Wizard
+    "Common Name (CN)",             // STR_CA_ENTER_CN
+    "Organization (O)",             // STR_CA_ENTER_ORG
+    "Org. Unit (OU)",               // STR_CA_ENTER_OU
+    "Country (C)",                  // STR_CA_ENTER_COUNTRY
+    "City/Locality (L)",            // STR_CA_ENTER_LOCALITY
+    "State/Province (ST)",          // STR_CA_ENTER_STATE
+    "Validity (Years)",             // STR_CA_VALIDITY_YEARS
 };
 
 // Translation strings - German
@@ -170,6 +209,7 @@ static const char* strings_de[] = {
     "Helligkeit",       // STR_BRIGHTNESS
     "Datum setzen",     // STR_SET_DATE
     "Uhrzeit setzen",   // STR_SET_TIME
+    "Datum/Zeit",       // STR_SET_DATETIME
     "Sprache",          // STR_LANGUAGE
     "Zurueck",          // STR_BACK
 
@@ -185,7 +225,7 @@ static const char* strings_de[] = {
     "PIN bestaetigen",  // STR_CONFIRM_PIN
 
     // Lock screen
-    "[Y] Entsperren  [1] Licht",  // STR_UNLOCK
+    "[Y] Entsperren  [3] Menu",   // STR_UNLOCK
     "Taste druecken",   // STR_PRESS_ANY_KEY
 
     // Date/Time
@@ -283,6 +323,44 @@ static const char* strings_de[] = {
 
     // Settings
     "Zeitzone",                     // STR_TIMEZONE
+
+    // Bluetooth
+    "Bluetooth AN",                 // STR_BLUETOOTH_ON
+    "Bluetooth AUS",                // STR_BLUETOOTH_OFF
+    "BLE Auto-Aus",                 // STR_BLUETOOTH_AUTO_OFF
+    "Erst WiFi aus",                // STR_BLUETOOTH_DISABLE_WIFI
+    "Erst BT aus",                  // STR_WIFI_DISABLE_BLUETOOTH
+
+    // Certificate Authority (CA)
+    "CA-Verwaltung",                // STR_CA_MENU
+    "CA-Status",                    // STR_CA_STATUS
+    "Root-CA generieren",           // STR_CA_GENERATE
+    "Root-CA importieren",          // STR_CA_IMPORT
+    "Zertifikat",                   // STR_CA_EXPORT (public cert, not private key!)
+    "CSR signieren",                // STR_CA_SIGN_CSR
+    "CA nicht initialisiert",       // STR_CA_NOT_INIT
+    "CA initialisiert",             // STR_CA_INITIALIZED
+    "Generiere...",                 // STR_CA_GENERATING
+    "CA generiert!",                // STR_CA_GENERATED
+    "Generierung fehlg.",           // STR_CA_GENERATE_FAILED
+    "Common Name",                  // STR_CA_COMMON_NAME
+    "Erstellt",                     // STR_CA_CREATED
+    "Gueltig bis",                  // STR_CA_VALID_UNTIL
+    "Ausgest. Zertif.",             // STR_CA_ISSUED_CERTS
+    "Naechste Seriennr.",           // STR_CA_SERIAL
+    "QR Code anzeigen",             // STR_CA_SHOW_QR
+    "CA Public Key",                // STR_CA_QR_PUBKEY
+    "Root-CA loeschen",             // STR_CA_RESET
+    "CA loeschen? Y=Ja N=Nein",     // STR_CA_RESET_CONFIRM
+    "CA geloescht",                 // STR_CA_RESET_SUCCESS
+    // CA Wizard
+    "Common Name (CN)",             // STR_CA_ENTER_CN
+    "Organisation (O)",             // STR_CA_ENTER_ORG
+    "Abteilung (OU)",               // STR_CA_ENTER_OU
+    "Land (C)",                     // STR_CA_ENTER_COUNTRY
+    "Stadt (L)",                    // STR_CA_ENTER_LOCALITY
+    "Bundesland (ST)",              // STR_CA_ENTER_STATE
+    "Gueltigkeit (Jahre)",          // STR_CA_VALIDITY_YEARS
 };
 
 // All language string tables

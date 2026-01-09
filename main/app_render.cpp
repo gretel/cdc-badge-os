@@ -6,6 +6,10 @@
 #include "i18n.h"
 #include "power_management.h"
 
+#if FEATURE_BLE_UART
+#include "ble_uart.h"
+#endif
+
 #include <cstdio>
 #include <cstring>
 
@@ -33,6 +37,11 @@ void update_lock_screen_data(void) {
     if (wifi_manager_get_state() == WIFI_STATE_CONNECTED) {
         g_lock_screen.status_icons |= ICON_WIFI;
     }
+#if FEATURE_BLE_UART
+    if (g_ble_enabled) {
+        g_lock_screen.status_icons |= ICON_BLE;
+    }
+#endif
 
     if (cdc_rtc_is_time_set()) {
         cdc_rtc_get_time_str(g_lock_screen.clock, sizeof(g_lock_screen.clock));
@@ -57,6 +66,11 @@ void render_current_state(bool partial) {
             view_lock_screen_render(&g_lock_screen, partial);
             break;
 
+        case APP_STATE_LOCK_QUICK_MENU:
+            // Quick menu is rendered as overlay by context_menu_show/render
+            view_context_menu_render(&g_lock_quick_menu);
+            break;
+
         case APP_STATE_PIN_ENTRY:
         case APP_STATE_PIN_CHANGE_OLD:
         case APP_STATE_PIN_CHANGE_NEW:
@@ -66,6 +80,11 @@ void render_current_state(bool partial) {
 
         case APP_STATE_MAIN_MENU:
             view_list_screen_render(&g_main_menu, partial);
+            break;
+
+        case APP_STATE_MAIN_QUICK_MENU:
+            // Quick menu is rendered as overlay by context_menu_show/render
+            view_context_menu_render(&g_main_quick_menu);
             break;
 
         case APP_STATE_SETTINGS_MENU:
@@ -220,5 +239,36 @@ void render_current_state(bool partial) {
         case APP_STATE_TOOLS_WIFI_MENU:
             view_list_screen_render(&g_tools_wifi_menu, partial);
             break;
+
+#if FEATURE_CA
+        case APP_STATE_CA_MENU:
+            view_list_screen_render(&g_ca_menu, partial);
+            break;
+
+        case APP_STATE_CA_DETAILS:
+        case APP_STATE_CA_GENERATING:
+        case APP_STATE_CA_RESET_CONFIRM:
+            view_info_screen_render(&g_info_view, partial);
+            break;
+
+        case APP_STATE_CA_QR_CODE:
+            view_qr_code_render(&g_qr_view, partial);
+            break;
+
+        // CA Wizard: T9 input states
+        case APP_STATE_CA_WIZARD_CN:
+        case APP_STATE_CA_WIZARD_ORG:
+        case APP_STATE_CA_WIZARD_OU:
+        case APP_STATE_CA_WIZARD_COUNTRY:
+        case APP_STATE_CA_WIZARD_LOCALITY:
+        case APP_STATE_CA_WIZARD_STATE:
+            view_t9_input_render(&g_t9_input, partial);
+            break;
+
+        // CA Wizard: Validity selection
+        case APP_STATE_CA_WIZARD_VALIDITY:
+            view_list_screen_render(&g_ca_validity_menu, partial);
+            break;
+#endif
     }
 }

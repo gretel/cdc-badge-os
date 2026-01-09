@@ -15,6 +15,7 @@
 void go_to_pin_entry(void) {
     view_pin_entry_init(&g_pin_entry, i18n_str(STR_ENTER_PIN), PIN_MAX_LEN, 3);
     g_app_state = APP_STATE_PIN_ENTRY;
+    g_last_activity_ms = millis();  // Start autolock timer
     render_current_state(false);
 }
 

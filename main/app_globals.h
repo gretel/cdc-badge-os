@@ -23,8 +23,10 @@
 // Keep ordering stable for state transitions and rendering.
 typedef enum {
     APP_STATE_LOCK_SCREEN,
+    APP_STATE_LOCK_QUICK_MENU,  // Quick menu overlay on lock screen (Light, Sleep only)
     APP_STATE_PIN_ENTRY,
     APP_STATE_MAIN_MENU,
+    APP_STATE_MAIN_QUICK_MENU,  // Quick menu overlay on main menu (key 3)
     APP_STATE_SETTINGS_MENU,
     APP_STATE_BADGE_TEXTS_MENU,
     APP_STATE_INFO_DEMO,
@@ -81,6 +83,22 @@ typedef enum {
     APP_STATE_TOOLS_MENU,
     APP_STATE_TOOLS_NTP_SYNC,
     APP_STATE_TOOLS_WIFI_MENU,
+#if FEATURE_CA
+    // CA states
+    APP_STATE_CA_MENU,
+    APP_STATE_CA_DETAILS,
+    APP_STATE_CA_GENERATING,
+    APP_STATE_CA_QR_CODE,
+    APP_STATE_CA_RESET_CONFIRM,
+    // CA Wizard states
+    APP_STATE_CA_WIZARD_CN,
+    APP_STATE_CA_WIZARD_ORG,
+    APP_STATE_CA_WIZARD_OU,
+    APP_STATE_CA_WIZARD_COUNTRY,
+    APP_STATE_CA_WIZARD_LOCALITY,
+    APP_STATE_CA_WIZARD_STATE,
+    APP_STATE_CA_WIZARD_VALIDITY,
+#endif
 } app_state_t;
 
 // Menu item indices (adjusted for feature flags)
@@ -91,34 +109,44 @@ enum {
 #if FEATURE_FIDO2
     MENU_IDX_FIDO2,
 #endif
+#if FEATURE_CA
+    MENU_IDX_CA,
+#endif
     MENU_IDX_TOOLS,
     MENU_IDX_SELFTEST,
-    MENU_IDX_SETTINGS,
-    MENU_IDX_LOCK
+    MENU_IDX_SETTINGS
+    // Deep Sleep moved to lock screen quick menu
 };
 
-// Settings Menu indices
+// Settings Menu indices (WiFi moved to Tools > WiFi > Setup)
 enum {
     SETTINGS_IDX_CHANGE_PIN,
     SETTINGS_IDX_BRIGHTNESS,
     SETTINGS_IDX_TIMEZONE,
     SETTINGS_IDX_BADGE_TEXTS,
-    SETTINGS_IDX_SET_DATE,
-    SETTINGS_IDX_SET_TIME,
-    SETTINGS_IDX_WIFI_SETUP,
+    SETTINGS_IDX_SET_DATETIME,  // Combined Date/Time wizard
     SETTINGS_IDX_LANGUAGE,
-    SETTINGS_IDX_BACK,
     SETTINGS_IDX_COUNT
 };
 
-// Badge Texts submenu indices
+// Badge Texts submenu indices (no Back - use N key)
 enum {
     BADGE_IDX_NAME,
     BADGE_IDX_INFO,
     BADGE_IDX_INFO2,
-    BADGE_IDX_BACK,
     BADGE_IDX_COUNT
 };
+
+// CA Menu indices (no Back - use N key, Generate/Reset at end)
+#if FEATURE_CA
+enum {
+    CA_IDX_STATUS,
+    CA_IDX_EXPORT,
+    CA_IDX_QR_CODE,
+    CA_IDX_GENERATE,  // Generate/Reset as last item
+    CA_IDX_COUNT
+};
+#endif
 
 #if FEATURE_TOTP
 typedef struct {
@@ -131,6 +159,20 @@ typedef struct {
     bool edit_mode;   // true = editing existing, false = adding new
     uint8_t edit_index; // index being edited (if edit_mode)
 } totp_wizard_t;
+#endif
+
+#if FEATURE_CA
+// CA Wizard data (X.509 DN fields + validity)
+#define CA_FIELD_MAX_LEN 64
+typedef struct {
+    char cn[CA_FIELD_MAX_LEN];       // Common Name (required)
+    char org[CA_FIELD_MAX_LEN];      // Organization (optional)
+    char ou[CA_FIELD_MAX_LEN];       // Organizational Unit (optional)
+    char country[3];                 // Country code (2 letters, e.g., "DE")
+    char locality[CA_FIELD_MAX_LEN]; // City/Locality (optional)
+    char state[CA_FIELD_MAX_LEN];    // State/Province (optional)
+    uint8_t validity_years;          // 1-25 years
+} ca_wizard_t;
 #endif
 
 typedef struct {
@@ -154,6 +196,7 @@ extern view_list_screen_t g_badge_texts_menu;
 extern view_info_screen_t g_info_view;
 extern view_slider_t g_slider;
 extern view_t9_input_t g_t9_input;
+extern view_qr_code_t g_qr_view;
 
 #if FEATURE_TOTP
 extern view_list_screen_t g_totp_list;
@@ -177,7 +220,8 @@ extern view_list_item_t g_fido_items[FIDO2_MAX_CREDENTIALS];
 extern uint8_t g_fido_selected_index;
 extern char g_fido_detail_text[256];
 extern view_context_menu_t g_context_menu;
-extern const view_context_item_t g_fido_context_items[];
+extern view_context_item_t g_fido_context_items_buf[5];
+extern uint8_t g_fido_context_items_count;
 extern SemaphoreHandle_t g_fido_prompt_sem;
 extern volatile fido2_user_presence_result_t g_fido_prompt_result;
 extern char g_fido_prompt_rp_id[FIDO2_RP_ID_MAX_LEN];
@@ -204,7 +248,7 @@ extern view_list_item_t g_tools_items[2];
 
 // Tools WiFi submenu
 extern view_list_screen_t g_tools_wifi_menu;
-extern view_list_item_t g_tools_wifi_items[3];
+extern view_list_item_t g_tools_wifi_items[4];
 
 // WiFi connection timing
 extern uint32_t g_wifi_connect_start;
@@ -212,6 +256,8 @@ extern uint32_t g_wifi_scan_start;
 
 // NTP sync state: 0=idle, 1=connecting WiFi, 2=syncing NTP
 extern uint8_t g_ntp_sync_phase;
+// WiFi session ID for NTP sync (0 = no session, >0 = active session)
+extern uint8_t g_ntp_wifi_session;
 
 // Main Menu items (built dynamically for i18n)
 extern view_list_item_t g_menu_items[8];
@@ -258,3 +304,26 @@ extern uint32_t g_last_activity_ms;
 
 // Hardware status for selftest
 extern hw_status_t g_hw_status;
+
+// BLE UART state
+#if FEATURE_BLE_UART
+extern bool g_ble_enabled;
+#endif
+
+// Lock screen quick menu
+extern view_context_menu_t g_lock_quick_menu;
+extern view_context_item_t g_lock_quick_items[4];
+
+// Main menu quick menu (key 3)
+extern view_context_menu_t g_main_quick_menu;
+extern view_context_item_t g_main_quick_items[4];
+
+// CA state
+#if FEATURE_CA
+extern view_list_screen_t g_ca_menu;
+extern view_list_item_t g_ca_items[CA_IDX_COUNT];
+extern char g_ca_detail_text[512];
+extern ca_wizard_t g_ca_wizard;
+extern view_list_screen_t g_ca_validity_menu;
+extern view_list_item_t g_ca_validity_items[6];  // 1, 5, 10, 15, 20, 25 years
+#endif

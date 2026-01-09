@@ -60,6 +60,20 @@ void log_flush(void);
 void log_dump_recent(size_t lines);
 
 // ============================================================================
+// BLE UART Integration (callback-based to avoid circular dependency)
+// ============================================================================
+
+// Callback type for BLE UART output
+typedef size_t (*ble_uart_send_func_t)(const uint8_t *data, size_t len);
+typedef bool (*ble_uart_ready_func_t)(void);
+typedef int (*ble_uart_getchar_func_t)(void);
+
+// Register BLE UART callbacks (called by ble_uart.cpp during init)
+void console_register_ble_uart(ble_uart_send_func_t send_func,
+                               ble_uart_ready_func_t ready_func,
+                               ble_uart_getchar_func_t getchar_func);
+
+// ============================================================================
 // Console I/O (for serial command interface)
 // These functions route through TinyUSB CDC when backend is LOG_BACKEND_CDC
 // ============================================================================

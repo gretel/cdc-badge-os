@@ -208,6 +208,35 @@ bool wifi_manager_has_config(void);
 void wifi_manager_clear_config(void);
 
 // ============================================================================
+// Session Management
+// ============================================================================
+
+/**
+ * Acquire a WiFi session reference.
+ * Call this before starting a WiFi operation.
+ * WiFi will not be deinitialized while any session is active.
+ *
+ * @return Session ID (>0) or 0 on failure
+ */
+uint8_t wifi_manager_session_acquire(void);
+
+/**
+ * Release a WiFi session reference.
+ * When all sessions are released, WiFi may be deinitialized.
+ *
+ * @param session_id Session ID from acquire
+ * @param auto_deinit If true, deinit WiFi when last session released
+ */
+void wifi_manager_session_release(uint8_t session_id, bool auto_deinit);
+
+/**
+ * Get number of active sessions.
+ *
+ * @return Number of active session references
+ */
+uint8_t wifi_manager_session_count(void);
+
+// ============================================================================
 // Utility
 // ============================================================================
 

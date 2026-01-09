@@ -23,6 +23,7 @@ typedef enum {
     STR_BRIGHTNESS,
     STR_SET_DATE,
     STR_SET_TIME,
+    STR_SET_DATETIME,
     STR_LANGUAGE,
     STR_BACK,
     STR_NAME,
@@ -116,6 +117,44 @@ typedef enum {
 
     // Settings
     STR_TIMEZONE,           // "Timezone"
+
+    // Bluetooth
+    STR_BLUETOOTH_ON,       // "Bluetooth ON"
+    STR_BLUETOOTH_OFF,      // "Bluetooth OFF"
+    STR_BLUETOOTH_AUTO_OFF, // "BLE Auto-Off"
+    STR_BLUETOOTH_DISABLE_WIFI, // "Disable WiFi first"
+    STR_WIFI_DISABLE_BLUETOOTH, // "Disable Bluetooth first"
+
+    // Certificate Authority (CA)
+    STR_CA_MENU,            // "CA Management"
+    STR_CA_STATUS,          // "CA Status"
+    STR_CA_GENERATE,        // "Generate Root CA"
+    STR_CA_IMPORT,          // "Import Root CA"
+    STR_CA_EXPORT,          // "Export Root CA"
+    STR_CA_SIGN_CSR,        // "Sign CSR"
+    STR_CA_NOT_INIT,        // "CA not initialized"
+    STR_CA_INITIALIZED,     // "CA initialized"
+    STR_CA_GENERATING,      // "Generating..."
+    STR_CA_GENERATED,       // "CA generated!"
+    STR_CA_GENERATE_FAILED, // "Generation failed"
+    STR_CA_COMMON_NAME,     // "Common Name"
+    STR_CA_CREATED,         // "Created"
+    STR_CA_VALID_UNTIL,     // "Valid until"
+    STR_CA_ISSUED_CERTS,    // "Issued certs"
+    STR_CA_SERIAL,          // "Next serial"
+    STR_CA_SHOW_QR,         // "Show QR Code"
+    STR_CA_QR_PUBKEY,       // "CA Public Key"
+    STR_CA_RESET,           // "Reset Root CA"
+    STR_CA_RESET_CONFIRM,   // "Delete CA? Y=Yes N=No"
+    STR_CA_RESET_SUCCESS,   // "CA deleted"
+    // CA Wizard
+    STR_CA_ENTER_CN,        // "Common Name (CN)"
+    STR_CA_ENTER_ORG,       // "Organization (O)"
+    STR_CA_ENTER_OU,        // "Org. Unit (OU)"
+    STR_CA_ENTER_COUNTRY,   // "Country (C)"
+    STR_CA_ENTER_LOCALITY,  // "City/Locality (L)"
+    STR_CA_ENTER_STATE,     // "State/Province (ST)"
+    STR_CA_VALIDITY_YEARS,  // "Validity (Years)"
 
     STR_COUNT
 } string_id_t;

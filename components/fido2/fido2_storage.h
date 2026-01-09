@@ -16,14 +16,14 @@ extern "C" {
 // ============================================================================
 // Storage Layout
 // ============================================================================
-// ECC Slots 0-26:    Private keys (P-256 for WebAuthn)
-// R-Memory 0-26:     Credential metadata (rp_id, user_id, sign_count, etc.)
+// ECC Slots 0-29:    Private keys (P-256 or Ed25519 for WebAuthn/SSH)
+// R-Memory 0-29:     Credential metadata (rp_id, user_id, sign_count, curve, etc.)
 // NVS "fido2":       Global auth counter, PIN hash
 
 #define FIDO2_ECC_SLOT_BASE     0
-#define FIDO2_ECC_SLOT_MAX      26
+#define FIDO2_ECC_SLOT_MAX      29
 #define FIDO2_RMEM_SLOT_BASE    0
-#define FIDO2_RMEM_SLOT_MAX     26
+#define FIDO2_RMEM_SLOT_MAX     29
 
 // ============================================================================
 // Initialization
@@ -51,9 +51,10 @@ uint8_t fido2_storage_init(void);
  * @param user_name Display name (can be empty)
  * @param resident_key Store as discoverable credential
  * @param cred_protect Credential protection level (0-3)
+ * @param curve CDC_CURVE_P256 or CDC_CURVE_ED25519
  * @param out_slot Output: allocated slot index
  * @param out_cred_id Output: credential ID (64 bytes)
- * @param out_pubkey Output: public key (64 bytes, X||Y without 0x04 prefix)
+ * @param out_pubkey Output: public key (64 bytes for P-256 X||Y, 32 bytes for Ed25519)
  * @return true on success
  */
 bool fido2_storage_create_credential(
@@ -64,10 +65,19 @@ bool fido2_storage_create_credential(
     const char *user_name,
     bool resident_key,
     uint8_t cred_protect,
+    uint8_t curve,
     uint8_t *out_slot,
     uint8_t *out_cred_id,
     uint8_t *out_pubkey
 );
+
+/**
+ * Get curve type for a credential.
+ *
+ * @param slot ECC slot index (0-29)
+ * @return CDC_CURVE_P256 or CDC_CURVE_ED25519, or 0xFF on error
+ */
+uint8_t fido2_storage_get_curve(uint8_t slot);
 
 /**
  * Get credential info by slot.

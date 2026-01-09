@@ -113,12 +113,14 @@ void gui_init(void) {
     gui_load_backlight();
 
     // Configure backlight PWM
+    // Use XTAL clock (40MHz) for light sleep compatibility
+    // LEDC_SLEEP_MODE_KEEP_ALIVE keeps PWM running during light sleep
     ledc_timer_config_t ledc_timer = {
         .speed_mode = LEDC_MODE,
         .duty_resolution = LEDC_DUTY_RES,
         .timer_num = LEDC_TIMER,
         .freq_hz = LEDC_FREQUENCY,
-        .clk_cfg = LEDC_AUTO_CLK,
+        .clk_cfg = LEDC_USE_XTAL_CLK,  // Light sleep compatible
         .deconfigure = false
     };
     ledc_timer_config(&ledc_timer);
@@ -131,7 +133,7 @@ void gui_init(void) {
         .timer_sel = LEDC_TIMER,
         .duty = backlight_level,
         .hpoint = 0,
-        .sleep_mode = LEDC_SLEEP_MODE_NO_ALIVE_NO_PD,
+        .sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE,  // Keep running during light sleep
         .flags = {.output_invert = 0}
     };
     ledc_channel_config(&ledc_channel);

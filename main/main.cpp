@@ -37,6 +37,10 @@
 #include "totp_store.h"
 #endif
 
+#if FEATURE_BLE_UART
+#include "ble_uart.h"
+#endif
+
 // App version (fallback if not defined via build flags)
 #ifndef APP_VERSION
 #define APP_VERSION "v0.3"
@@ -217,7 +221,7 @@ extern "C" void app_main(void) {
                             snprintf(net_labels[i], sizeof(net_labels[i]), "%s %ddBm%s",
                                     net.ssid, net.rssi,
                                     net.auth_mode == WIFI_AUTH_OPEN ? "" : " *");
-                            g_wifi_items[i] = {net_labels[i], ""};
+                            g_wifi_items[i] = {net_labels[i]};
                         }
                     }
                     view_list_screen_init(&g_wifi_list, "WiFi", g_wifi_items, count);
@@ -248,7 +252,7 @@ extern "C" void app_main(void) {
                 view_toast_success(i18n_str(STR_WIFI_CONNECTED), 1500);
                 // Keep connected for Tools > WiFi > Details
                 build_tools_wifi_menu();
-                view_list_screen_init(&g_tools_wifi_menu, i18n_str(STR_WIFI_MENU), g_tools_wifi_items, 3);
+                view_list_screen_init(&g_tools_wifi_menu, i18n_str(STR_WIFI_MENU), g_tools_wifi_items, 4);
                 g_app_state = APP_STATE_TOOLS_WIFI_MENU;
                 render_current_state(false);
             } else if (state == WIFI_STATE_FAILED) {
@@ -270,25 +274,33 @@ extern "C" void app_main(void) {
                 // Phase 1: Waiting for WiFi connection
                 wifi_state_t state = wifi_manager_get_state();
                 if (state == WIFI_STATE_CONNECTED) {
-                    // WiFi connected - start NTP sync
+                        // WiFi connected - start NTP sync
                     uint32_t ntp_server = wifi_manager_get_ntp_server();
                     ntp_sync_start(ntp_server);
                     g_ntp_sync_phase = 2;
                     view_info_screen_init(&g_info_view, i18n_str(STR_NTP_SYNC), i18n_str(STR_NTP_SYNCING));
                     render_current_state(false);
                 } else if (state == WIFI_STATE_FAILED) {
-                    // WiFi connection failed
+                        // WiFi connection failed
                     view_toast_error(i18n_str(STR_WIFI_FAILED), 1500);
-                    wifi_manager_deinit();
+                    // Release session (will auto-deinit)
+                    if (g_ntp_wifi_session > 0) {
+                        wifi_manager_session_release(g_ntp_wifi_session, true);
+                        g_ntp_wifi_session = 0;
+                    }
                     g_ntp_sync_phase = 0;
                     build_tools_menu();
                     view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, 2);
                     g_app_state = APP_STATE_TOOLS_MENU;
                     render_current_state(false);
                 } else if (millis() - g_wifi_connect_start > 15000) {
-                    // WiFi timeout
+                        // WiFi timeout
                     view_toast_error(i18n_str(STR_TIMEOUT), 1500);
-                    wifi_manager_deinit();
+                    // Release session (will auto-deinit)
+                    if (g_ntp_wifi_session > 0) {
+                        wifi_manager_session_release(g_ntp_wifi_session, true);
+                        g_ntp_wifi_session = 0;
+                    }
                     g_ntp_sync_phase = 0;
                     build_tools_menu();
                     view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, 2);
@@ -302,7 +314,11 @@ extern "C" void app_main(void) {
                     // Success!
                     view_toast_success(i18n_str(STR_NTP_SUCCESS), 1500);
                     ntp_sync_stop();
-                    wifi_manager_deinit();
+                    // Release session (will auto-deinit if we acquired it)
+                    if (g_ntp_wifi_session > 0) {
+                        wifi_manager_session_release(g_ntp_wifi_session, true);
+                        g_ntp_wifi_session = 0;
+                    }
                     g_ntp_sync_phase = 0;
                     build_tools_menu();
                     view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, 2);
@@ -312,7 +328,11 @@ extern "C" void app_main(void) {
                     // NTP failed or timed out
                     view_toast_error(i18n_str(STR_NTP_FAILED), 1500);
                     ntp_sync_stop();
-                    wifi_manager_deinit();
+                    // Release session (will auto-deinit if we acquired it)
+                    if (g_ntp_wifi_session > 0) {
+                        wifi_manager_session_release(g_ntp_wifi_session, true);
+                        g_ntp_wifi_session = 0;
+                    }
                     g_ntp_sync_phase = 0;
                     build_tools_menu();
                     view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, 2);
@@ -374,6 +394,9 @@ extern "C" void app_main(void) {
                 g_lock_screen.show_light_sleep_icon = true;
                 render_current_state(true);
 
+                // Wait for E-Paper partial refresh to complete before sleeping
+                vTaskDelay(pdMS_TO_TICKS(350));
+
                 LOG_D("SLEEP", "Entering light sleep...");
                 fflush(stdout);
                 enter_light_sleep();
@@ -407,6 +430,9 @@ extern "C" void app_main(void) {
                     vTaskDelay(pdMS_TO_TICKS(1000));
                 }
             }
+
+            // BLE auto-off disabled - user controls BLE manually via lock screen shortcut
+            // (BLE UART is used for wireless serial console, not FIDO2)
         }
 
         // Update T9 state (for cursor timeout)
