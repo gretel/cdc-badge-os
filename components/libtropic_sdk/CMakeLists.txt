@@ -36,3 +36,11 @@ idf_component_register(
         "${LIBTROPIC_ROOT}/cal/mbedtls_v4"
     REQUIRES mbedtls
 )
+
+# Enable libtropic error logs (prints PSA error codes on crypto failures).
+target_compile_definitions(${COMPONENT_LIB} PRIVATE
+    LT_LOG_ENABLE_ERROR=1
+    LT_LOG_ENABLE_WARN=0
+    LT_LOG_ENABLE_INFO=0
+    LT_LOG_ENABLE_DEBUG=0
+)
