@@ -81,6 +81,7 @@ typedef enum {
     STR_HINT_T9_INPUT,
     STR_HINT_PIN_INPUT,
     STR_HINT_DATE_TIME,
+    STR_HINT_IP_INPUT,
     STR_HINT_BACK,
     STR_HINT_SELECT,
     STR_HINT_LIST_MENU,     // "[3] Menu"
@@ -108,6 +109,8 @@ typedef enum {
     STR_WIFI_IP_MODE,       // "IP Mode"
     STR_WIFI_DHCP,          // "DHCP (Auto)"
     STR_WIFI_STATIC,        // "Static IP"
+    STR_WIFI_GATEWAY,       // "Gateway"
+    STR_WIFI_NETMASK,       // "Netmask"
     STR_WIFI_CONNECTING,    // "Connecting..."
     STR_WIFI_CONNECTED,     // "Connected!"
     STR_WIFI_FAILED,        // "Connection failed"

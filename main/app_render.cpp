@@ -216,7 +216,12 @@ void render_current_state(bool partial) {
             break;
 
         case APP_STATE_WIFI_ADD_STATIC_IP:
-            view_t9_input_render(&g_t9_input, partial);
+            view_ip_input_render(&g_ip_input, partial);
+            break;
+
+        case APP_STATE_WIFI_ADD_GATEWAY:
+        case APP_STATE_WIFI_ADD_NETMASK:
+            view_ip_input_render(&g_ip_input, partial);
             break;
 
         case APP_STATE_WIFI_CONNECTING:

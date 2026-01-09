@@ -146,7 +146,8 @@ bool view_t9_input_key(view_t9_input_t *view, char key);
 void view_t9_input_backspace(view_t9_input_t *view);
 
 // Update T9 state (call periodically to finalize character on timeout)
-void view_t9_input_update(view_t9_input_t *view);
+// Returns true if state changed (e.g., cursor finalized) and needs re-render.
+bool view_t9_input_update(view_t9_input_t *view);
 
 // Get current text
 const char* view_t9_input_get_text(const view_t9_input_t *view);
@@ -289,6 +290,33 @@ bool view_time_input_clear_field(view_time_input_t *view);
 
 // Render
 void view_time_input_render(const view_time_input_t *view, bool partial);
+
+// ============================================================================
+// IP Input Screen View
+// ============================================================================
+
+typedef struct {
+    const char *title;
+    uint8_t octet[4];  // 0-255
+    uint8_t field;     // 0..3
+    uint8_t digit;     // 0..3 (digits entered)
+} view_ip_input_t;
+
+// Initialize IP input screen (initial_ip may be NULL or "x.x.x.x")
+void view_ip_input_init(view_ip_input_t *view, const char *title, const char *initial_ip);
+
+// Process digit key (0-9), returns true if value changed
+bool view_ip_input_key(view_ip_input_t *view, char key);
+
+// Move to next/prev field (key 6 = next, key 4 = prev)
+void view_ip_input_next_field(view_ip_input_t *view);
+void view_ip_input_prev_field(view_ip_input_t *view);
+
+// Clear current field (N key) - returns true if cleared, false if already at start
+bool view_ip_input_clear_field(view_ip_input_t *view);
+
+// Render
+void view_ip_input_render(const view_ip_input_t *view, bool partial);
 
 // ============================================================================
 // Toast/Message Overlay

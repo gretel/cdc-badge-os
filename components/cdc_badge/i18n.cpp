@@ -115,6 +115,7 @@ static const char* strings_en[] = {
     "[N] Del  [2s N] Abort  [Y] OK",// STR_HINT_T9_INPUT
     "[0-9] Digit  [N] Del  [Y] OK", // STR_HINT_PIN_INPUT
     "[0-9] [4/6] Field [Y] OK",     // STR_HINT_DATE_TIME
+    "[0-9] [Y] Next [N] Clear",     // STR_HINT_IP_INPUT
     "[N] Back",                     // STR_HINT_BACK
     "[Y] Select",                   // STR_HINT_SELECT
     "[3] Menu",                     // STR_HINT_LIST_MENU
@@ -142,6 +143,8 @@ static const char* strings_en[] = {
     "IP Mode",                      // STR_WIFI_IP_MODE
     "DHCP (Auto)",                  // STR_WIFI_DHCP
     "Static IP",                    // STR_WIFI_STATIC
+    "Gateway",                      // STR_WIFI_GATEWAY
+    "Netmask",                      // STR_WIFI_NETMASK
     "Connecting...",                // STR_WIFI_CONNECTING
     "Connected!",                   // STR_WIFI_CONNECTED
     "Connection failed",            // STR_WIFI_FAILED
@@ -287,6 +290,7 @@ static const char* strings_de[] = {
     "[N] Del [2s N] Abbr. [Y] OK",  // STR_HINT_T9_INPUT
     "[0-9] [N] Del  [Y] OK",        // STR_HINT_PIN_INPUT
     "[0-9] [4/6] Feld [Y] OK",      // STR_HINT_DATE_TIME
+    "[0-9] [Y] Weiter [N] Loesch",  // STR_HINT_IP_INPUT
     "[N] Zurueck",                  // STR_HINT_BACK
     "[Y] Waehlen",                  // STR_HINT_SELECT
     "[3] Menue",                    // STR_HINT_LIST_MENU
@@ -314,6 +318,8 @@ static const char* strings_de[] = {
     "IP Modus",                     // STR_WIFI_IP_MODE
     "DHCP (Auto)",                  // STR_WIFI_DHCP
     "Statische IP",                 // STR_WIFI_STATIC
+    "Gateway",                      // STR_WIFI_GATEWAY
+    "Netzmaske",                    // STR_WIFI_NETMASK
     "Verbinde...",                  // STR_WIFI_CONNECTING
     "Verbunden!",                   // STR_WIFI_CONNECTED
     "Verbindungsfehler",    // STR_WIFI_FAILED
