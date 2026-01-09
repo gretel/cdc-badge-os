@@ -273,7 +273,10 @@ void wifi_manager_start_scan(void) {
         .scan_time = {
             .active = { .min = 100, .max = 300 },
             .passive = 0
-        }
+        },
+        .home_chan_dwell_time = 0,
+        .channel_bitmap = {0, 0},
+        .coex_background_scan = false,
     };
 
     esp_wifi_scan_start(&scan_config, false);  // Non-blocking

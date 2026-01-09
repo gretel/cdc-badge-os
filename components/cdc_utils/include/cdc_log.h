@@ -25,6 +25,11 @@ typedef enum {
     LOG_BACKEND_NONE          // No output
 } log_backend_t;
 
+// Log ring buffer (stores recent log lines for LOG_TAIL)
+#ifndef CDC_LOG_RING_BUFFER
+#define CDC_LOG_RING_BUFFER 0
+#endif
+
 // Initialize logging system
 void log_init(void);
 
@@ -50,6 +55,9 @@ void log_hex(const char* tag, const char* label, const uint8_t* data, size_t len
 
 // Flush output buffer
 void log_flush(void);
+
+// Dump last N log lines (max stored lines)
+void log_dump_recent(size_t lines);
 
 // ============================================================================
 // Console I/O (for serial command interface)

@@ -17,6 +17,17 @@ static log_backend_t s_log_backend = LOG_BACKEND_PRINTF;  // Fallback to printf
 #endif
 static bool s_console_initialized = false;
 
+// Line length for formatted log lines (used regardless of ring buffer setting)
+#define LOG_RING_LINE_LEN 100
+
+#if CDC_LOG_RING_BUFFER
+// Ring buffer for recent log lines
+#define LOG_RING_LINES 100
+static char s_log_ring[LOG_RING_LINES][LOG_RING_LINE_LEN];
+static size_t s_log_ring_head = 0;
+static size_t s_log_ring_count = 0;
+#endif
+
 // Track which input source was last used for proper echo routing
 typedef enum {
     INPUT_SOURCE_NONE,
@@ -34,6 +45,19 @@ static const char* level_str[] = {
     "D",     // DEBUG
     "V"      // VERBOSE
 };
+
+#if CDC_LOG_RING_BUFFER
+static void log_ring_add(const char *line) {
+    if (!line) return;
+    size_t idx = s_log_ring_head;
+    strncpy(s_log_ring[idx], line, LOG_RING_LINE_LEN - 1);
+    s_log_ring[idx][LOG_RING_LINE_LEN - 1] = '\0';
+    s_log_ring_head = (s_log_ring_head + 1) % LOG_RING_LINES;
+    if (s_log_ring_count < LOG_RING_LINES) {
+        s_log_ring_count++;
+    }
+}
+#endif
 
 void log_init(void) {
     s_log_level = LOG_LEVEL_DEBUG;
@@ -67,7 +91,24 @@ void log_write_v(log_level_t level, const char* tag, const char* fmt, va_list ar
         buf[sizeof(buf) - 1] = '\0';
     }
 
-    console_printf("[%s][%s] %s\n", level_str[level], tag ? tag : "???", buf);
+    char line[LOG_RING_LINE_LEN];
+    int header_len = snprintf(line, sizeof(line), "[%s][%s] ",
+                              level_str[level], tag ? tag : "???");
+    size_t used = 0;
+    if (header_len > 0) {
+        used = (header_len >= (int)sizeof(line)) ? (sizeof(line) - 1) : (size_t)header_len;
+    }
+    if (used < sizeof(line) - 1) {
+        size_t remaining = (sizeof(line) - 1) - used;
+        strncpy(line + used, buf, remaining);
+        line[used + remaining] = '\0';
+    } else {
+        line[sizeof(line) - 1] = '\0';
+    }
+#if CDC_LOG_RING_BUFFER
+    log_ring_add(line);
+#endif
+    console_printf("%s\n", line);
 }
 
 void log_write(log_level_t level, const char* tag, const char* fmt, ...) {
@@ -99,6 +140,31 @@ void log_flush(void) {
         return;
     }
     console_flush();
+}
+
+void log_dump_recent(size_t lines) {
+#if CDC_LOG_RING_BUFFER
+    if (s_log_ring_count == 0) {
+        console_printf("(no logs buffered)\r\n");
+        return;
+    }
+
+    if (lines == 0 || lines > s_log_ring_count) {
+        lines = s_log_ring_count;
+    }
+
+    size_t start = (s_log_ring_head + LOG_RING_LINES - s_log_ring_count) % LOG_RING_LINES;
+    size_t skip = s_log_ring_count - lines;
+    start = (start + skip) % LOG_RING_LINES;
+
+    for (size_t i = 0; i < lines; i++) {
+        size_t idx = (start + i) % LOG_RING_LINES;
+        console_printf("%s\r\n", s_log_ring[idx]);
+    }
+#else
+    (void)lines;
+    console_printf("Log ring buffer disabled (FEATURE_LOG_RING_BUFFER=0)\r\n");
+#endif
 }
 
 void log_hex(const char* tag, const char* label, const uint8_t* data, size_t len) {

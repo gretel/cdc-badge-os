@@ -46,6 +46,8 @@ static bool usb_phy_init_once(void) {
         .otg_mode = USB_OTG_MODE_DEVICE,
         // Auto-detect speed to avoid timing/race issues on some hosts
         .otg_speed = USB_PHY_SPEED_UNDEFINED,
+        .ext_io_conf = nullptr,
+        .otg_io_conf = nullptr,
     };
 
     esp_err_t err = usb_new_phy(&phy_conf, &g_usb_phy);

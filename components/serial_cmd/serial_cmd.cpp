@@ -111,6 +111,9 @@ static void show_help(void) {
     console_printf("  HELP                 - Show this help\r\n");
     console_printf("  PING                 - Connection test\r\n");
     console_printf("  STATUS               - Badge status\r\n");
+#if CDC_LOG_RING_BUFFER
+    console_printf("  LOG_TAIL [n]         - Show last N log lines (max 100)\r\n");
+#endif
     console_printf("\r\n");
 
     console_printf("Time:\r\n");
@@ -172,6 +175,7 @@ static void show_help(void) {
     console_printf("TROPIC01:\r\n");
     console_printf("  TR01_STATUS          - Secure element status\r\n");
     console_printf("  TR01_INFO            - Chip ID and firmware version\r\n");
+    console_printf("  TR01_SESSION         - Start/reconnect secure session\r\n");
     console_printf("  TR01_SLOTS           - Show slot usage\r\n");
     console_printf("  TR01_RESYNC          - Resync cache from chip\r\n");
     console_printf("  TR01_RMEM_READ <slot>- Read and dump R-memory slot\r\n");
@@ -238,10 +242,13 @@ static bool check_auth_required(const char *cmd) {
     if (strcasecmp(cmd, "HELP") == 0) return false;
     if (strcasecmp(cmd, "PING") == 0) return false;
     if (strcasecmp(cmd, "STATUS") == 0) return false;
+    if (strcasecmp(cmd, "LOG_TAIL") == 0) return false;
+    if (strncasecmp(cmd, "LOG_TAIL ", 9) == 0) return false;
     if (strcasecmp(cmd, "GET_TIME") == 0) return false;
     if (strcasecmp(cmd, "GET_DATE") == 0) return false;
     if (strcasecmp(cmd, "TR01_STATUS") == 0) return false;
     if (strcasecmp(cmd, "TR01_INFO") == 0) return false;
+    if (strcasecmp(cmd, "TR01_SESSION") == 0) return false;
     if (strcasecmp(cmd, "TR01_SLOTS") == 0) return false;
     if (strcasecmp(cmd, "TR01_RESYNC") == 0) return false;
     if (strncasecmp(cmd, "AUTH ", 5) == 0) return false;
@@ -294,6 +301,26 @@ static void cmd_status(void) {
 #endif
 
     console_flush();
+}
+
+static void cmd_log_tail(char *args) {
+#if CDC_LOG_RING_BUFFER
+    int lines = 100;
+    char *p = trim(args);
+    if (strlen(p) > 0) {
+        long requested = strtol(p, NULL, 10);
+        if (requested > 0) {
+            lines = (requested > 100) ? 100 : (int)requested;
+        }
+    }
+
+    console_printf("=== Recent Logs (last %d) ===\r\n", lines);
+    log_dump_recent((size_t)lines);
+    console_flush();
+#else
+    (void)args;
+    console_printf("ERROR: LOG_TAIL disabled (FEATURE_LOG_RING_BUFFER=0)\r\n");
+#endif
 }
 
 // ============================================================================
@@ -541,6 +568,22 @@ static void cmd_tr01_status(void) {
     console_printf("Session: %s\r\n", tropic01_session_active() ? "active" : "inactive");
     console_printf("Cache: %s\r\n", tropic01_cache_is_loaded() ? "loaded" : "not loaded");
     console_printf("ECC keys in cache: %d\r\n", tropic01_cache_ecc_count());
+    console_flush();
+}
+
+static void cmd_tr01_session(void) {
+    if (tropic01_session_active()) {
+        console_printf("Session active - reconnecting...\r\n");
+        tropic01_session_abort();
+    } else {
+        console_printf("Session inactive - starting...\r\n");
+    }
+
+    if (tropic01_session_start()) {
+        console_printf("OK: Session active\r\n");
+    } else {
+        console_printf("ERROR: Session start failed\r\n");
+    }
     console_flush();
 }
 
@@ -1182,6 +1225,8 @@ static void execute_command(char *cmd) {
     if (strcasecmp(cmd, "HELP") == 0) { show_help(); return; }
     if (strcasecmp(cmd, "PING") == 0) { cmd_ping(); return; }
     if (strcasecmp(cmd, "STATUS") == 0) { cmd_status(); return; }
+    if (strcasecmp(cmd, "LOG_TAIL") == 0) { cmd_log_tail((char *)""); return; }
+    if (strncasecmp(cmd, "LOG_TAIL ", 9) == 0) { cmd_log_tail(cmd + 9); return; }
 
     // Time commands
     if (strncasecmp(cmd, "SET_TIME ", 9) == 0) { cmd_set_time(cmd + 9); return; }
@@ -1214,6 +1259,7 @@ static void execute_command(char *cmd) {
     // TROPIC01 commands
     if (strcasecmp(cmd, "TR01_STATUS") == 0) { cmd_tr01_status(); return; }
     if (strcasecmp(cmd, "TR01_INFO") == 0) { cmd_tr01_info(); return; }
+    if (strcasecmp(cmd, "TR01_SESSION") == 0) { cmd_tr01_session(); return; }
     if (strcasecmp(cmd, "TR01_SLOTS") == 0) { cmd_tr01_slots(); return; }
     if (strcasecmp(cmd, "TR01_RESYNC") == 0) { cmd_tr01_resync(); return; }
     if (strncasecmp(cmd, "TR01_ECC_DEL ", 13) == 0) { cmd_tr01_ecc_del(cmd + 13); return; }

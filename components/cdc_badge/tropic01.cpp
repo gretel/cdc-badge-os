@@ -12,6 +12,9 @@
 
 #include "libtropic.h"
 #include "libtropic_common.h"
+#include "lt_l2_api_structs.h"
+#include "libtropic_l2.h"
+#include "libtropic_l3.h"
 #include "libtropic_mbedtls_v4.h"
 #include "psa/crypto.h"
 
@@ -79,6 +82,92 @@ static void handle_session_error(lt_ret_t ret) {
     }
 }
 
+// Debug helper: run session prerequisites step-by-step to pinpoint failures.
+static void debug_session_start_failure(void) {
+    LOG_W("TR01-DBG", "Session debug: running preflight checks");
+
+    lt_ret_t ret = LT_FAIL;
+
+    struct lt_chip_id_t chip_id;
+    memset(&chip_id, 0, sizeof(chip_id));
+    ret = lt_get_info_chip_id(&tr01_handle, &chip_id);
+    LOG_I("TR01-DBG", "chip_id: %s", lt_ret_verbose(ret));
+
+    uint8_t riscv_fw_ver[TR01_L2_GET_INFO_RISCV_FW_SIZE] = {0};
+    ret = lt_get_info_riscv_fw_ver(&tr01_handle, riscv_fw_ver);
+    LOG_I("TR01-DBG", "riscv_fw: %s", lt_ret_verbose(ret));
+
+    uint8_t spect_fw_ver[TR01_L2_GET_INFO_SPECT_FW_SIZE] = {0};
+    ret = lt_get_info_spect_fw_ver(&tr01_handle, spect_fw_ver);
+    LOG_I("TR01-DBG", "spect_fw: %s", lt_ret_verbose(ret));
+
+    uint8_t cert_ese[TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE] = {0};
+    uint8_t cert_xxxx[TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE] = {0};
+    uint8_t cert_tr01[TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE] = {0};
+    uint8_t cert_root[TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE] = {0};
+    struct lt_cert_store_t cert_store;
+    memset(&cert_store, 0, sizeof(cert_store));
+    cert_store.certs[0] = cert_ese;
+    cert_store.certs[1] = cert_xxxx;
+    cert_store.certs[2] = cert_tr01;
+    cert_store.certs[3] = cert_root;
+    cert_store.buf_len[0] = TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE;
+    cert_store.buf_len[1] = TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE;
+    cert_store.buf_len[2] = TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE;
+    cert_store.buf_len[3] = TR01_L2_GET_INFO_REQ_CERT_SIZE_SINGLE;
+
+    ret = lt_get_info_cert_store(&tr01_handle, &cert_store);
+    LOG_I("TR01-DBG", "cert_store: %s", lt_ret_verbose(ret));
+    if (ret == LT_OK) {
+        LOG_I("TR01-DBG", "cert_len: ese=%u xxxx=%u tr01=%u root=%u",
+              (unsigned)cert_store.cert_len[0],
+              (unsigned)cert_store.cert_len[1],
+              (unsigned)cert_store.cert_len[2],
+              (unsigned)cert_store.cert_len[3]);
+    }
+
+    uint8_t stpub[TR01_STPUB_LEN] = {0};
+    ret = lt_get_st_pub(&cert_store, stpub);
+    LOG_I("TR01-DBG", "stpub: %s", lt_ret_verbose(ret));
+
+    // Step-by-step session start to pinpoint the failing stage.
+    lt_host_eph_keys_t host_eph_keys;
+    memset(&host_eph_keys, 0, sizeof(host_eph_keys));
+
+    ret = lt_out__session_start(&tr01_handle, PAIRING_KEY_SLOT, &host_eph_keys);
+    LOG_I("TR01-DBG", "session_out: %s", lt_ret_verbose(ret));
+    if (ret == LT_OK) {
+        ret = lt_l2_send(&tr01_handle.l2);
+        LOG_I("TR01-DBG", "l2_send: %s", lt_ret_verbose(ret));
+    }
+    if (ret == LT_OK) {
+        ret = lt_l2_receive(&tr01_handle.l2);
+        LOG_I("TR01-DBG", "l2_receive: %s", lt_ret_verbose(ret));
+    }
+    if (ret == LT_OK) {
+        struct lt_l2_handshake_rsp_t *p_rsp = (struct lt_l2_handshake_rsp_t *)tr01_handle.l2.buff;
+        LOG_I("TR01-DBG", "handshake rsp: status=0x%02X chip=0x%02X len=%u",
+              p_rsp->status, p_rsp->chip_status, p_rsp->rsp_len);
+        LOG_I("TR01-DBG", "e_tpub[0..3]=%02X %02X %02X %02X",
+              p_rsp->e_tpub[0], p_rsp->e_tpub[1], p_rsp->e_tpub[2], p_rsp->e_tpub[3]);
+        LOG_I("TR01-DBG", "t_tauth[0..3]=%02X %02X %02X %02X",
+              p_rsp->t_tauth[0], p_rsp->t_tauth[1], p_rsp->t_tauth[2], p_rsp->t_tauth[3]);
+    }
+    if (ret == LT_OK) {
+        ret = lt_in__session_start(&tr01_handle, stpub, PAIRING_KEY_SLOT,
+                                   PAIRING_KEY_PRIV, PAIRING_KEY_PUB, &host_eph_keys);
+        LOG_I("TR01-DBG", "session_in: %s", lt_ret_verbose(ret));
+    }
+
+    memset(&host_eph_keys, 0, sizeof(host_eph_keys));
+
+    if (ret == LT_OK) {
+        // Clean up the debug session so normal flow can continue.
+        lt_ret_t abt = lt_session_abort(&tr01_handle);
+        LOG_I("TR01-DBG", "session_abort: %s", lt_ret_verbose(abt));
+    }
+}
+
 bool tropic01_init(void) {
     LOG_I("TR01", "tropic01_init()");
 
@@ -86,9 +175,12 @@ bool tropic01_init(void) {
     LOG_I("TR01", "Calling psa_crypto_init()...");
     psa_status_t psa_status = psa_crypto_init();
     LOG_I("TR01", "psa_crypto_init() returned %ld", (long)psa_status);
-    if (psa_status != PSA_SUCCESS) {
+    if (psa_status != PSA_SUCCESS && psa_status != PSA_ERROR_BAD_STATE) {
         LOG_E("TR01", "PSA crypto init failed (status=%ld)", (long)psa_status);
         return false;
+    }
+    if (psa_status == PSA_ERROR_BAD_STATE) {
+        LOG_W("TR01", "PSA crypto already initialized");
     }
     LOG_I("TR01", "PSA crypto initialized OK");
 
@@ -153,6 +245,7 @@ bool tropic01_session_start(void) {
             LOG_E("TR01-DBG", "ALARM MODE during session start!");
             LOG_E("TR01-DBG", "L2 buff[0] (CHIP_STATUS): 0x%02X", tr01_handle.l2.buff[0]);
         }
+        debug_session_start_failure();
 
         session_active = false;
         TR01_DBG( "=== SESSION START FAILED ===");
