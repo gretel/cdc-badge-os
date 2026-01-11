@@ -119,7 +119,8 @@ Supported CTAP2 operations:
 
 | Slot | Purpose |
 |------|---------|
-| 0-29 | FIDO2/WebAuthn/SSH (P-256 or Ed25519) |
+| 0-28 | FIDO2/WebAuthn/SSH (P-256 or Ed25519) |
+| 29 | GPG Master Key |
 | 30 | FIDO2 Attestation Key |
 | 31 | CA Root Key |
 
@@ -127,12 +128,13 @@ Supported CTAP2 operations:
 
 | Slot | Purpose |
 |------|---------|
-| 0-29 | FIDO2 Credential Metadata |
+| 0-28 | FIDO2 Credential Metadata |
 | 30 | PIN Hash (SHA-256) |
 | 31 | Device Config |
 | 32 | CA Metadata |
 | 33-132 | TOTP Accounts (max 100) |
-| 133-511 | Free |
+| 134 | GPG Metadata |
+| 135-511 | Free |
 
 ### NVS (ESP32 Flash)
 
@@ -142,6 +144,7 @@ Supported CTAP2 operations:
 | `display` | `backlight` | Backlight brightness |
 | `badge` | `name`, `info`, `info2` | Display text |
 | `fido2` | `auth_count` | Global auth counter |
+| `vcard` | `own`, `c_*` | Own vCard, collected vCards |
 
 ## Hardware
 
