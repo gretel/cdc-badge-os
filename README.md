@@ -25,12 +25,11 @@ Hardware security key firmware for the CDC Badge v1.0 featuring TROPIC01 secure 
 | **WiFi + NTP** | Time synchronization over WiFi |
 | **E-Paper Display** | 2.9" low-power display with backlight |
 | **12-Button Keypad** | Phone-style T9 input |
-| **Multi-Language** | English and German UI |
-| **Error Log** | Captures WARNING/ERROR messages (max 50 entries) |
+| **Multi-Language** | English and German UI (expandable, translaters welcome) |
 
 > **Note:** WiFi and Bluetooth are currently **mutually exclusive** (enable one at a time).
 
-> **Warning:** WiFi is currently unstable and crashes easily. Need hardware to debug (help wanted).
+> **Warning:** WiFi is currently unstable and crashes easily. Need different hardware to debug (help wanted).
 
 ### Bluetooth Serial (BLE UART)
 
@@ -45,7 +44,7 @@ https://play.google.com/store/apps/details?id=de.kai_morich.serial_bluetooth_ter
 ### BLE vCard (Badge2Badge)
 
 What it does:
-- Broadcasts a short mini-card (name + slogan) via BLE advertising
+- Broadcasts a short mini-card (name + short info) via BLE advertising
 - Exchanges full vCard 4.0 **badge-to-badge only** (custom GATT)
 - Shows a QR code for interoperability with phones/computers (no app required)
 - Stores up to 100 received vCards in NVS (max 768 bytes each), sorted by last name
@@ -55,7 +54,7 @@ See [BLE vCard Protocol](docs/ble_vcard_protocol.md) for technical details.
 Notes:
 - BLE UART is disabled while the vCard feature is active
 - BLE and WiFi are mutually exclusive
-- **Exchange is currently untested**: Only one badge available for testing
+- **Exchange is currently untested** (Only one badge available for testing)
 
 ### Secure Serial
 
@@ -63,8 +62,6 @@ Serial commands require PIN authentication when `FEATURE_SECURE_SERIAL` is enabl
 
 - Use `AUTH <pin>` to authenticate
 - Use `LOGOUT` to end session
-- Anti-bruteforce: 3 attempts, then 5 minute lockout
-- Works on both USB and BLE serial
 
 ### GPG Key Management (v0.5 - Untested)
 

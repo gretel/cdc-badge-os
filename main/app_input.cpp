@@ -2260,11 +2260,11 @@ void handle_key(char key) {
                         }
 #endif
                         ble_badge_init();
-                        ble_badge_set_exchange_enabled(!ble_badge_is_exchange_enabled());
-                        if (ble_badge_is_exchange_enabled()) {
-                            view_toast_show(i18n_str(STR_VCARD_EXCHANGE), 1000);
-                        }
-                        render_current_state(true);
+                        ble_badge_set_exchange_enabled(true);
+                        view_info_screen_init(&g_info_view, i18n_str(STR_VCARD_EXCHANGE),
+                                              i18n_str(STR_VCARD_EXCHANGE_MSG));
+                        g_app_state = APP_STATE_VCARD_EXCHANGE;
+                        render_current_state(false);
                         break;
                     case VCARD_SUB_IDX_LIST:
                         vcard_refresh_list();
@@ -2283,9 +2283,10 @@ void handle_key(char key) {
             }
             break;
 
-        // Exchange mode - currently just a placeholder
+        // Exchange mode - scanning for other badges and advertising own vCard
         case APP_STATE_VCARD_EXCHANGE:
             if (key == 'N') {
+                ble_badge_set_exchange_enabled(false);
                 go_to_vcard_submenu();
             }
             break;

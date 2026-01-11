@@ -72,7 +72,7 @@ void update_lock_screen_data(void) {
     } else {
         strncpy(g_lock_screen.clock, "--:--", sizeof(g_lock_screen.clock));
         if (temp_ok) {
-            snprintf(g_lock_screen.date, sizeof(g_lock_screen.date), "%.1fC", (double)temp_c);
+            snprintf(g_lock_screen.date, sizeof(g_lock_screen.date), "%dC", (int)temp_c);
         } else {
             g_lock_screen.date[0] = '\0';
         }

@@ -209,6 +209,7 @@ static const char* strings_en[] = {
     "TX Power",                     // STR_TX_POWER
     "Receive",                      // STR_VCARD_RECEIVE
     "Exchange",                     // STR_VCARD_EXCHANGE
+    "Scanning...\n[N] Back",        // STR_VCARD_EXCHANGE_MSG
     "Send",                         // STR_VCARD_SEND
     "Show QR",                      // STR_VCARD_SHOW_QR
     "Nearby: %s",                   // STR_VCARD_NEARBY
@@ -449,6 +450,7 @@ static const char* strings_de[] = {
     "Sendeleistung",                // STR_TX_POWER
     "Empfangen",                    // STR_VCARD_RECEIVE
     "Austausch",                    // STR_VCARD_EXCHANGE
+    "Suche...\n[N] Zurueck",        // STR_VCARD_EXCHANGE_MSG
     "Senden",                       // STR_VCARD_SEND
     "QR anzeigen",                  // STR_VCARD_SHOW_QR
     "In der Naehe: %s",             // STR_VCARD_NEARBY
