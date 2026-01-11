@@ -129,12 +129,12 @@ Supported CTAP2 operations:
 | Slot | Purpose |
 |------|---------|
 | 0-28 | FIDO2 Credential Metadata |
+| 29 | GPG Metadata |
 | 30 | PIN Hash (SHA-256) |
 | 31 | Device Config |
 | 32 | CA Metadata |
 | 33-132 | TOTP Accounts (max 100) |
-| 134 | GPG Metadata |
-| 135-511 | Free |
+| 133-511 | Free |
 
 ### NVS (ESP32 Flash)
 
