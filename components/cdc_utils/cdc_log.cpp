@@ -3,7 +3,10 @@
 #include <stdbool.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include "sdkconfig.h"
+#include "esp_timer.h"
+#include "esp_heap_caps.h"
 
 #if CONFIG_TINYUSB_CDC_ENABLED
 #include "tusb.h"
@@ -65,6 +68,126 @@ static void log_ring_add(const char *line) {
 }
 #endif
 
+// ============================================================================
+// Error Log (WARNING and ERROR only)
+// Uses dynamically allocated linked list to avoid pre-allocation
+// ============================================================================
+#if CDC_ERROR_LOG
+
+typedef struct error_log_node {
+    error_log_entry_t entry;
+    struct error_log_node* next;
+} error_log_node_t;
+
+static error_log_node_t* s_error_log_head = nullptr;
+static error_log_node_t* s_error_log_tail = nullptr;
+static size_t s_error_log_count = 0;
+
+static void error_log_add(log_level_t level, const char* message) {
+    if (level != LOG_LEVEL_ERROR && level != LOG_LEVEL_WARN) return;
+    if (!message) return;
+
+    // Allocate new node in PSRAM (with DRAM fallback)
+    error_log_node_t* node = (error_log_node_t*)heap_caps_malloc(
+        sizeof(error_log_node_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!node) {
+        // Fallback to DRAM if PSRAM unavailable
+        node = (error_log_node_t*)malloc(sizeof(error_log_node_t));
+    }
+    if (!node) return;  // Out of memory
+
+    // Fill entry
+    node->entry.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    node->entry.level = level;
+    strncpy(node->entry.message, message, ERROR_LOG_LINE_LEN - 1);
+    node->entry.message[ERROR_LOG_LINE_LEN - 1] = '\0';
+    node->next = nullptr;
+
+    // Add to tail
+    if (s_error_log_tail) {
+        s_error_log_tail->next = node;
+        s_error_log_tail = node;
+    } else {
+        s_error_log_head = node;
+        s_error_log_tail = node;
+    }
+    s_error_log_count++;
+
+    // Remove oldest if over limit
+    while (s_error_log_count > ERROR_LOG_MAX_ENTRIES && s_error_log_head) {
+        error_log_node_t* old = s_error_log_head;
+        s_error_log_head = old->next;
+        if (!s_error_log_head) {
+            s_error_log_tail = nullptr;
+        }
+        heap_caps_free(old);
+        s_error_log_count--;
+    }
+}
+
+#endif // CDC_ERROR_LOG
+
+size_t error_log_get_entries(error_log_entry_t* entries, size_t max_entries) {
+#if CDC_ERROR_LOG
+    if (!entries || max_entries == 0) return 0;
+
+    size_t count = 0;
+    error_log_node_t* node = s_error_log_head;
+    while (node && count < max_entries) {
+        entries[count++] = node->entry;
+        node = node->next;
+    }
+    return count;
+#else
+    (void)entries; (void)max_entries;
+    return 0;
+#endif
+}
+
+size_t error_log_get_count(void) {
+#if CDC_ERROR_LOG
+    return s_error_log_count;
+#else
+    return 0;
+#endif
+}
+
+void error_log_clear(void) {
+#if CDC_ERROR_LOG
+    while (s_error_log_head) {
+        error_log_node_t* old = s_error_log_head;
+        s_error_log_head = old->next;
+        heap_caps_free(old);
+    }
+    s_error_log_tail = nullptr;
+    s_error_log_count = 0;
+#endif
+}
+
+void error_log_dump(void) {
+#if CDC_ERROR_LOG
+    if (s_error_log_count == 0) {
+        console_printf("Error log: (empty)\r\n");
+        return;
+    }
+
+    console_printf("Error log (%zu entries):\r\n", s_error_log_count);
+    error_log_node_t* node = s_error_log_head;
+    while (node) {
+        uint32_t secs = node->entry.timestamp_ms / 1000;
+        uint32_t mins = secs / 60;
+        uint32_t hours = mins / 60;
+        console_printf("[%02lu:%02lu:%02lu][%s] %s\r\n",
+                       hours % 24, mins % 60, secs % 60,
+                       node->entry.level == LOG_LEVEL_ERROR ? "E" : "W",
+                       node->entry.message);
+        node = node->next;
+    }
+#else
+    console_printf("Error log disabled (CDC_ERROR_LOG=0)\r\n");
+#endif
+}
+
 void log_init(void) {
     s_log_level = LOG_LEVEL_DEBUG;
     s_log_backend = LOG_BACKEND_PRINTF;
@@ -87,8 +210,11 @@ log_backend_t log_get_backend(void) {
 }
 
 void log_write_v(log_level_t level, const char* tag, const char* fmt, va_list args) {
+    // Always capture ERROR/WARN to error log, even if suppressed
+    bool capture_error = (level == LOG_LEVEL_ERROR || level == LOG_LEVEL_WARN);
+
     if (level > s_log_level || s_log_backend == LOG_BACKEND_NONE) {
-        return;
+        if (!capture_error) return;
     }
 
     char buf[256];
@@ -111,10 +237,22 @@ void log_write_v(log_level_t level, const char* tag, const char* fmt, va_list ar
     } else {
         line[sizeof(line) - 1] = '\0';
     }
+
+#if CDC_ERROR_LOG
+    // Capture ERROR and WARNING to error log
+    if (capture_error) {
+        error_log_add(level, line);
+    }
+#endif
+
 #if CDC_LOG_RING_BUFFER
     log_ring_add(line);
 #endif
-    console_printf("%s\n", line);
+
+    // Only output if not suppressed
+    if (level <= s_log_level && s_log_backend != LOG_BACKEND_NONE) {
+        console_printf("%s\n", line);
+    }
 }
 
 void log_write(log_level_t level, const char* tag, const char* fmt, ...) {

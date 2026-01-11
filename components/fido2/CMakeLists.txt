@@ -1,4 +1,4 @@
-# Check if FIDO2 is enabled (USB transport only now, BLE was for FIDO2 BLE which is deprecated)
+# Check if FIDO2 is enabled (USB transport only)
 set(FEATURE_FIDO2_USB 0)
 
 # Read feature flags from header

@@ -5,9 +5,13 @@
 #include "cdc_time.h"
 #include "i18n.h"
 #include "power_management.h"
+#include "temp_sensor.h"
 
 #if FEATURE_BLE_UART
 #include "ble_uart.h"
+#endif
+#if FEATURE_BLE_BADGE
+#include "ble_badge.h"
 #endif
 
 #include <cstdio>
@@ -42,17 +46,36 @@ void update_lock_screen_data(void) {
         g_lock_screen.status_icons |= ICON_BLE;
     }
 #endif
+#if FEATURE_BLE_BADGE
+    if (ble_badge_is_adv_active() || ble_badge_is_scan_active() ||
+        ble_badge_is_exchange_enabled() || ble_badge_exchange_in_progress()) {
+        g_lock_screen.status_icons |= ICON_BLE;
+    }
+#endif
+
+    float temp_c = 0.0f;
+    bool temp_ok = temp_sensor_get_celsius(&temp_c);
 
     if (cdc_rtc_is_time_set()) {
         cdc_rtc_get_time_str(g_lock_screen.clock, sizeof(g_lock_screen.clock));
         // Compact date format DD.MM
         struct tm timeinfo;
         cdc_rtc_get_time(&timeinfo);
-        snprintf(g_lock_screen.date, sizeof(g_lock_screen.date), "%02u.%02u",
-                 (unsigned)(timeinfo.tm_mday & 0xFF), (unsigned)((timeinfo.tm_mon + 1) & 0xFF));
+        if (temp_ok) {
+            snprintf(g_lock_screen.date, sizeof(g_lock_screen.date), "%02u.%02u %.1fC",
+                     (unsigned)(timeinfo.tm_mday & 0xFF), (unsigned)((timeinfo.tm_mon + 1) & 0xFF),
+                     (double)temp_c);
+        } else {
+            snprintf(g_lock_screen.date, sizeof(g_lock_screen.date), "%02u.%02u",
+                     (unsigned)(timeinfo.tm_mday & 0xFF), (unsigned)((timeinfo.tm_mon + 1) & 0xFF));
+        }
     } else {
         strncpy(g_lock_screen.clock, "--:--", sizeof(g_lock_screen.clock));
-        g_lock_screen.date[0] = '\0';
+        if (temp_ok) {
+            snprintf(g_lock_screen.date, sizeof(g_lock_screen.date), "%.1fC", (double)temp_c);
+        } else {
+            g_lock_screen.date[0] = '\0';
+        }
     }
 }
 
@@ -198,7 +221,7 @@ void render_current_state(bool partial) {
             if (view_context_menu_is_visible(&g_wifi_context_menu)) {
                 view_context_menu_render(&g_wifi_context_menu);
             } else {
-                view_list_screen_render(&g_wifi_list, partial);
+                view_wifi_list_render(&g_wifi_list, partial);
             }
             break;
 
@@ -245,6 +268,88 @@ void render_current_state(bool partial) {
             view_list_screen_render(&g_tools_wifi_menu, partial);
             break;
 
+#if FEATURE_BLE_BADGE
+        case APP_STATE_REMOTE_BADGE_MENU:
+            view_list_screen_render(&g_remote_badge_menu, partial);
+            break;
+
+        case APP_STATE_VCARD_SUBMENU:
+            view_list_screen_render(&g_vcard_submenu, partial);
+            break;
+
+        case APP_STATE_BROADCAST_SUBMENU:
+            view_list_screen_render(&g_broadcast_submenu, partial);
+            break;
+
+        case APP_STATE_BROADCAST_SETTINGS:
+            view_list_screen_render(&g_broadcast_settings_menu, partial);
+            break;
+
+        case APP_STATE_VCARD_EXCHANGE:
+            // Exchange mode - currently just an info screen
+            view_info_screen_render(&g_info_view, partial);
+            break;
+
+        case APP_STATE_VCARD_ADD_FIRST:
+        case APP_STATE_VCARD_ADD_LAST:
+        case APP_STATE_VCARD_ADD_NOTE:
+        case APP_STATE_VCARD_FIELD_VALUE:
+            view_t9_input_render(&g_t9_input, partial);
+            break;
+
+        case APP_STATE_VCARD_ADV_INTERVAL:
+        case APP_STATE_VCARD_SCAN_INTERVAL:
+            view_slider_render(&g_slider, partial);
+            break;
+
+        case APP_STATE_VCARD_FIELD_MENU:
+            view_list_screen_render(&g_vcard_field_menu, partial);
+            break;
+
+        case APP_STATE_VCARD_PHONE_TYPE:
+            view_list_screen_render(&g_phone_type_menu, partial);
+            break;
+
+        case APP_STATE_VCARD_IMPP_TYPE:
+            view_list_screen_render(&g_impp_type_menu, partial);
+            break;
+
+        case APP_STATE_VCARD_ADDRESS_TYPE:
+            view_list_screen_render(&g_address_type_menu, partial);
+            break;
+
+        case APP_STATE_VCARD_LIST:
+            view_list_screen_render(&g_vcard_list, partial);
+            break;
+
+        case APP_STATE_VCARD_NEARBY_LIST:
+            view_list_screen_render(&g_vcard_nearby_list, partial);
+            break;
+
+        case APP_STATE_VCARD_SEND_PROGRESS:
+        case APP_STATE_VCARD_NEARBY_ALERT:
+        case APP_STATE_BLE_PAIRING_CONFIRM:
+        case APP_STATE_BLE_PAIRING_DISPLAY:
+            view_info_screen_render(&g_info_view, partial);
+            break;
+
+        case APP_STATE_BLE_PAIRING_PASSKEY:
+            view_pin_entry_render(&g_pin_entry, partial);
+            break;
+
+        case APP_STATE_VCARD_CONTEXT_MENU:
+            view_context_menu_render(&g_vcard_context_menu);
+            break;
+
+        case APP_STATE_VCARD_VIEW:
+            view_info_screen_render(&g_info_view, partial);
+            break;
+
+        case APP_STATE_VCARD_QR:
+            view_qr_code_render(&g_qr_view, partial);
+            break;
+#endif
+
 #if FEATURE_CA
         case APP_STATE_CA_MENU:
             view_list_screen_render(&g_ca_menu, partial);
@@ -275,5 +380,6 @@ void render_current_state(bool partial) {
             view_list_screen_render(&g_ca_validity_menu, partial);
             break;
 #endif
+
     }
 }

@@ -84,10 +84,64 @@ enum {
 #define EP_CDC_SIZE         64
 #define EP_FIDO_SIZE        64    // CTAPHID packets are 64 bytes
 #define EP_KEYBOARD_SIZE    8     // Keyboard reports are 8 bytes
+#define EP_CCID_SIZE        64    // CCID SmartCard packets
 
 // HID Report ID
 #define REPORT_ID_KEYBOARD  1     // Keyboard uses Report ID 1
 // FIDO: No Report ID per CTAPHID spec
+
+// ============================================================================
+// CCID SmartCard Interface (conditional)
+// Uses TinyUSB Vendor Class with custom CCID driver
+// ============================================================================
+
+#if FEATURE_GPG_CCID
+
+// CCID Interface - calculate based on what's enabled
+// Interface order: CDC(0,1), FIDO(2), Keyboard(3), CCID(4)
+#if FEATURE_USB_KEYBOARD && FEATURE_FIDO2
+#define ITF_CCID          4                         // After CDC(2) + FIDO(1) + Keyboard(1)
+#elif FEATURE_USB_KEYBOARD
+#define ITF_CCID          3                         // After CDC(2) + Keyboard(1)
+#elif FEATURE_FIDO2
+#define ITF_CCID          3                         // After CDC(2) + FIDO(1)
+#else
+#define ITF_CCID          2                         // After CDC(2) only
+#endif
+
+// Override ITF_COUNT to include CCID
+#undef ITF_COUNT
+#define ITF_COUNT         (ITF_CCID + 1)
+
+// CCID Endpoints - use next available
+#if FEATURE_USB_KEYBOARD && FEATURE_FIDO2
+#define EP_CCID_OUT       0x05                      // After FIDO(0x03/0x83) + Keyboard(0x84)
+#define EP_CCID_IN        0x85
+#elif FEATURE_USB_KEYBOARD
+#define EP_CCID_OUT       0x04                      // After Keyboard(0x83)
+#define EP_CCID_IN        0x84
+#elif FEATURE_FIDO2
+#define EP_CCID_OUT       0x04                      // After FIDO (0x03/0x83)
+#define EP_CCID_IN        0x84
+#else
+#define EP_CCID_OUT       0x03                      // After CDC
+#define EP_CCID_IN        0x83
+#endif
+
+// CCID String Index - calculate based on what's enabled
+// String order: LANG(0), MANUF(1), PROD(2), SERIAL(3), CDC(4), [FIDO(5)], [KB(6)], [CCID]
+#if FEATURE_FIDO2 && FEATURE_USB_KEYBOARD
+#define STR_CCID          7
+#elif FEATURE_FIDO2 || FEATURE_USB_KEYBOARD
+#define STR_CCID          6
+#else
+#define STR_CCID          5
+#endif
+
+#undef STR_COUNT
+#define STR_COUNT         (STR_CCID + 1)
+
+#endif // FEATURE_GPG_CCID
 
 // ============================================================================
 // HID Instance Numbers (for tud_hid_n_* functions)

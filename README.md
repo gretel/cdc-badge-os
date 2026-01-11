@@ -12,17 +12,23 @@ Hardware security key firmware for the CDC Badge v1.0 featuring TROPIC01 secure 
 |---------|-------------|
 | **FIDO2/WebAuthn** | Passwordless authentication (USB HID) - Chrome, Firefox, Edge |
 | **SSH Hardware Keys** | Native SSH via ed25519-sk (OpenSSH 8.2+, no driver needed) |
-| **Certificate Authority** | On-device CA with CSR signing, root import/export |
+| **Certificate Authority** | On-device CA with CSR signing, root import/export (v0.5, untested) |
+| **GPG Key Management** | GPG key storage via TROPIC01, USB CCID SmartCard (v0.5, untested) |
 | **U2F** | Legacy two-factor authentication |
 | **TOTP Authenticator** | Time-based one-time passwords (100 accounts, Google Authenticator compatible) |
 | **USB Keyboard** | Auto-type TOTP codes via HID |
 | **BLE UART** | Wireless serial console via Bluetooth (Nordic UART Service) |
+| **BLE vCard (Badge2Badge)** | Broadcast mini-card + vCard exchange + QR export |
+| **Secure Serial** | PIN authentication for sensitive serial commands with anti-bruteforce |
 | **WiFi + NTP** | Time synchronization over WiFi |
 | **E-Paper Display** | 2.9" low-power display with backlight |
 | **12-Button Keypad** | Phone-style T9 input |
 | **Multi-Language** | English and German UI |
+| **Error Log** | Captures WARNING/ERROR messages (max 50 entries) |
 
 > **Note:** WiFi and Bluetooth are currently **mutually exclusive** (enable one at a time).
+
+> **Warning:** WiFi is currently unstable and crashes easily. Need hardware to debug (help wanted).
 
 ### Bluetooth Serial (BLE UART)
 
@@ -33,6 +39,55 @@ Google Play:
 ```
 https://play.google.com/store/apps/details?id=de.kai_morich.serial_bluetooth_terminal
 ```
+
+### BLE vCard (Badge2Badge)
+
+What it does:
+- Broadcasts a short mini-card (name + slogan) via BLE advertising
+- Exchanges full vCard 4.0 **badge-to-badge only** (custom GATT)
+- Shows a QR code for interoperability with phones/computers (no app required)
+- Stores up to 100 received vCards in NVS (max 768 bytes each), sorted by last name
+- On-device vCard editor with field type submenus:
+  - Phone types: Landline, Mobile, Business, Pager
+  - Messenger: Telegram, Signal, WhatsApp, Discord, Matrix, Threema, Other
+  - Address types: Home, Work
+
+Serial commands:
+- `VCARD_SET` - Multi-line vCard import (finish with `---`)
+- `VCARD_GET` - Export vCard (returns template if empty)
+- `VCARD_DELETE` - Delete own vCard
+
+Notes:
+- BLE UART is disabled while the vCard feature is active
+- BLE and WiFi are mutually exclusive
+- **Exchange is currently untested**: Only one badge available for testing
+
+### Secure Serial
+
+Serial commands require PIN authentication when `FEATURE_SECURE_SERIAL` is enabled.
+
+- Use `AUTH <pin>` to authenticate
+- Use `LOGOUT` to end session
+- Anti-bruteforce: 3 attempts, then 5 minute lockout
+- Works on both USB and BLE serial
+
+### GPG Key Management (v0.5 - Untested)
+
+> **Warning:** This feature is planned for v0.5 and completely untested.
+
+GPG key storage using TROPIC01 secure element with USB CCID SmartCard interface.
+
+Enable in `feature_flags.h`:
+```c
+#define FEATURE_GPG 1       // GPG key storage
+#define FEATURE_GPG_CCID 0  // USB CCID (disabled by default)
+```
+
+### Certificate Authority (v0.5 - Untested)
+
+> **Warning:** This feature is planned for v0.5 and completely untested.
+
+On-device CA for signing CSRs and managing certificates.
 
 ## Security Architecture
 
@@ -193,12 +248,20 @@ Status bar icons: Lock, Deep Sleep, Light Sleep, Backlight, USB, BLE, WiFi
 
 Connect at 115200 baud via USB CDC.
 
+### Authentication (when FEATURE_SECURE_SERIAL enabled)
+| Command | Description |
+|---------|-------------|
+| `AUTH <pin>` | Authenticate with PIN |
+| `LOGOUT` | End authenticated session |
+
 ### System
 | Command | Description |
 |---------|-------------|
 | `HELP` | Show all commands |
 | `PING` | Connection test (returns PONG) |
 | `STATUS` | Badge status overview |
+| `ERROR_LOG` | Show captured errors (max 50) |
+| `ERROR_LOG_CLEAR` | Clear error log |
 
 ### Time
 | Command | Description |
@@ -233,6 +296,13 @@ Connect at 115200 baud via USB CDC.
 | `FIDO_DEL <index>` | Delete credential |
 | `FIDO_RESET` | Factory reset (requires CONFIRM) |
 
+### vCard
+| Command | Description |
+|---------|-------------|
+| `VCARD_SET` | Import vCard (multi-line, end with `---`) |
+| `VCARD_GET` | Export vCard (template if empty) |
+| `VCARD_DELETE` | Delete own vCard |
+
 ### TROPIC01
 | Command | Description |
 |---------|-------------|
@@ -245,7 +315,7 @@ Connect at 115200 baud via USB CDC.
 | `TR01_RMEM_DEL <slot>` | Delete R-memory slot |
 | `TR01_WIPE` | Factory reset all user data (requires CONFIRM) |
 
-### CA (Certificate Authority)
+### CA (Certificate Authority) - v0.5, untested
 | Command | Description |
 |---------|-------------|
 | `CA_STATUS` | CA status (CN, validity, issued count) |

@@ -313,8 +313,13 @@ bool tropic01_rmem_read(uint16_t slot, uint8_t *data, uint16_t max_size, uint16_
     lt_ret_t ret = lt_r_mem_data_read(&tr01_handle, slot, data, max_size, &bytes_read);
 
     if (ret != LT_OK) {
-        LOG_E("TR01", "R-Memory read failed slot=%d (%s)", slot, lt_ret_verbose(ret));
-        handle_session_error(ret);
+        // SLOT_EMPTY is not an error - it just means the slot has no data
+        if (ret == LT_L3_R_MEM_DATA_READ_SLOT_EMPTY) {
+            LOG_D("TR01", "R-Memory slot=%d is empty", slot);
+        } else {
+            LOG_E("TR01", "R-Memory read failed slot=%d (%s)", slot, lt_ret_verbose(ret));
+            handle_session_error(ret);
+        }
         return false;
     }
 
@@ -622,6 +627,40 @@ bool tropic01_get_random(uint8_t *buffer, uint16_t size) {
 
     LOG_D("TR01", "Random get OK size=%d", size);
     return true;
+}
+
+// ============================================================================
+// Secure Random (TROPIC01 TRNG with ESP32 fallback)
+// ============================================================================
+
+#include "esp_random.h"
+
+bool secure_random(uint8_t *buffer, uint16_t size) {
+    if (!buffer || size == 0) return false;
+
+    // Try TROPIC01 TRNG first (hardware secure random)
+    if (tropic01_get_random(buffer, size)) {
+        return true;  // TROPIC01 was used
+    }
+
+    // Fallback to ESP32 RNG (still hardware-based, but less secure)
+    LOG_W("TR01", "TRNG unavailable, using ESP32 RNG fallback");
+    for (uint16_t i = 0; i < size; i++) {
+        buffer[i] = (uint8_t)(esp_random() & 0xFF);
+    }
+    return false;  // ESP32 fallback was used
+}
+
+void secure_random_fill(uint8_t *buffer, size_t size) {
+    if (!buffer || size == 0) return;
+
+    // Try in chunks of max 255 bytes (TROPIC01 limit)
+    size_t offset = 0;
+    while (offset < size) {
+        uint16_t chunk = (size - offset > 255) ? 255 : (uint16_t)(size - offset);
+        secure_random(buffer + offset, chunk);
+        offset += chunk;
+    }
 }
 
 // ============================================================================

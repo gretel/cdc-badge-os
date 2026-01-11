@@ -46,4 +46,12 @@ namespace usb_keyboard {
     bool type_enter(void);          // Press Enter key
 }
 
+// CCID SmartCard Interface (OpenPGP)
+// Returns false when USB not available or FEATURE_GPG_CCID disabled
+namespace usb_ccid {
+    bool init(void);                // Initialize CCID/OpenPGP
+    bool ready(void);               // Check if CCID ready
+    void task(void);                // Process CCID messages (call from main loop)
+}
+
 #endif // __cplusplus

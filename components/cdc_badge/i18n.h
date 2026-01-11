@@ -159,6 +159,71 @@ typedef enum {
     STR_CA_ENTER_STATE,     // "State/Province (ST)"
     STR_CA_VALIDITY_YEARS,  // "Validity (Years)"
 
+    // Remote Badge / BLE Badge
+    STR_BLUETOOTH,          // "Bluetooth"
+    STR_REMOTE_BADGE,       // "Remote Badge" (Main menu entry)
+    STR_VCARDS,             // "vCards" (Submenu)
+    STR_VCARD_ADD,          // "Add"
+    STR_VCARD_LIST,         // "Cards"
+    STR_VCARD_BROADCAST,    // "Broadcast" (Submenu)
+    STR_VCARD_SCAN,         // "Scan"
+    STR_BROADCAST_SETTINGS, // "Settings" (Submenu)
+    STR_BEACON_SEND,        // "Beacon Send"
+    STR_BEACON_RECEIVE,     // "Beacon Receive"
+    STR_VCARD_ADV_INTERVAL, // "Send Interval"
+    STR_VCARD_SCAN_INTERVAL,// "Scan Interval"
+    STR_TX_POWER,           // "TX Power"
+    STR_VCARD_RECEIVE,      // "Receive"
+    STR_VCARD_EXCHANGE,     // "Exchange"
+    STR_VCARD_SEND,         // "Send"
+    STR_VCARD_SHOW_QR,      // "Show QR"
+    STR_VCARD_NEARBY,       // "Nearby: %s"
+    STR_VCARD_NEARBY_TITLE, // "Nearby"
+    STR_VCARD_SENDING,      // "Sending vCard..."
+    STR_VCARD_SEND_SUCCESS, // "Transfer complete"
+    STR_VCARD_SEND_FAILED,  // "Transfer failed"
+    STR_VCARD_ENABLE_EXCHANGE, // "Enable exchange mode"
+    STR_VCARD_NEARBY_LIST,  // "Nearby Badges"
+    STR_NO_BADGES,          // "No badges"
+    STR_VCARD_QR,           // "QR vCard"
+    STR_ON,                 // "On"
+    STR_OFF,                // "Off"
+    STR_VIEW,               // "View"
+    STR_NO_VCARDS,          // "No vCards"
+    STR_MY_VCARD,           // "My vCard"
+    STR_FIRST_NAME,         // "First name"
+    STR_LAST_NAME,          // "Last name"
+    STR_DESCRIPTION,        // "Description"
+    STR_PHONE,              // "Phone" (category)
+    STR_PHONE_LANDLINE,     // "Landline"
+    STR_PHONE_MOBILE,       // "Mobile"
+    STR_PHONE_BUSINESS,     // "Business"
+    STR_PHONE_PAGER,        // "Pager"
+    STR_EMAIL,              // "Email"
+    STR_URL,                // "URL"
+    STR_ORG,                // "Organization"
+    STR_TITLE,              // "Title"
+    STR_SOCIAL,             // "Social"
+    STR_IMPP,               // "Messenger" (category)
+    STR_IMPP_TELEGRAM,      // "Telegram"
+    STR_IMPP_SIGNAL,        // "Signal"
+    STR_IMPP_WHATSAPP,      // "WhatsApp"
+    STR_IMPP_DISCORD,       // "Discord"
+    STR_IMPP_MATRIX,        // "Matrix"
+    STR_IMPP_THREEMA,       // "Threema"
+    STR_IMPP_OTHER,         // "Other"
+    STR_ADDRESS,            // "Address" (category)
+    STR_ADDRESS_HOME,       // "Home"
+    STR_ADDRESS_WORK,       // "Work"
+    STR_SAVE,               // "Save"
+    STR_PAIRING,            // "Pairing"
+    STR_PAIRING_CONFIRM,    // "Confirm code: %06lu"
+    STR_PAIRING_DISPLAY,    // "Enter on other device: %06lu"
+    STR_PAIRING_PIN,        // "Enter Passkey"
+    STR_PAIRING_PIN_MSG,    // "Enter code from other device"
+
+    STR_VCARD_TOO_BIG,      // "vCard too big"
+
     STR_COUNT
 } string_id_t;
 

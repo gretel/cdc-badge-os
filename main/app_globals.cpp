@@ -40,20 +40,20 @@ totp_wizard_t g_totp_wizard;
 // TOTP add wizard selection views
 view_list_screen_t g_totp_digits_menu;
 view_list_item_t g_totp_digits_items[] = {
-    {"6 Digits"},
-    {"4 Digits"},
-    {"8 Digits"}
+    {"6 Digits", VIEW_LIST_ICON_NONE, false},
+    {"4 Digits", VIEW_LIST_ICON_NONE, false},
+    {"8 Digits", VIEW_LIST_ICON_NONE, false}
 };
 view_list_screen_t g_totp_period_menu;
 view_list_item_t g_totp_period_items[] = {
-    {"30 Seconds"},
-    {"60 Seconds"}
+    {"30 Seconds", VIEW_LIST_ICON_NONE, false},
+    {"60 Seconds", VIEW_LIST_ICON_NONE, false}
 };
 view_list_screen_t g_totp_algo_menu;
 view_list_item_t g_totp_algo_items[] = {
-    {"SHA-1"},
-    {"SHA-256"},
-    {"SHA-512"}
+    {"SHA-1", VIEW_LIST_ICON_NONE, false},
+    {"SHA-256", VIEW_LIST_ICON_NONE, false},
+    {"SHA-512", VIEW_LIST_ICON_NONE, false}
 };
 #endif
 
@@ -79,8 +79,7 @@ bool g_fido_was_locked = false;
 #endif
 
 // WiFi state and views
-view_list_screen_t g_wifi_list;
-view_list_item_t g_wifi_items[WIFI_MAX_NETWORKS + 1];  // +1 for "Add Manual"
+view_wifi_list_t g_wifi_list;
 uint8_t g_wifi_selected_index = 0;
 view_context_menu_t g_wifi_context_menu;
 const view_context_item_t g_wifi_context_items[] = {
@@ -95,12 +94,12 @@ wifi_wizard_t g_wifi_wizard;
 // WiFi auth mode selection
 view_list_screen_t g_wifi_auth_menu;
 view_list_item_t g_wifi_auth_items[] = {
-    {"WPA2 Personal"},
-    {"WPA/WPA2"},
-    {"WPA3 Personal"},
-    {"WPA Personal"},
-    {"Open"},
-    {"WEP"}
+    {"WPA2 Personal", VIEW_LIST_ICON_NONE, false},
+    {"WPA/WPA2", VIEW_LIST_ICON_NONE, false},
+    {"WPA3 Personal", VIEW_LIST_ICON_NONE, false},
+    {"WPA Personal", VIEW_LIST_ICON_NONE, false},
+    {"Open", VIEW_LIST_ICON_NONE, false},
+    {"WEP", VIEW_LIST_ICON_NONE, false}
 };
 
 // WiFi IP mode selection
@@ -109,11 +108,52 @@ view_list_item_t g_wifi_ip_items[2];
 
 // Tools menu
 view_list_screen_t g_tools_menu;
-view_list_item_t g_tools_items[2];
+view_list_item_t g_tools_items[5];
+uint8_t g_tools_item_count = 0;
 
 // Tools WiFi submenu
 view_list_screen_t g_tools_wifi_menu;
 view_list_item_t g_tools_wifi_items[4];  // Connect, Setup, Details, Disconnect
+
+#if FEATURE_BLE_BADGE
+// Remote Badge menus
+view_list_screen_t g_remote_badge_menu;
+view_list_item_t g_remote_badge_items[REMOTE_BADGE_IDX_COUNT];
+// vCards submenu
+view_list_screen_t g_vcard_submenu;
+view_list_item_t g_vcard_submenu_items[VCARD_SUB_IDX_COUNT];
+// Broadcast submenu
+view_list_screen_t g_broadcast_submenu;
+view_list_item_t g_broadcast_submenu_items[BROADCAST_SUB_IDX_COUNT];
+// Settings submenu
+view_list_screen_t g_broadcast_settings_menu;
+view_list_item_t g_broadcast_settings_items[SETTINGS_SUB_IDX_COUNT];
+// vCard list and state
+view_list_screen_t g_vcard_list;
+view_list_item_t g_vcard_list_items[100];
+view_context_menu_t g_vcard_context_menu;
+view_context_item_t g_vcard_context_items[3];
+view_list_screen_t g_vcard_field_menu;
+view_list_item_t g_vcard_field_items[12];  // Field categories + Save
+// Phone type submenu
+view_list_screen_t g_phone_type_menu;
+view_list_item_t g_phone_type_items[PHONE_TYPE_IDX_COUNT];
+// IMPP type submenu
+view_list_screen_t g_impp_type_menu;
+view_list_item_t g_impp_type_items[IMPP_TYPE_IDX_COUNT];
+// Address type submenu
+view_list_screen_t g_address_type_menu;
+view_list_item_t g_address_type_items[ADDRESS_TYPE_IDX_COUNT];
+view_list_screen_t g_vcard_nearby_list;
+view_list_item_t g_vcard_nearby_items[16];
+ble_badge_peer_t g_vcard_nearby_peers[16];
+uint16_t g_vcard_nearby_count = 0;
+vcard_editor_t g_vcard_editor = {};
+app_state_t g_vcard_nearby_return_state = APP_STATE_LOCK_SCREEN;
+uint32_t g_vcard_nearby_alert_until = 0;
+app_state_t g_ble_pairing_return_state = APP_STATE_LOCK_SCREEN;
+uint32_t g_ble_pairing_passkey = 0;
+#endif
 
 // WiFi connection timing
 uint32_t g_wifi_connect_start = 0;
@@ -191,11 +231,11 @@ char g_ca_detail_text[512];
 ca_wizard_t g_ca_wizard;
 view_list_screen_t g_ca_validity_menu;
 view_list_item_t g_ca_validity_items[] = {
-    {"1 Year"},
-    {"5 Years"},
-    {"10 Years"},
-    {"15 Years"},
-    {"20 Years"},
-    {"25 Years"}
+    {"1 Year", VIEW_LIST_ICON_NONE, false},
+    {"5 Years", VIEW_LIST_ICON_NONE, false},
+    {"10 Years", VIEW_LIST_ICON_NONE, false},
+    {"15 Years", VIEW_LIST_ICON_NONE, false},
+    {"20 Years", VIEW_LIST_ICON_NONE, false},
+    {"25 Years", VIEW_LIST_ICON_NONE, false}
 };
 #endif

@@ -3,6 +3,7 @@
 //   System: HELP, PING, STATUS
 //   Time: SET_TIME, SET_DATE, GET_TIME, GET_DATE
 //   Display: SET_NAME, SET_INFO, SET_INFO2
+//   vCard: VCARD_SET, VCARD_GET
 //   TOTP: TOTP_LIST, TOTP_ADD, TOTP_DEL, TOTP_GET, TOTP_TYPE
 //   FIDO2: FIDO_STATUS, FIDO_LIST, FIDO_DEL, FIDO_RESET
 //   TROPIC01: TR01_STATUS, TR01_SLOTS
@@ -30,6 +31,13 @@
 
 #if FEATURE_CA
 #include "ca.h"
+#endif
+
+#if FEATURE_GPG
+#include "gpg.h"
+#endif
+#if FEATURE_BLE_BADGE
+#include "vcard_store.h"
 #endif
 
 #include <stdlib.h>
@@ -61,10 +69,19 @@ static bool is_serial_authenticated(void) {
     int64_t now = esp_timer_get_time() / 1000;  // Convert to ms
     if ((now - g_serial_auth_time) > SERIAL_AUTH_TIMEOUT_MS) {
         g_serial_authenticated = false;
+        g_serial_auth_time = 0;
         LOG_I("CMD", "Serial auth timeout");
+        console_printf("INFO: Session expired (5min timeout)\r\n");
         return false;
     }
     return true;
+}
+
+// Reset auth timeout on activity
+static void serial_auth_activity(void) {
+    if (g_serial_authenticated) {
+        g_serial_auth_time = esp_timer_get_time() / 1000;
+    }
 }
 
 static void serial_auth_success(void) {
@@ -114,6 +131,10 @@ static void show_help(void) {
 #if CDC_LOG_RING_BUFFER
     console_printf("  LOG_TAIL [n]         - Show last N log lines (max 100)\r\n");
 #endif
+#if CDC_ERROR_LOG
+    console_printf("  ERROR_LOG            - Show error/warning log\r\n");
+    console_printf("  ERROR_LOG_CLEAR      - Clear error log\r\n");
+#endif
     console_printf("\r\n");
 
     console_printf("Time:\r\n");
@@ -141,6 +162,20 @@ static void show_help(void) {
     console_printf("  SET_INFO2 text       - Set info2 line\r\n");
 #endif
     console_printf("\r\n");
+
+#if FEATURE_BLE_BADGE
+    console_printf("vCard:\r\n");
+  #if FEATURE_SECURE_SERIAL
+    console_printf("  VCARD_SET            - Set own vCard (auth req.)\r\n");
+    console_printf("  VCARD_GET            - Print own vCard (auth req.)\r\n");
+    console_printf("  VCARD_DELETE         - Delete own vCard (auth req.)\r\n");
+  #else
+    console_printf("  VCARD_SET            - Set own vCard\r\n");
+    console_printf("  VCARD_GET            - Print own vCard\r\n");
+    console_printf("  VCARD_DELETE         - Delete own vCard\r\n");
+  #endif
+    console_printf("\r\n");
+#endif
 
 #if FEATURE_TOTP
     console_printf("TOTP:\r\n");
@@ -211,6 +246,27 @@ static void show_help(void) {
     console_printf("\r\n");
 #endif
 
+#if FEATURE_GPG
+    console_printf("GPG:\r\n");
+    console_printf("  GPG_STATUS           - GPG key status\r\n");
+#if FEATURE_SECURE_SERIAL
+    console_printf("  GPG_SET_UID <uid>    - Set user ID FIRST! (auth req.)\r\n");
+    console_printf("  GPG_GENERATE [curve] - Generate key (auth req.) [ed25519|p256]\r\n");
+    console_printf("  GPG_IMPORT           - Import PEM key (auth req.)\r\n");
+    console_printf("  GPG_SIGN <hash>      - Sign SHA-256 hash (auth req.)\r\n");
+    console_printf("  GPG_RESET            - Delete GPG key (auth req.)\r\n");
+#else
+    console_printf("  GPG_SET_UID <uid>    - Set user ID FIRST!\r\n");
+    console_printf("  GPG_GENERATE [curve] - Generate key [ed25519|p256]\r\n");
+    console_printf("  GPG_IMPORT           - Import PEM key (P-256 only)\r\n");
+    console_printf("  GPG_SIGN <hash>      - Sign SHA-256 hash (hex)\r\n");
+    console_printf("  GPG_RESET            - Delete GPG key\r\n");
+#endif
+    console_printf("  GPG_EXPORT_PUB       - Export public key (PEM)\r\n");
+    console_printf("  Note: Supported curves: Ed25519, P-256 (NO RSA!)\r\n");
+    console_printf("\r\n");
+#endif
+
     console_flush();
 }
 
@@ -219,7 +275,38 @@ static void show_help(void) {
 // ============================================================================
 
 #if FEATURE_SECURE_SERIAL
+#define SERIAL_AUTH_MAX_ATTEMPTS 3
+#define SERIAL_AUTH_LOCKOUT_MS (5 * 60 * 1000)  // 5 minutes
+
+static uint8_t g_serial_auth_attempts = 0;
+static uint32_t g_serial_lockout_until = 0;
+
+static bool serial_is_locked(void) {
+    if (g_serial_lockout_until == 0) return false;
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (now >= g_serial_lockout_until) {
+        g_serial_lockout_until = 0;
+        g_serial_auth_attempts = 0;
+        return false;
+    }
+    return true;
+}
+
+static uint32_t serial_lockout_remaining_sec(void) {
+    if (g_serial_lockout_until == 0) return 0;
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (now >= g_serial_lockout_until) return 0;
+    return (g_serial_lockout_until - now) / 1000;
+}
+
 static void cmd_auth(char *args) {
+    // Check lockout first
+    if (serial_is_locked()) {
+        console_printf("ERROR: Serial locked, %lu sec remaining\r\n",
+                       (unsigned long)serial_lockout_remaining_sec());
+        return;
+    }
+
     char *pin = trim(args);
     if (strlen(pin) == 0) {
         console_printf("ERROR: Usage: AUTH <pin>\r\n");
@@ -227,10 +314,18 @@ static void cmd_auth(char *args) {
     }
 
     if (pin_storage_verify(pin)) {
+        g_serial_auth_attempts = 0;
         serial_auth_success();
         console_printf("OK: Authenticated (timeout: 5min)\r\n");
     } else {
-        console_printf("ERROR: Invalid PIN\r\n");
+        g_serial_auth_attempts++;
+        if (g_serial_auth_attempts >= SERIAL_AUTH_MAX_ATTEMPTS) {
+            g_serial_lockout_until = (uint32_t)(esp_timer_get_time() / 1000) + SERIAL_AUTH_LOCKOUT_MS;
+            console_printf("ERROR: Serial locked, 5min timeout\r\n");
+        } else {
+            console_printf("ERROR: Invalid PIN (%d/%d attempts)\r\n",
+                           g_serial_auth_attempts, SERIAL_AUTH_MAX_ATTEMPTS);
+        }
     }
 }
 
@@ -242,7 +337,7 @@ static void cmd_logout(void) {
 // Check if command requires authentication
 // Returns true if auth required and NOT authenticated
 static bool check_auth_required(const char *cmd) {
-    // Always allowed commands (no auth required)
+    // Always allowed commands (no auth required, even during lockout)
     if (strcasecmp(cmd, "HELP") == 0) return false;
     if (strcasecmp(cmd, "PING") == 0) return false;
     if (strcasecmp(cmd, "STATUS") == 0) return false;
@@ -255,7 +350,7 @@ static bool check_auth_required(const char *cmd) {
     if (strcasecmp(cmd, "TR01_SESSION") == 0) return false;
     if (strcasecmp(cmd, "TR01_SLOTS") == 0) return false;
     if (strcasecmp(cmd, "TR01_RESYNC") == 0) return false;
-    if (strncasecmp(cmd, "AUTH ", 5) == 0) return false;
+    if (strncasecmp(cmd, "AUTH ", 5) == 0) return false;  // AUTH handles lockout itself
     if (strcasecmp(cmd, "LOGOUT") == 0) return false;
 #if FEATURE_TOTP
     if (strcasecmp(cmd, "TOTP_LIST") == 0) return false;
@@ -265,6 +360,11 @@ static bool check_auth_required(const char *cmd) {
     if (strcasecmp(cmd, "FIDO_STATUS") == 0) return false;
     if (strcasecmp(cmd, "FIDO_LIST") == 0) return false;
 #endif
+
+    // During lockout, reject ALL protected commands
+    if (serial_is_locked()) {
+        return true;  // Auth required = blocked
+    }
 
     // All other commands require auth
     return !is_serial_authenticated();
@@ -324,6 +424,25 @@ static void cmd_log_tail(char *args) {
 #else
     (void)args;
     console_printf("ERROR: LOG_TAIL disabled (FEATURE_LOG_RING_BUFFER=0)\r\n");
+#endif
+}
+
+// Error log commands
+static void cmd_error_log(void) {
+#if CDC_ERROR_LOG
+    error_log_dump();
+    console_flush();
+#else
+    console_printf("ERROR: Error log disabled (CDC_ERROR_LOG=0)\r\n");
+#endif
+}
+
+static void cmd_error_log_clear(void) {
+#if CDC_ERROR_LOG
+    error_log_clear();
+    console_printf("Error log cleared.\r\n");
+#else
+    console_printf("ERROR: Error log disabled (CDC_ERROR_LOG=0)\r\n");
 #endif
 }
 
@@ -915,6 +1034,228 @@ static void cmd_cancel(void) {
 }
 
 // ============================================================================
+// GPG Commands
+// ============================================================================
+
+#if FEATURE_GPG
+
+static void cmd_gpg_status(void) {
+    gpg_status_t status;
+    if (!gpg_get_status(&status)) {
+        console_printf("ERROR: Failed to get GPG status\r\n");
+        return;
+    }
+
+    console_printf("=== GPG Status ===\r\n");
+    console_printf("Key configured: %s\r\n", status.initialized ? "yes" : "no");
+
+    if (status.initialized) {
+        const char *curve_name = (status.curve == CDC_CURVE_ED25519) ? "Ed25519" : "P-256";
+        console_printf("Curve: %s\r\n", curve_name);
+        console_printf("User ID: %s\r\n", status.user_id[0] ? status.user_id : "(not set)");
+
+        // Print fingerprint
+        console_printf("Fingerprint: ");
+        for (int i = 0; i < 20; i++) {
+            if (i > 0 && i % 4 == 0) console_printf(" ");
+            console_printf("%02X", status.fingerprint[i]);
+        }
+        console_printf("\r\n");
+
+        console_printf("Sign count: %lu\r\n", (unsigned long)status.sign_count);
+    }
+
+    console_flush();
+}
+
+static void cmd_gpg_generate(char *args) {
+    char *curve_str = trim(args);
+    uint8_t curve = CDC_CURVE_ED25519;  // Default
+
+    if (strlen(curve_str) > 0) {
+        if (strcasecmp(curve_str, "p256") == 0 || strcasecmp(curve_str, "P-256") == 0) {
+            curve = CDC_CURVE_P256;
+        } else if (strcasecmp(curve_str, "ed25519") != 0) {
+            console_printf("ERROR: Unknown curve. Use 'ed25519' or 'p256'\r\n");
+            return;
+        }
+    }
+
+    // Check if user ID is set
+    if (!gpg_has_pending_user_id() && !gpg_is_initialized()) {
+        console_printf("ERROR: User ID must be set BEFORE key generation!\r\n");
+        console_printf("Workflow:\r\n");
+        console_printf("  1. GPG_SET_UID \"Name <email@example.com>\"\r\n");
+        console_printf("  2. GPG_GENERATE [ed25519|p256]\r\n");
+        console_printf("\r\nThe User ID becomes permanent and cannot be changed after generation.\r\n");
+        return;
+    }
+
+    console_printf("Generating GPG key (%s)...\r\n",
+                   curve == CDC_CURVE_ED25519 ? "Ed25519" : "P-256");
+    console_flush();
+
+    if (gpg_generate_key(curve)) {
+        gpg_status_t status;
+        if (gpg_get_status(&status)) {
+            console_printf("OK: Key generated\r\n");
+            console_printf("User ID: %s\r\n", status.user_id);
+            console_printf("Fingerprint: ");
+            for (int i = 0; i < 20; i++) {
+                console_printf("%02X", status.fingerprint[i]);
+            }
+            console_printf("\r\n");
+        }
+    } else {
+        console_printf("ERROR: Failed to generate key\r\n");
+    }
+}
+
+// GPG PEM import input mode
+static char g_gpg_pem_buffer[2048];
+static int g_gpg_pem_buffer_pos = 0;
+static bool g_gpg_input_mode = false;
+
+static void cmd_gpg_import_start(void) {
+    console_printf("Paste PRIVATE KEY in PEM format, end with '---' on a new line:\r\n");
+    g_gpg_pem_buffer_pos = 0;
+    g_gpg_input_mode = true;
+}
+
+static void cmd_gpg_input_process(char *line) {
+    if (strncmp(line, "---", 3) == 0) {
+        g_gpg_pem_buffer[g_gpg_pem_buffer_pos] = '\0';
+
+        console_printf("Importing GPG key...\r\n");
+        console_flush();
+
+        if (gpg_import_key_pem(g_gpg_pem_buffer)) {
+            gpg_status_t status;
+            if (gpg_get_status(&status)) {
+                console_printf("OK: Key imported (%s)\r\n",
+                       status.curve == CDC_CURVE_ED25519 ? "Ed25519" : "P-256");
+                console_printf("Fingerprint: ");
+                for (int i = 0; i < 20; i++) {
+                    console_printf("%02X", status.fingerprint[i]);
+                }
+                console_printf("\r\n");
+            }
+        } else {
+            console_printf("ERROR: Failed to import key\r\n");
+        }
+
+        // Clear sensitive data
+        memset(g_gpg_pem_buffer, 0, sizeof(g_gpg_pem_buffer));
+        g_gpg_pem_buffer_pos = 0;
+        g_gpg_input_mode = false;
+        return;
+    }
+
+    // Append line to buffer
+    size_t line_len = strlen(line);
+    if (g_gpg_pem_buffer_pos + (int)line_len + 2 < (int)sizeof(g_gpg_pem_buffer)) {
+        memcpy(g_gpg_pem_buffer + g_gpg_pem_buffer_pos, line, line_len);
+        g_gpg_pem_buffer_pos += (int)line_len;
+        g_gpg_pem_buffer[g_gpg_pem_buffer_pos++] = '\n';
+    } else {
+        console_printf("ERROR: Input too large\r\n");
+        memset(g_gpg_pem_buffer, 0, sizeof(g_gpg_pem_buffer));
+        g_gpg_pem_buffer_pos = 0;
+        g_gpg_input_mode = false;
+    }
+}
+
+bool serial_cmd_in_gpg_mode(void) {
+    return g_gpg_input_mode;
+}
+
+void serial_cmd_gpg_line(char *line) {
+    cmd_gpg_input_process(line);
+}
+
+static void cmd_gpg_set_uid(char *args) {
+    char *uid = trim(args);
+    if (strlen(uid) == 0) {
+        console_printf("ERROR: Usage: GPG_SET_UID <user_id>\r\n");
+        console_printf("  Example: GPG_SET_UID \"Max Mustermann <max@example.com>\"\r\n");
+        return;
+    }
+
+    bool key_exists = gpg_is_initialized();
+
+    if (gpg_set_user_id(uid)) {
+        console_printf("OK: User ID set to: %s\r\n", uid);
+        if (!key_exists) {
+            console_printf("Next step: GPG_GENERATE [ed25519|p256] or GPG_IMPORT\r\n");
+        }
+    } else {
+        console_printf("ERROR: Failed to set user ID\r\n");
+    }
+}
+
+static void cmd_gpg_sign(char *args) {
+    char *hash_hex = trim(args);
+    if (strlen(hash_hex) != 64) {
+        console_printf("ERROR: Usage: GPG_SIGN <sha256_hash_hex>\r\n");
+        console_printf("  Hash must be 64 hex characters (32 bytes)\r\n");
+        return;
+    }
+
+    // Parse hex hash
+    uint8_t hash[32];
+    for (int i = 0; i < 32; i++) {
+        char byte_str[3] = { hash_hex[i*2], hash_hex[i*2+1], '\0' };
+        char *endptr;
+        unsigned long val = strtoul(byte_str, &endptr, 16);
+        if (*endptr != '\0') {
+            console_printf("ERROR: Invalid hex at position %d\r\n", i*2);
+            return;
+        }
+        hash[i] = (uint8_t)val;
+    }
+
+    uint8_t signature[64];
+    size_t sig_len = 0;
+
+    if (gpg_sign_hash(hash, 32, signature, &sig_len)) {
+        console_printf("OK: Signature (%zu bytes)\r\n", sig_len);
+        console_printf("R: ");
+        for (size_t i = 0; i < 32; i++) {
+            console_printf("%02X", signature[i]);
+        }
+        console_printf("\r\nS: ");
+        for (size_t i = 32; i < sig_len; i++) {
+            console_printf("%02X", signature[i]);
+        }
+        console_printf("\r\n");
+    } else {
+        console_printf("ERROR: Failed to sign (no key configured?)\r\n");
+    }
+}
+
+static void cmd_gpg_export_pub(void) {
+    static char pem_buf[512];
+    size_t pem_len = 0;
+
+    if (gpg_export_pubkey_pem(pem_buf, sizeof(pem_buf), &pem_len)) {
+        console_printf("%s", pem_buf);
+    } else {
+        console_printf("ERROR: Failed to export public key (no key configured?)\r\n");
+    }
+    console_flush();
+}
+
+static void cmd_gpg_reset(void) {
+    if (gpg_reset()) {
+        console_printf("OK: GPG key deleted\r\n");
+    } else {
+        console_printf("ERROR: Failed to reset GPG\r\n");
+    }
+}
+
+#endif // FEATURE_GPG
+
+// ============================================================================
 // CA Commands
 // ============================================================================
 
@@ -1314,6 +1655,110 @@ static void cmd_set_info2(char *args) {
 }
 
 // ============================================================================
+// vCard Commands
+// ============================================================================
+
+#if FEATURE_BLE_BADGE
+
+static char g_vcard_buffer[1024];
+static int g_vcard_buffer_pos = 0;
+static bool g_vcard_input_mode = false;
+
+static void cmd_vcard_set_start(void) {
+    console_printf("Paste vCard 4.0, end with '---' on a new line:\r\n");
+    g_vcard_buffer_pos = 0;
+    g_vcard_input_mode = true;
+}
+
+static void cmd_vcard_input_process(char *line) {
+    if (strncmp(line, "---", 3) == 0) {
+        g_vcard_buffer[g_vcard_buffer_pos] = '\0';
+
+        char err[64];
+        if (vcard_store_set_own(g_vcard_buffer, (size_t)g_vcard_buffer_pos, err, sizeof(err))) {
+            console_printf("OK: vCard updated\r\n");
+        } else {
+            console_printf("ERROR: %s\r\n", err[0] ? err : "Invalid vCard");
+        }
+
+        g_vcard_input_mode = false;
+        g_vcard_buffer_pos = 0;
+        memset(g_vcard_buffer, 0, sizeof(g_vcard_buffer));
+        return;
+    }
+
+    size_t line_len = strlen(line);
+    if (g_vcard_buffer_pos + (int)line_len + 2 < (int)sizeof(g_vcard_buffer)) {
+        memcpy(g_vcard_buffer + g_vcard_buffer_pos, line, line_len);
+        g_vcard_buffer_pos += (int)line_len;
+        g_vcard_buffer[g_vcard_buffer_pos++] = '\n';
+    } else {
+        console_printf("ERROR: vCard too large\r\n");
+        g_vcard_input_mode = false;
+        g_vcard_buffer_pos = 0;
+        memset(g_vcard_buffer, 0, sizeof(g_vcard_buffer));
+    }
+}
+
+static bool serial_cmd_in_vcard_mode(void) {
+    return g_vcard_input_mode;
+}
+
+static void cmd_vcard_get(void) {
+    char out[VCARD_MAX_LEN + 1];
+    size_t len = vcard_store_get_own(out, sizeof(out));
+    if (len == 0) {
+        // Return template with all fields for manual editing
+        console_printf("BEGIN:VCARD\r\n");
+        console_printf("VERSION:4.0\r\n");
+        console_printf("N:;;\r\n");
+        console_printf("FN:\r\n");
+        console_printf("NOTE:\r\n");
+        console_printf("TEL;TYPE=HOME:\r\n");
+        console_printf("TEL;TYPE=CELL:\r\n");
+        console_printf("TEL;TYPE=WORK:\r\n");
+        console_printf("TEL;TYPE=PAGER:\r\n");
+        console_printf("EMAIL:\r\n");
+        console_printf("URL:\r\n");
+        console_printf("ORG:\r\n");
+        console_printf("TITLE:\r\n");
+        console_printf("X-SOCIALPROFILE:\r\n");
+        console_printf("IMPP:telegram:\r\n");
+        console_printf("IMPP:signal:\r\n");
+        console_printf("IMPP:whatsapp:\r\n");
+        console_printf("IMPP:discord:\r\n");
+        console_printf("IMPP:matrix:\r\n");
+        console_printf("IMPP:threema:\r\n");
+        console_printf("ADR;TYPE=HOME:\r\n");
+        console_printf("ADR;TYPE=WORK:\r\n");
+        console_printf("END:VCARD\r\n");
+        return;
+    }
+    // Output line by line to avoid console_printf 256 byte limit
+    char *line = out;
+    char *next;
+    while ((next = strchr(line, '\n')) != NULL) {
+        *next = '\0';
+        console_printf("%s\r\n", line);
+        line = next + 1;
+    }
+    // Output remaining (if no trailing newline)
+    if (*line) {
+        console_printf("%s\r\n", line);
+    }
+}
+
+static void cmd_vcard_delete(void) {
+    if (vcard_store_clear_own()) {
+        console_printf("OK: vCard deleted\r\n");
+    } else {
+        console_printf("ERROR: Failed to delete vCard\r\n");
+    }
+}
+
+#endif
+
+// ============================================================================
 // Command Parser
 // ============================================================================
 
@@ -1338,9 +1783,17 @@ static void execute_command(char *cmd) {
 
     // Check if command requires authentication
     if (check_auth_required(cmd)) {
-        console_printf("ERROR: Authentication required. Use AUTH <pin>\r\n");
+        if (serial_is_locked()) {
+            console_printf("ERROR: Serial locked, %lu sec remaining\r\n",
+                           (unsigned long)serial_lockout_remaining_sec());
+        } else {
+            console_printf("ERROR: Authentication required. Use AUTH <pin>\r\n");
+        }
         return;
     }
+
+    // Reset timeout on successful command (user is active)
+    serial_auth_activity();
 #endif
 
     // System commands
@@ -1349,6 +1802,8 @@ static void execute_command(char *cmd) {
     if (strcasecmp(cmd, "STATUS") == 0) { cmd_status(); return; }
     if (strcasecmp(cmd, "LOG_TAIL") == 0) { cmd_log_tail((char *)""); return; }
     if (strncasecmp(cmd, "LOG_TAIL ", 9) == 0) { cmd_log_tail(cmd + 9); return; }
+    if (strcasecmp(cmd, "ERROR_LOG") == 0) { cmd_error_log(); return; }
+    if (strcasecmp(cmd, "ERROR_LOG_CLEAR") == 0) { cmd_error_log_clear(); return; }
 
     // Time commands
     if (strncasecmp(cmd, "SET_TIME ", 9) == 0) { cmd_set_time(cmd + 9); return; }
@@ -1360,6 +1815,12 @@ static void execute_command(char *cmd) {
     if (strncasecmp(cmd, "SET_NAME ", 9) == 0) { cmd_set_name(cmd + 9); return; }
     if (strncasecmp(cmd, "SET_INFO2 ", 10) == 0) { cmd_set_info2(cmd + 10); return; }
     if (strncasecmp(cmd, "SET_INFO ", 9) == 0) { cmd_set_info(cmd + 9); return; }
+
+#if FEATURE_BLE_BADGE
+    if (strcasecmp(cmd, "VCARD_SET") == 0) { cmd_vcard_set_start(); return; }
+    if (strcasecmp(cmd, "VCARD_GET") == 0) { cmd_vcard_get(); return; }
+    if (strcasecmp(cmd, "VCARD_DELETE") == 0) { cmd_vcard_delete(); return; }
+#endif
 
 #if FEATURE_TOTP
     // TOTP commands
@@ -1408,6 +1869,24 @@ static void execute_command(char *cmd) {
     if (strcasecmp(cmd, "CA_RESET") == 0) { cmd_ca_reset(); return; }
 #endif
 
+#if FEATURE_GPG
+    // GPG commands
+    if (strcasecmp(cmd, "GPG_STATUS") == 0) { cmd_gpg_status(); return; }
+    if (strncasecmp(cmd, "GPG_GENERATE", 12) == 0) {
+        if (strlen(cmd) > 13) {
+            cmd_gpg_generate(cmd + 13);
+        } else {
+            cmd_gpg_generate((char*)"");
+        }
+        return;
+    }
+    if (strcasecmp(cmd, "GPG_IMPORT") == 0) { cmd_gpg_import_start(); return; }
+    if (strncasecmp(cmd, "GPG_SET_UID ", 12) == 0) { cmd_gpg_set_uid(cmd + 12); return; }
+    if (strncasecmp(cmd, "GPG_SIGN ", 9) == 0) { cmd_gpg_sign(cmd + 9); return; }
+    if (strcasecmp(cmd, "GPG_EXPORT_PUB") == 0) { cmd_gpg_export_pub(); return; }
+    if (strcasecmp(cmd, "GPG_RESET") == 0) { cmd_gpg_reset(); return; }
+#endif
+
     console_printf("ERROR: Unknown command. Type HELP for available commands.\r\n");
 }
 
@@ -1435,6 +1914,18 @@ bool serial_cmd_process(void) {
         if (cmd_buffer_pos > 0) {
             cmd_buffer[cmd_buffer_pos] = '\0';
 
+#if FEATURE_BLE_BADGE
+            if (serial_cmd_in_vcard_mode()) {
+                cmd_vcard_input_process(cmd_buffer);
+                cmd_buffer_pos = 0;
+                memset(cmd_buffer, 0, sizeof(cmd_buffer));
+                if (!serial_cmd_in_vcard_mode()) {
+                    show_prompt();
+                }
+                return true;
+            }
+#endif
+
 #if FEATURE_CA
             // In CSR input mode, pass line to CSR handler
             if (serial_cmd_in_csr_mode()) {
@@ -1448,6 +1939,19 @@ bool serial_cmd_process(void) {
             }
 #endif
 
+#if FEATURE_GPG
+            // In GPG PEM input mode
+            if (serial_cmd_in_gpg_mode()) {
+                serial_cmd_gpg_line(cmd_buffer);
+                cmd_buffer_pos = 0;
+                memset(cmd_buffer, 0, sizeof(cmd_buffer));
+                if (!serial_cmd_in_gpg_mode()) {
+                    show_prompt();
+                }
+                return true;
+            }
+#endif
+
             execute_command(cmd_buffer);
             cmd_buffer_pos = 0;
             memset(cmd_buffer, 0, sizeof(cmd_buffer));
@@ -1455,10 +1959,17 @@ bool serial_cmd_process(void) {
             return true;
         }
         // Empty line - just show new prompt
+        bool show = true;
 #if FEATURE_CA
-        if (!serial_cmd_in_csr_mode())
+        if (serial_cmd_in_csr_mode()) show = false;
 #endif
-            show_prompt();
+#if FEATURE_BLE_BADGE
+        if (serial_cmd_in_vcard_mode()) show = false;
+#endif
+#if FEATURE_GPG
+        if (serial_cmd_in_gpg_mode()) show = false;
+#endif
+        if (show) show_prompt();
         return false;
     }
 
@@ -1479,6 +1990,11 @@ bool serial_cmd_process(void) {
         console_printf("^C\r\n");
         cmd_buffer_pos = 0;
         memset(cmd_buffer, 0, sizeof(cmd_buffer));
+#if FEATURE_BLE_BADGE
+        g_vcard_input_mode = false;
+        g_vcard_buffer_pos = 0;
+        memset(g_vcard_buffer, 0, sizeof(g_vcard_buffer));
+#endif
         show_prompt();
         return false;
     }

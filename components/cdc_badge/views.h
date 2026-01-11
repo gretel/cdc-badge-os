@@ -40,7 +40,7 @@ typedef enum {
 // Render status bar icons at specified position
 // Returns total width used
 int view_render_status_icons(uint16_t icons, int x, int y);
-#define VIEW_LIST_MAX_ITEMS 32
+#define VIEW_LIST_MAX_ITEMS 256
 #define VIEW_LIST_VISIBLE_ITEMS 4
 #define VIEW_T9_TIMEOUT_MS 2000
 #define VIEW_PIN_MAX_LEN 6
@@ -56,7 +56,7 @@ typedef struct {
     uint8_t battery_percent;
     bool charging;
     char clock[8];  // "HH:MM" or "--:--"
-    char date[12];  // "DD.MM.YYYY" or empty
+    char date[20];  // "DD.MM 23.4C" or empty
     uint16_t status_icons;      // Bitmask of status_icon_t values
     // Legacy fields (deprecated, use status_icons instead)
     bool show_lock_icon;
@@ -94,29 +94,37 @@ void view_info_screen_render(const view_info_screen_t *view, bool partial);
 // List Screen View (Selection Menu)
 // ============================================================================
 
+typedef enum {
+    VIEW_LIST_ICON_NONE = 0,
+    VIEW_LIST_ICON_WIFI,
+    VIEW_LIST_ICON_BLE
+} view_list_icon_t;
+
 typedef struct {
     const char *label;
+    uint8_t icon;         // view_list_icon_t
+    bool icon_disabled;   // Draw crossed-out icon when true
 } view_list_item_t;
 
 typedef struct {
     const char *title;
     const view_list_item_t *items;
-    uint8_t item_count;
-    uint8_t selection;          // Currently selected index
-    uint8_t scroll_pos;         // First visible item index
+    uint16_t item_count;
+    uint16_t selection;          // Currently selected index
+    uint16_t scroll_pos;         // First visible item index
     const char *hint;           // Optional custom hint (NULL = default)
 } view_list_screen_t;
 
 // Initialize list screen
 void view_list_screen_init(view_list_screen_t *view, const char *title,
-                           const view_list_item_t *items, uint8_t count);
+                           const view_list_item_t *items, uint16_t count);
 
 // Navigate up/down (key 2 = up, key 8 = down)
 void view_list_screen_navigate(view_list_screen_t *view, bool down);
 
 
 // Get currently selected index
-uint8_t view_list_screen_get_selection(const view_list_screen_t *view);
+uint16_t view_list_screen_get_selection(const view_list_screen_t *view);
 
 // Render (partial=true for navigation updates)
 void view_list_screen_render(const view_list_screen_t *view, bool partial);
@@ -144,6 +152,9 @@ bool view_t9_input_key(view_t9_input_t *view, char key);
 
 // Delete last character (backspace)
 void view_t9_input_backspace(view_t9_input_t *view);
+
+// Force insert a digit (used for long-press on number keys)
+void view_t9_input_force_digit(view_t9_input_t *view, char key);
 
 // Update T9 state (call periodically to finalize character on timeout)
 // Returns true if state changed (e.g., cursor finalized) and needs re-render.
@@ -411,17 +422,59 @@ uint8_t view_context_menu_get_action(const view_context_menu_t *menu);
 bool view_context_menu_is_visible(const view_context_menu_t *menu);
 
 // ============================================================================
+// WiFi List View (specialized list with signal/lock icons)
+// ============================================================================
+
+#define VIEW_WIFI_MAX_ITEMS 32
+
+typedef struct {
+    char ssid[33];              // SSID (max 32 chars + null)
+    int8_t rssi;                // Signal strength in dBm
+    uint8_t auth_mode;          // wifi_auth_mode_t (0 = open)
+} view_wifi_item_t;
+
+typedef struct {
+    const char *title;
+    view_wifi_item_t items[VIEW_WIFI_MAX_ITEMS];
+    uint16_t item_count;
+    uint16_t selection;
+    uint16_t scroll_pos;
+} view_wifi_list_t;
+
+// Initialize WiFi list
+void view_wifi_list_init(view_wifi_list_t *view, const char *title);
+
+// Add network to list (returns index or -1 if full)
+int view_wifi_list_add(view_wifi_list_t *view, const char *ssid, int8_t rssi, uint8_t auth_mode);
+
+// Clear all items
+void view_wifi_list_clear(view_wifi_list_t *view);
+
+// Sort by signal strength (strongest first)
+void view_wifi_list_sort(view_wifi_list_t *view);
+
+// Navigate
+void view_wifi_list_navigate(view_wifi_list_t *view, bool down);
+
+// Get selection
+uint16_t view_wifi_list_get_selection(const view_wifi_list_t *view);
+
+// Render (draws signal bars and lock icons)
+void view_wifi_list_render(const view_wifi_list_t *view, bool partial);
+
+// ============================================================================
 // QR Code View
 // ============================================================================
 
 typedef struct {
     const char *title;          // Title shown at top (can be NULL)
+    const char *subtitle;       // Optional subtitle (e.g. name)
     const char *data;           // Data to encode in QR code
     uint8_t scale;              // Pixels per QR module (1-3, auto-calculated if 0)
 } view_qr_code_t;
 
 // Initialize QR code view
-void view_qr_code_init(view_qr_code_t *view, const char *title, const char *data);
+void view_qr_code_init(view_qr_code_t *view, const char *title, const char *subtitle, const char *data);
 
 // Render QR code (always full refresh due to complexity)
 void view_qr_code_render(const view_qr_code_t *view, bool partial);
