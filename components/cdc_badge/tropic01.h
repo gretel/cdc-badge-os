@@ -16,7 +16,7 @@ extern "C" {
 #define TR01_RMEM_SLOT_FIDO_END   28   // Reduced from 29 to free slot 29 for GPG
 #define TR01_RMEM_SLOT_TOTP_START 33   // TOTP accounts: 33-132
 #define TR01_RMEM_SLOT_TOTP_END   132
-#define TR01_RMEM_SLOT_GPG       134   // GPG metadata (User-ID, fingerprint, etc.)
+#define TR01_RMEM_SLOT_GPG       29    // GPG metadata (User-ID, fingerprint, etc.)
 #define TR01_RMEM_SLOT_GPG_RECV_START 140  // Received public keys: 140-149
 #define TR01_RMEM_SLOT_GPG_RECV_END   149
 
