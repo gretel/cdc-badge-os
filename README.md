@@ -2,6 +2,8 @@
 
 Hardware security key firmware for the CDC Badge v1.0 featuring TROPIC01 secure element.
 
+![CDC Badge Demo](docs/demo.jpg)
+
 > **Early Alpha** - This firmware is in early development and **not production ready**. Security hardening is incomplete and known vulnerabilities exist. Do not use for protecting critical accounts. See [SECURITY.md](SECURITY.md) for hardening steps required before production use.
 
 > **Development note** - Active development happens on GitLab. GitHub receives periodic bulk pushes of the `release` branch only (for reasons). ;)
@@ -47,15 +49,8 @@ What it does:
 - Exchanges full vCard 4.0 **badge-to-badge only** (custom GATT)
 - Shows a QR code for interoperability with phones/computers (no app required)
 - Stores up to 100 received vCards in NVS (max 768 bytes each), sorted by last name
-- On-device vCard editor with field type submenus:
-  - Phone types: Landline, Mobile, Business, Pager
-  - Messenger: Telegram, Signal, WhatsApp, Discord, Matrix, Threema, Other
-  - Address types: Home, Work
 
-Serial commands:
-- `VCARD_SET` - Multi-line vCard import (finish with `---`)
-- `VCARD_GET` - Export vCard (returns template if empty)
-- `VCARD_DELETE` - Delete own vCard
+See [BLE vCard Protocol](docs/ble_vcard_protocol.md) for technical details.
 
 Notes:
 - BLE UART is disabled while the vCard feature is active
