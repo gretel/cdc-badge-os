@@ -30,6 +30,37 @@ typedef enum {
 #define CDC_LOG_RING_BUFFER 0
 #endif
 
+// ============================================================================
+// Error Log (stores only WARNING and ERROR messages)
+// Uses dynamically allocated memory (no pre-allocation required)
+// ============================================================================
+#ifndef CDC_ERROR_LOG
+#define CDC_ERROR_LOG 1
+#endif
+
+#define ERROR_LOG_MAX_ENTRIES 50
+#define ERROR_LOG_LINE_LEN    100
+
+// Error log entry structure
+typedef struct {
+    uint32_t timestamp_ms;      // Uptime in ms when logged
+    log_level_t level;          // ERROR or WARN
+    char message[ERROR_LOG_LINE_LEN];
+} error_log_entry_t;
+
+// Get error log entries
+// Returns number of entries, fills entries array (caller provides array)
+size_t error_log_get_entries(error_log_entry_t* entries, size_t max_entries);
+
+// Get error log count
+size_t error_log_get_count(void);
+
+// Clear error log
+void error_log_clear(void);
+
+// Dump error log to console
+void error_log_dump(void);
+
 // Initialize logging system
 void log_init(void);
 

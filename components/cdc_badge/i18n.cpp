@@ -121,7 +121,7 @@ static const char* strings_en[] = {
     "[3] Menu",                     // STR_HINT_LIST_MENU
 
     // Tools Menu
-    "Tools",                        // STR_TOOLS
+    "Hardware",                     // STR_TOOLS
     "NTP Sync",                     // STR_NTP_SYNC
     "Syncing time...",              // STR_NTP_SYNCING
     "Time synced!",                 // STR_NTP_SUCCESS
@@ -192,6 +192,71 @@ static const char* strings_en[] = {
     "City/Locality (L)",            // STR_CA_ENTER_LOCALITY
     "State/Province (ST)",          // STR_CA_ENTER_STATE
     "Validity (Years)",             // STR_CA_VALIDITY_YEARS
+
+    // Remote Badge / BLE Badge
+    "BLE Serial",                   // STR_BLUETOOTH
+    "Remote Badge",                 // STR_REMOTE_BADGE
+    "vCards",                       // STR_VCARDS
+    "Edit vCard",                   // STR_VCARD_ADD
+    "Cards",                        // STR_VCARD_LIST
+    "Broadcast",                    // STR_VCARD_BROADCAST
+    "Scan",                         // STR_VCARD_SCAN
+    "Settings",                     // STR_BROADCAST_SETTINGS
+    "Beacon Send",                  // STR_BEACON_SEND
+    "Beacon Receive",               // STR_BEACON_RECEIVE
+    "Send Interval",                // STR_VCARD_ADV_INTERVAL
+    "Scan Interval",                // STR_VCARD_SCAN_INTERVAL
+    "TX Power",                     // STR_TX_POWER
+    "Receive",                      // STR_VCARD_RECEIVE
+    "Exchange",                     // STR_VCARD_EXCHANGE
+    "Send",                         // STR_VCARD_SEND
+    "Show QR",                      // STR_VCARD_SHOW_QR
+    "Nearby: %s",                   // STR_VCARD_NEARBY
+    "Nearby",                       // STR_VCARD_NEARBY_TITLE
+    "Sending vCard...",             // STR_VCARD_SENDING
+    "Transfer complete",            // STR_VCARD_SEND_SUCCESS
+    "Transfer failed",              // STR_VCARD_SEND_FAILED
+    "Enable exchange mode",         // STR_VCARD_ENABLE_EXCHANGE
+    "Nearby Badges",                // STR_VCARD_NEARBY_LIST
+    "No badges",                    // STR_NO_BADGES
+    "QR vCard",                     // STR_VCARD_QR
+    "On",                           // STR_ON
+    "Off",                          // STR_OFF
+    "View",                         // STR_VIEW
+    "No vCards",                    // STR_NO_VCARDS
+    "My vCard",                     // STR_MY_VCARD
+    "First name",                   // STR_FIRST_NAME
+    "Last name",                    // STR_LAST_NAME
+    "Description",                  // STR_DESCRIPTION
+    "Phone",                        // STR_PHONE
+    "Landline",                     // STR_PHONE_LANDLINE
+    "Mobile",                       // STR_PHONE_MOBILE
+    "Business",                     // STR_PHONE_BUSINESS
+    "Pager",                        // STR_PHONE_PAGER
+    "Email",                        // STR_EMAIL
+    "URL",                          // STR_URL
+    "Organization",                 // STR_ORG
+    "Title",                        // STR_TITLE
+    "Social",                       // STR_SOCIAL
+    "Messenger",                    // STR_IMPP
+    "Telegram",                     // STR_IMPP_TELEGRAM
+    "Signal",                       // STR_IMPP_SIGNAL
+    "WhatsApp",                     // STR_IMPP_WHATSAPP
+    "Discord",                      // STR_IMPP_DISCORD
+    "Matrix",                       // STR_IMPP_MATRIX
+    "Threema",                      // STR_IMPP_THREEMA
+    "Other",                        // STR_IMPP_OTHER
+    "Address",                      // STR_ADDRESS
+    "Home",                         // STR_ADDRESS_HOME
+    "Work",                         // STR_ADDRESS_WORK
+    "Save",                         // STR_SAVE
+    "Pairing",                      // STR_PAIRING
+    "Confirm code: %06lu",          // STR_PAIRING_CONFIRM
+    "Enter on other device: %06lu", // STR_PAIRING_DISPLAY
+    "Enter Passkey",                // STR_PAIRING_PIN
+    "Enter code from other device", // STR_PAIRING_PIN_MSG
+
+    "vCard too big",                // STR_VCARD_TOO_BIG
 };
 
 // Translation strings - German
@@ -296,7 +361,7 @@ static const char* strings_de[] = {
     "[3] Menue",                    // STR_HINT_LIST_MENU
 
     // Tools Menu
-    "Tools",                        // STR_TOOLS (bleibt englisch)
+    "Hardware",                     // STR_TOOLS
     "NTP Sync",                     // STR_NTP_SYNC
     "Zeit Sync...",      // STR_NTP_SYNCING
     "Zeit Sync ok!",         // STR_NTP_SUCCESS
@@ -367,6 +432,71 @@ static const char* strings_de[] = {
     "Stadt (L)",                    // STR_CA_ENTER_LOCALITY
     "Bundesland (ST)",              // STR_CA_ENTER_STATE
     "Gueltigkeit (Jahre)",          // STR_CA_VALIDITY_YEARS
+
+    // Remote Badge / BLE Badge
+    "BLE Serial",                   // STR_BLUETOOTH
+    "Remote Badge",                 // STR_REMOTE_BADGE
+    "vCards",                       // STR_VCARDS
+    "vCard bearbeiten",             // STR_VCARD_ADD
+    "Eintraege",                    // STR_VCARD_LIST
+    "Broadcast",                    // STR_VCARD_BROADCAST
+    "Scannen",                      // STR_VCARD_SCAN
+    "Einstellungen",                // STR_BROADCAST_SETTINGS
+    "Beacon senden",                // STR_BEACON_SEND
+    "Beacon empfangen",             // STR_BEACON_RECEIVE
+    "Sende-Intervall",              // STR_VCARD_ADV_INTERVAL
+    "Scan-Intervall",               // STR_VCARD_SCAN_INTERVAL
+    "Sendeleistung",                // STR_TX_POWER
+    "Empfangen",                    // STR_VCARD_RECEIVE
+    "Austausch",                    // STR_VCARD_EXCHANGE
+    "Senden",                       // STR_VCARD_SEND
+    "QR anzeigen",                  // STR_VCARD_SHOW_QR
+    "In der Naehe: %s",             // STR_VCARD_NEARBY
+    "In der Naehe",                 // STR_VCARD_NEARBY_TITLE
+    "Sende vCard...",               // STR_VCARD_SENDING
+    "Transfer fertig",              // STR_VCARD_SEND_SUCCESS
+    "Transfer fehlgeschlagen",      // STR_VCARD_SEND_FAILED
+    "Austauschmodus An",            // STR_VCARD_ENABLE_EXCHANGE
+    "Badges in der Naehe",          // STR_VCARD_NEARBY_LIST
+    "Keine Badges",                 // STR_NO_BADGES
+    "QR vCard",                     // STR_VCARD_QR
+    "An",                           // STR_ON
+    "Aus",                          // STR_OFF
+    "Ansehen",                      // STR_VIEW
+    "Keine vCards",                 // STR_NO_VCARDS
+    "Meine vCard",                  // STR_MY_VCARD
+    "Vorname",                      // STR_FIRST_NAME
+    "Nachname",                     // STR_LAST_NAME
+    "Beschreibung",                 // STR_DESCRIPTION
+    "Telefon",                      // STR_PHONE
+    "Festnetz",                     // STR_PHONE_LANDLINE
+    "Mobil",                        // STR_PHONE_MOBILE
+    "Geschaeftlich",                // STR_PHONE_BUSINESS
+    "Pager",                        // STR_PHONE_PAGER
+    "E-Mail",                       // STR_EMAIL
+    "URL",                          // STR_URL
+    "Organisation",                 // STR_ORG
+    "Titel",                        // STR_TITLE
+    "Social",                       // STR_SOCIAL
+    "Messenger",                    // STR_IMPP
+    "Telegram",                     // STR_IMPP_TELEGRAM
+    "Signal",                       // STR_IMPP_SIGNAL
+    "WhatsApp",                     // STR_IMPP_WHATSAPP
+    "Discord",                      // STR_IMPP_DISCORD
+    "Matrix",                       // STR_IMPP_MATRIX
+    "Threema",                      // STR_IMPP_THREEMA
+    "Andere",                       // STR_IMPP_OTHER
+    "Adresse",                      // STR_ADDRESS
+    "Privat",                       // STR_ADDRESS_HOME
+    "Arbeit",                       // STR_ADDRESS_WORK
+    "Speichern",                    // STR_SAVE
+    "Kopplung",                     // STR_PAIRING
+    "Code bestaetigen: %06lu",      // STR_PAIRING_CONFIRM
+    "Code am anderen Geraet: %06lu",// STR_PAIRING_DISPLAY
+    "Code eingeben",                // STR_PAIRING_PIN
+    "Code vom anderen Geraet",      // STR_PAIRING_PIN_MSG
+
+    "vCard zu gross",               // STR_VCARD_TOO_BIG
 };
 
 // All language string tables

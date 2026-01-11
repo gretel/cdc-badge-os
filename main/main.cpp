@@ -23,6 +23,9 @@
 #include "pin_expander.h"
 #include "power_management.h"
 #include "serial_cmd.h"
+#if FEATURE_BLE_BADGE
+#include "ble_badge.h"
+#endif
 
 #include "driver/rtc_io.h"
 #include "esp_heap_caps.h"
@@ -54,6 +57,7 @@
 
 // T9 abort: track N key hold time for 2s abort
 #define T9_ABORT_HOLD_MS 2000
+#define T9_DIGIT_HOLD_MS 800
 
 // Light sleep: wait on lock screen before sleeping
 #define LIGHT_SLEEP_DELAY_MS 120000  // Wait 120s on lock screen before sleeping
@@ -64,7 +68,37 @@
 // Track key-hold times in main loop
 static uint32_t g_n_key_press_start = 0;
 static uint32_t g_lock_n_press_start = 0;
+static uint32_t g_t9_digit_press_start = 0;
+static char g_t9_digit_hold_key = 0;
+static bool g_t9_digit_hold_sent = false;
 static uint32_t g_last_ui_refresh_ms = 0;
+#if FEATURE_BLE_BADGE
+static uint8_t g_blink_remaining = 0;
+static bool g_blink_on = false;
+static uint32_t g_blink_next_ms = 0;
+#endif
+
+#if FEATURE_BLE_BADGE
+static void backlight_blink_start(uint8_t times) {
+    g_blink_remaining = times * 2;  // on+off counts
+    g_blink_on = false;
+    g_blink_next_ms = millis();
+}
+
+static void backlight_blink_process(void) {
+    if (g_blink_remaining == 0) return;
+    uint32_t now = millis();
+    if (now < g_blink_next_ms) return;
+    g_blink_on = !g_blink_on;
+    if (g_blink_on) {
+        gui_backlight_on();
+    } else if (!g_backlight_forced_on) {
+        gui_backlight_off();
+    }
+    g_blink_remaining--;
+    g_blink_next_ms = now + 150;
+}
+#endif
 
 static bool app_state_uses_t9(app_state_t state) {
     switch (state) {
@@ -77,6 +111,12 @@ static bool app_state_uses_t9(app_state_t state) {
         case APP_STATE_TOTP_ADD_ISSUER:
         case APP_STATE_WIFI_ADD_SSID:
         case APP_STATE_WIFI_ADD_PASSWORD:
+#if FEATURE_BLE_BADGE
+        case APP_STATE_VCARD_ADD_FIRST:
+        case APP_STATE_VCARD_ADD_LAST:
+        case APP_STATE_VCARD_ADD_NOTE:
+        case APP_STATE_VCARD_FIELD_VALUE:
+#endif
 #if FEATURE_CA
         case APP_STATE_CA_WIZARD_CN:
         case APP_STATE_CA_WIZARD_ORG:
@@ -205,10 +245,92 @@ extern "C" void app_main(void) {
         // Process serial commands
         serial_cmd_process();
 
+#if FEATURE_BLE_BADGE
+        // BLE badge nearby notifications
+        ble_badge_peer_t peer;
+        if (ble_badge_poll_nearby(&peer)) {
+            if (g_app_state != APP_STATE_BLE_PAIRING_CONFIRM &&
+                g_app_state != APP_STATE_BLE_PAIRING_PASSKEY &&
+                g_app_state != APP_STATE_BLE_PAIRING_DISPLAY &&
+                g_app_state != APP_STATE_VCARD_SEND_PROGRESS) {
+                char msg[64];
+                snprintf(msg, sizeof(msg), i18n_str(STR_VCARD_NEARBY),
+                         peer.name[0] ? peer.name : i18n_str(STR_VCARDS));
+                g_vcard_nearby_return_state = g_app_state;
+                g_vcard_nearby_alert_until = millis() + 30000;
+                view_info_screen_init(&g_info_view, i18n_str(STR_VCARD_NEARBY_TITLE), msg);
+                g_app_state = APP_STATE_VCARD_NEARBY_ALERT;
+                render_current_state(false);
+            }
+            backlight_blink_start(3);
+        }
+        backlight_blink_process();
+
+        if (g_app_state == APP_STATE_VCARD_NEARBY_ALERT &&
+            g_vcard_nearby_alert_until > 0 &&
+            millis() >= g_vcard_nearby_alert_until) {
+            g_vcard_nearby_alert_until = 0;
+            g_app_state = g_vcard_nearby_return_state;
+            render_current_state(false);
+        }
+
+        ble_badge_pair_event_t pairing_event;
+        uint32_t passkey = 0;
+        if (ble_badge_poll_pairing_event(&pairing_event, &passkey)) {
+            g_ble_pairing_return_state = g_app_state;
+            g_ble_pairing_passkey = passkey;
+            char msg[64];
+            switch (pairing_event) {
+                case BLE_BADGE_PAIR_NUMERIC:
+                    snprintf(msg, sizeof(msg), i18n_str(STR_PAIRING_CONFIRM), (unsigned long)passkey);
+                    view_info_screen_init(&g_info_view, i18n_str(STR_PAIRING), msg);
+                    g_app_state = APP_STATE_BLE_PAIRING_CONFIRM;
+                    render_current_state(false);
+                    break;
+                case BLE_BADGE_PAIR_PASSKEY_DISPLAY:
+                    snprintf(msg, sizeof(msg), i18n_str(STR_PAIRING_DISPLAY), (unsigned long)passkey);
+                    view_info_screen_init(&g_info_view, i18n_str(STR_PAIRING), msg);
+                    g_app_state = APP_STATE_BLE_PAIRING_DISPLAY;
+                    render_current_state(false);
+                    break;
+                case BLE_BADGE_PAIR_PASSKEY_INPUT:
+                    view_pin_entry_init(&g_pin_entry, i18n_str(STR_PAIRING_PIN), 6, 1);
+                    view_pin_entry_set_message(&g_pin_entry, i18n_str(STR_PAIRING_PIN_MSG));
+                    g_app_state = APP_STATE_BLE_PAIRING_PASSKEY;
+                    render_current_state(false);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        bool exchange_ok = false;
+        if (ble_badge_poll_exchange_result(&exchange_ok)) {
+            if (exchange_ok) {
+                view_toast_success(i18n_str(STR_VCARD_SEND_SUCCESS), 1000);
+            } else {
+                view_toast_error(i18n_str(STR_VCARD_SEND_FAILED), 1500);
+            }
+            if (g_app_state == APP_STATE_VCARD_SEND_PROGRESS ||
+                g_app_state == APP_STATE_BLE_PAIRING_CONFIRM ||
+                g_app_state == APP_STATE_BLE_PAIRING_PASSKEY ||
+                g_app_state == APP_STATE_BLE_PAIRING_DISPLAY) {
+                g_app_state = APP_STATE_VCARD_NEARBY_LIST;
+                render_current_state(false);
+            }
+        }
+#endif
+
         // Auto-lock: return to lock screen after inactivity
         // Only exempt: lock screen and lockout (already locked)
         if (g_app_state != APP_STATE_LOCK_SCREEN &&
             g_app_state != APP_STATE_LOCKOUT &&
+#if FEATURE_BLE_BADGE
+            g_app_state != APP_STATE_VCARD_QR &&
+#endif
+#if FEATURE_CA
+            g_app_state != APP_STATE_CA_QR_CODE &&
+#endif
             g_last_activity_ms > 0) {
             uint32_t elapsed = millis() - g_last_activity_ms;
             if (elapsed >= AUTOLOCK_TIMEOUT_MS) {
@@ -254,18 +376,15 @@ extern "C" void app_main(void) {
                     wifi_manager_deinit();
                     go_to_main_menu();
                 } else {
-                    // Build network list
+                    // Build network list with graphical icons
+                    view_wifi_list_init(&g_wifi_list, "WiFi");
                     for (uint8_t i = 0; i < count && i < WIFI_MAX_NETWORKS; i++) {
                         wifi_network_t net;
                         if (wifi_manager_get_network(i, &net)) {
-                            static char net_labels[WIFI_MAX_NETWORKS][48];
-                            snprintf(net_labels[i], sizeof(net_labels[i]), "%s %ddBm%s",
-                                    net.ssid, net.rssi,
-                                    net.auth_mode == WIFI_AUTH_OPEN ? "" : " *");
-                            g_wifi_items[i] = {net_labels[i]};
+                            view_wifi_list_add(&g_wifi_list, net.ssid, net.rssi, net.auth_mode);
                         }
                     }
-                    view_list_screen_init(&g_wifi_list, "WiFi", g_wifi_items, count);
+                    view_wifi_list_sort(&g_wifi_list);  // Sort by signal strength
                     g_app_state = APP_STATE_WIFI_LIST;
                     render_current_state(false);
                 }
@@ -331,7 +450,7 @@ extern "C" void app_main(void) {
                     }
                     g_ntp_sync_phase = 0;
                     build_tools_menu();
-                    view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, 2);
+                    view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, g_tools_item_count);
                     g_app_state = APP_STATE_TOOLS_MENU;
                     render_current_state(false);
                 } else if (millis() - g_wifi_connect_start > 15000) {
@@ -344,7 +463,7 @@ extern "C" void app_main(void) {
                     }
                     g_ntp_sync_phase = 0;
                     build_tools_menu();
-                    view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, 2);
+                    view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, g_tools_item_count);
                     g_app_state = APP_STATE_TOOLS_MENU;
                     render_current_state(false);
                 }
@@ -362,7 +481,7 @@ extern "C" void app_main(void) {
                     }
                     g_ntp_sync_phase = 0;
                     build_tools_menu();
-                    view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, 2);
+                    view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, g_tools_item_count);
                     g_app_state = APP_STATE_TOOLS_MENU;
                     render_current_state(false);
                 } else if (ntp_state == NTP_STATE_FAILED || ntp_sync_timed_out()) {
@@ -376,7 +495,7 @@ extern "C" void app_main(void) {
                     }
                     g_ntp_sync_phase = 0;
                     build_tools_menu();
-                    view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, 2);
+                    view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, g_tools_item_count);
                     g_app_state = APP_STATE_TOOLS_MENU;
                     render_current_state(false);
                 }
@@ -492,10 +611,23 @@ extern "C" void app_main(void) {
                     // Abort without saving - return to appropriate list
                     if (g_app_state == APP_STATE_T9_DEMO) {
                         go_to_main_menu();
+#if FEATURE_TOTP
                     } else if (g_app_state == APP_STATE_TOTP_ADD_NAME ||
                                g_app_state == APP_STATE_TOTP_ADD_SECRET ||
                                g_app_state == APP_STATE_TOTP_ADD_ISSUER) {
                         go_to_totp_list();
+#endif
+#if FEATURE_BLE_BADGE
+                    } else if (g_app_state == APP_STATE_VCARD_ADD_FIRST ||
+                               g_app_state == APP_STATE_VCARD_ADD_LAST ||
+                               g_app_state == APP_STATE_VCARD_ADD_NOTE ||
+                               g_app_state == APP_STATE_VCARD_FIELD_VALUE) {
+                        build_vcard_submenu();
+                        view_list_screen_init(&g_vcard_submenu, i18n_str(STR_VCARDS),
+                                              g_vcard_submenu_items, VCARD_SUB_IDX_COUNT);
+                        g_app_state = APP_STATE_VCARD_SUBMENU;
+                        render_current_state(false);
+#endif
                     } else {
                         go_to_badge_texts_menu();
                     }
@@ -503,8 +635,36 @@ extern "C" void app_main(void) {
             } else {
                 g_n_key_press_start = 0;
             }
+
+            // Long-press digit to insert number instead of T9 letters
+            char held_digit = 0;
+            for (char d = '0'; d <= '9'; d++) {
+                if (pin_expander_is_key_down(d)) {
+                    held_digit = d;
+                    break;
+                }
+            }
+            if (held_digit != 0) {
+                if (g_t9_digit_hold_key != held_digit) {
+                    g_t9_digit_hold_key = held_digit;
+                    g_t9_digit_press_start = millis();
+                    g_t9_digit_hold_sent = false;
+                } else if (!g_t9_digit_hold_sent &&
+                           (millis() - g_t9_digit_press_start >= T9_DIGIT_HOLD_MS)) {
+                    view_t9_input_force_digit(&g_t9_input, held_digit);
+                    g_t9_digit_hold_sent = true;
+                    render_current_state(true);
+                }
+            } else {
+                g_t9_digit_hold_key = 0;
+                g_t9_digit_press_start = 0;
+                g_t9_digit_hold_sent = false;
+            }
         } else {
             g_n_key_press_start = 0;
+            g_t9_digit_hold_key = 0;
+            g_t9_digit_press_start = 0;
+            g_t9_digit_hold_sent = false;
         }
 
         // Check for keypad input

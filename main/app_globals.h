@@ -19,6 +19,10 @@
 #include "freertos/semphr.h"
 #endif
 
+#if FEATURE_BLE_BADGE
+#include "ble_badge.h"
+#endif
+
 // App states
 // Keep ordering stable for state transitions and rendering.
 typedef enum {
@@ -85,6 +89,38 @@ typedef enum {
     APP_STATE_TOOLS_MENU,
     APP_STATE_TOOLS_NTP_SYNC,
     APP_STATE_TOOLS_WIFI_MENU,
+#if FEATURE_BLE_BADGE
+    // Remote Badge main menu
+    APP_STATE_REMOTE_BADGE_MENU,     // Main menu: vCards, Broadcast, Settings
+    // vCards submenu
+    APP_STATE_VCARD_SUBMENU,         // vCards submenu
+    APP_STATE_VCARD_ADD_FIRST,       // Edit own vCard: First name
+    APP_STATE_VCARD_ADD_LAST,        // Edit own vCard: Last name
+    APP_STATE_VCARD_ADD_NOTE,        // Edit own vCard: Note
+    APP_STATE_VCARD_FIELD_MENU,      // Field type selection (main categories)
+    APP_STATE_VCARD_PHONE_TYPE,      // Phone type submenu (Landline/Mobile/Pager)
+    APP_STATE_VCARD_IMPP_TYPE,       // IMPP type submenu (Telegram/Signal/WhatsApp/etc.)
+    APP_STATE_VCARD_ADDRESS_TYPE,    // Address type submenu (Home/Work)
+    APP_STATE_VCARD_FIELD_VALUE,     // Field value entry
+    APP_STATE_VCARD_EXCHANGE,        // Exchange mode (scan & exchange)
+    APP_STATE_VCARD_LIST,            // vCard list with context menu
+    APP_STATE_VCARD_CONTEXT_MENU,    // Context menu for vCard
+    APP_STATE_VCARD_VIEW,            // View vCard details
+    APP_STATE_VCARD_QR,              // Show vCard QR code
+    // Broadcast submenu
+    APP_STATE_BROADCAST_SUBMENU,     // Broadcast submenu: Send, Receive toggles
+    APP_STATE_VCARD_NEARBY_LIST,     // Nearby badges list
+    APP_STATE_VCARD_SEND_PROGRESS,   // Send progress
+    APP_STATE_VCARD_NEARBY_ALERT,    // Nearby alert
+    // Settings submenu
+    APP_STATE_BROADCAST_SETTINGS,    // Settings submenu: Intervals
+    APP_STATE_VCARD_ADV_INTERVAL,    // Send interval slider
+    APP_STATE_VCARD_SCAN_INTERVAL,   // Scan interval slider
+    // BLE Pairing
+    APP_STATE_BLE_PAIRING_CONFIRM,
+    APP_STATE_BLE_PAIRING_PASSKEY,
+    APP_STATE_BLE_PAIRING_DISPLAY,
+#endif
 #if FEATURE_CA
     // CA states
     APP_STATE_CA_MENU,
@@ -114,10 +150,23 @@ enum {
 #if FEATURE_CA
     MENU_IDX_CA,
 #endif
+#if FEATURE_BLE_BADGE
+    MENU_IDX_REMOTE_BADGE,
+#endif
     MENU_IDX_TOOLS,
-    MENU_IDX_SELFTEST,
     MENU_IDX_SETTINGS
     // Deep Sleep moved to lock screen quick menu
+};
+
+// Tools Menu indices (dynamic, order defined in build_tools_menu)
+enum {
+    TOOLS_IDX_WIFI,
+#if FEATURE_BLE_UART
+    TOOLS_IDX_BLE_SERIAL,
+#endif
+    TOOLS_IDX_NTP,
+    TOOLS_IDX_SELFTEST,
+    TOOLS_IDX_COUNT
 };
 
 // Settings Menu indices (WiFi moved to Tools > WiFi > Setup)
@@ -236,8 +285,7 @@ extern bool g_fido_was_locked;
 #endif
 
 // WiFi state and views
-extern view_list_screen_t g_wifi_list;
-extern view_list_item_t g_wifi_items[WIFI_MAX_NETWORKS + 1];  // +1 for "Add Manual"
+extern view_wifi_list_t g_wifi_list;
 extern uint8_t g_wifi_selected_index;
 extern view_context_menu_t g_wifi_context_menu;
 extern const view_context_item_t g_wifi_context_items[];
@@ -249,11 +297,122 @@ extern view_list_item_t g_wifi_ip_items[2];
 
 // Tools menu
 extern view_list_screen_t g_tools_menu;
-extern view_list_item_t g_tools_items[2];
+extern view_list_item_t g_tools_items[5];
+extern uint8_t g_tools_item_count;
 
 // Tools WiFi submenu
 extern view_list_screen_t g_tools_wifi_menu;
 extern view_list_item_t g_tools_wifi_items[4];
+
+#if FEATURE_BLE_BADGE
+// Remote Badge main menu (3 submenus)
+enum {
+    REMOTE_BADGE_IDX_VCARDS,     // vCards submenu
+    REMOTE_BADGE_IDX_BROADCAST,  // Broadcast submenu
+    REMOTE_BADGE_IDX_SETTINGS,   // Settings submenu
+    REMOTE_BADGE_IDX_COUNT
+};
+
+// vCards submenu indices
+enum {
+    VCARD_SUB_IDX_EDIT,          // Edit own vCard
+    VCARD_SUB_IDX_EXCHANGE,      // Exchange mode
+    VCARD_SUB_IDX_LIST,          // vCard list
+    VCARD_SUB_IDX_COUNT
+};
+
+// Broadcast submenu indices
+enum {
+    BROADCAST_SUB_IDX_SEND,      // Beacon send toggle
+    BROADCAST_SUB_IDX_RECEIVE,   // Beacon receive toggle
+    BROADCAST_SUB_IDX_COUNT
+};
+
+// Settings submenu indices
+enum {
+    SETTINGS_SUB_IDX_SEND_INTERVAL,   // Send interval
+    SETTINGS_SUB_IDX_SCAN_INTERVAL,   // Scan interval
+    SETTINGS_SUB_IDX_COUNT
+};
+
+// Phone type submenu indices
+enum {
+    PHONE_TYPE_IDX_LANDLINE,
+    PHONE_TYPE_IDX_MOBILE,
+    PHONE_TYPE_IDX_BUSINESS,
+    PHONE_TYPE_IDX_PAGER,
+    PHONE_TYPE_IDX_COUNT
+};
+
+// IMPP type submenu indices
+enum {
+    IMPP_TYPE_IDX_TELEGRAM,
+    IMPP_TYPE_IDX_SIGNAL,
+    IMPP_TYPE_IDX_WHATSAPP,
+    IMPP_TYPE_IDX_DISCORD,
+    IMPP_TYPE_IDX_MATRIX,
+    IMPP_TYPE_IDX_THREEMA,
+    IMPP_TYPE_IDX_OTHER,
+    IMPP_TYPE_IDX_COUNT
+};
+
+// Address type submenu indices
+enum {
+    ADDRESS_TYPE_IDX_HOME,
+    ADDRESS_TYPE_IDX_WORK,
+    ADDRESS_TYPE_IDX_COUNT
+};
+
+#define VCARD_EDITOR_MAX_EXTRAS 12
+typedef struct {
+    char first[32];
+    char last[32];
+    char note[128];
+    uint8_t extra_type[VCARD_EDITOR_MAX_EXTRAS];
+    char extra_value[VCARD_EDITOR_MAX_EXTRAS][64];
+    uint8_t extra_count;
+    uint8_t extra_edit_index;
+} vcard_editor_t;
+
+// Remote Badge menus
+extern view_list_screen_t g_remote_badge_menu;
+extern view_list_item_t g_remote_badge_items[REMOTE_BADGE_IDX_COUNT];
+// vCards submenu
+extern view_list_screen_t g_vcard_submenu;
+extern view_list_item_t g_vcard_submenu_items[VCARD_SUB_IDX_COUNT];
+// Broadcast submenu
+extern view_list_screen_t g_broadcast_submenu;
+extern view_list_item_t g_broadcast_submenu_items[BROADCAST_SUB_IDX_COUNT];
+// Settings submenu
+extern view_list_screen_t g_broadcast_settings_menu;
+extern view_list_item_t g_broadcast_settings_items[SETTINGS_SUB_IDX_COUNT];
+
+// vCard list and context menu
+extern view_list_screen_t g_vcard_list;
+extern view_list_item_t g_vcard_list_items[100];
+extern view_context_menu_t g_vcard_context_menu;
+extern view_context_item_t g_vcard_context_items[3];
+extern view_list_screen_t g_vcard_field_menu;
+extern view_list_item_t g_vcard_field_items[12];  // Field categories + Save
+// Phone type submenu
+extern view_list_screen_t g_phone_type_menu;
+extern view_list_item_t g_phone_type_items[PHONE_TYPE_IDX_COUNT];
+// IMPP type submenu
+extern view_list_screen_t g_impp_type_menu;
+extern view_list_item_t g_impp_type_items[IMPP_TYPE_IDX_COUNT];
+// Address type submenu
+extern view_list_screen_t g_address_type_menu;
+extern view_list_item_t g_address_type_items[ADDRESS_TYPE_IDX_COUNT];
+extern view_list_screen_t g_vcard_nearby_list;
+extern view_list_item_t g_vcard_nearby_items[16];
+extern ble_badge_peer_t g_vcard_nearby_peers[16];
+extern uint16_t g_vcard_nearby_count;
+extern vcard_editor_t g_vcard_editor;
+extern app_state_t g_vcard_nearby_return_state;
+extern uint32_t g_vcard_nearby_alert_until;
+extern app_state_t g_ble_pairing_return_state;
+extern uint32_t g_ble_pairing_passkey;
+#endif
 
 // WiFi connection timing
 extern uint32_t g_wifi_connect_start;

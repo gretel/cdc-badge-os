@@ -24,9 +24,18 @@ extern "C" {
 #include "tusb.h"
 #include "class/cdc/cdc.h"
 #include "class/hid/hid_device.h"
+#if FEATURE_GPG_CCID
+#include "device/usbd_pvt.h"
+#include "class/vendor/vendor_device.h"
+#endif
 }
 
 #include <string.h>
+
+#if FEATURE_GPG_CCID
+#include "ccid.h"
+#include "openpgp.h"
+#endif
 
 // ============================================================================
 // State
@@ -109,13 +118,58 @@ static const uint8_t keyboard_report_desc[] = {
 };
 #endif
 
+// ============================================================================
+// CCID SmartCard Descriptor (54 bytes class descriptor + endpoints)
+// ============================================================================
+// CCID Class Descriptor (54 bytes) - USB CCID 1.1 specification
+// Using Gemalto VID/PID for libccid compatibility (see plan.md)
+#define TUD_CCID_DESC_LEN  54
+#define TUD_CCID_TOTAL_LEN (9 + TUD_CCID_DESC_LEN + 7 + 7)  // Interface + Class + 2x Endpoint
+
+#if FEATURE_GPG_CCID
+// CCID Class Descriptor Macro
+#define TUD_CCID_DESCRIPTOR(_itfnum, _stridx, _epout, _epin, _epsize) \
+    /* Interface */ \
+    9, TUSB_DESC_INTERFACE, _itfnum, 0, 2, TUSB_CLASS_SMART_CARD, 0, 0, _stridx, \
+    /* CCID Class Descriptor (54 bytes) */ \
+    TUD_CCID_DESC_LEN, 0x21, /* bDescriptorType: CCID Functional */ \
+    0x10, 0x01,              /* bcdCCID: CCID 1.1 */ \
+    0x00,                    /* bMaxSlotIndex: 1 slot */ \
+    0x07,                    /* bVoltageSupport: 5V, 3V, 1.8V */ \
+    0x02, 0x00, 0x00, 0x00,  /* dwProtocols: T=1 */ \
+    0xA0, 0x0F, 0x00, 0x00,  /* dwDefaultClock: 4000 kHz */ \
+    0xA0, 0x0F, 0x00, 0x00,  /* dwMaximumClock: 4000 kHz */ \
+    0x00,                    /* bNumClockSupported */ \
+    0x00, 0x2A, 0x00, 0x00,  /* dwDataRate: 10752 bps */ \
+    0x00, 0x2A, 0x00, 0x00,  /* dwMaxDataRate: 10752 bps */ \
+    0x00,                    /* bNumDataRatesSupported */ \
+    0xFE, 0x00, 0x00, 0x00,  /* dwMaxIFSD: 254 */ \
+    0x00, 0x00, 0x00, 0x00,  /* dwSynchProtocols: none */ \
+    0x00, 0x00, 0x00, 0x00,  /* dwMechanical: none */ \
+    0xBA, 0x04, 0x01, 0x00,  /* dwFeatures: auto params, auto PPS, auto clock, auto baud, auto IFSD, short+extended APDU */ \
+    0x0F, 0x01, 0x00, 0x00,  /* dwMaxCCIDMessageLength: 271 */ \
+    0xFF,                    /* bClassGetResponse */ \
+    0xFF,                    /* bClassEnvelope */ \
+    0x00, 0x00,              /* wLcdLayout: none */ \
+    0x00,                    /* bPINSupport: none */ \
+    0x01,                    /* bMaxCCIDBusySlots: 1 */ \
+    /* Bulk OUT Endpoint */ \
+    7, TUSB_DESC_ENDPOINT, _epout, TUSB_XFER_BULK, U16_TO_U8S_LE(_epsize), 0, \
+    /* Bulk IN Endpoint */ \
+    7, TUSB_DESC_ENDPOINT, _epin, TUSB_XFER_BULK, U16_TO_U8S_LE(_epsize), 0
+#define CCID_CONFIG_LEN TUD_CCID_TOTAL_LEN
+#else
+#define CCID_CONFIG_LEN 0
+#endif
+
 // Configuration Descriptor
 // Calculate total length based on enabled features
 #define CONFIG_TOTAL_LEN ( \
     TUD_CONFIG_DESC_LEN + \
     TUD_CDC_DESC_LEN + \
     (FEATURE_FIDO2_USB ? TUD_HID_INOUT_DESC_LEN : 0) + \
-    (FEATURE_USB_KEYBOARD ? TUD_HID_DESC_LEN : 0) \
+    (FEATURE_USB_KEYBOARD ? TUD_HID_DESC_LEN : 0) + \
+    CCID_CONFIG_LEN \
 )
 
 static const uint8_t config_descriptor[] = {
@@ -139,6 +193,11 @@ static const uint8_t config_descriptor[] = {
                        sizeof(keyboard_report_desc), EP_KEYBOARD_IN,
                        EP_KEYBOARD_SIZE, 10),
 #endif
+
+#if FEATURE_GPG_CCID
+    // CCID SmartCard Interface
+    TUD_CCID_DESCRIPTOR(ITF_CCID, STR_CCID, EP_CCID_OUT, EP_CCID_IN, EP_CCID_SIZE),
+#endif
 };
 
 // String Descriptors
@@ -153,6 +212,9 @@ static const char* string_descriptors[] = {
 #endif
 #if FEATURE_USB_KEYBOARD
     "Keyboard",                   // 6: Keyboard Interface (or 5 if no FIDO)
+#endif
+#if FEATURE_GPG_CCID
+    "OpenPGP SmartCard",          // CCID Interface string
 #endif
 };
 
@@ -278,6 +340,9 @@ static void usb_device_task(void* arg) {
     (void)arg;
     while (1) {
         tud_task();
+#if FEATURE_GPG_CCID
+        usb_ccid::task();
+#endif
         vTaskDelay(1);
     }
 }
@@ -334,13 +399,21 @@ bool usb_hid_init(void) {
 
     g_usb_initialized = true;
 
+#if FEATURE_GPG_CCID
+    // Initialize CCID/OpenPGP after USB is ready
+    if (!usb_ccid::init()) {
+        LOG_W("USB", "CCID init failed (continuing without CCID)");
+    }
+#endif
+
 #if CONFIG_ESP_CONSOLE_USB_CDC
     LOG_I("USB", "USB initialized: CDC only (ROM mode)");
 #else
     // Log which interfaces are enabled
-    LOG_I("USB", "USB initialized: CDC%s%s",
+    LOG_I("USB", "USB initialized: CDC%s%s%s",
           FEATURE_FIDO2_USB ? " + FIDO" : "",
-          FEATURE_USB_KEYBOARD ? " + Keyboard" : "");
+          FEATURE_USB_KEYBOARD ? " + Keyboard" : "",
+          FEATURE_GPG_CCID ? " + CCID" : "");
 #endif
     return true;
 }
@@ -502,3 +575,115 @@ bool type_enter(void) {
 }
 
 } // namespace usb_keyboard
+
+// ============================================================================
+// CCID SmartCard Interface
+// ============================================================================
+
+#if FEATURE_GPG_CCID
+
+namespace usb_ccid {
+
+// CCID state
+static bool g_ccid_initialized = false;
+static uint8_t g_ccid_itf_num = 0;
+
+// RX/TX buffers for CCID messages
+// Keep small to save RAM - APDU commands are typically <256 bytes
+#define CCID_RX_BUFSIZE 384
+#define CCID_TX_BUFSIZE 384
+static uint8_t ccid_rx_buf[CCID_RX_BUFSIZE];
+static uint8_t ccid_tx_buf[CCID_TX_BUFSIZE];
+static uint16_t ccid_rx_len = 0;
+
+bool init(void) {
+    if (g_ccid_initialized) return true;
+
+    // Initialize OpenPGP application
+    if (!openpgp_init()) {
+        LOG_E("CCID", "OpenPGP init failed");
+        return false;
+    }
+
+    g_ccid_initialized = true;
+    LOG_I("CCID", "CCID SmartCard initialized");
+    return true;
+}
+
+bool ready(void) {
+    return g_ccid_initialized && g_usb_initialized && tud_vendor_mounted();
+}
+
+// Process CCID message and generate response
+static int process_ccid_message(const uint8_t* msg, uint16_t msg_len,
+                                 uint8_t* resp, uint16_t resp_max) {
+    return ccid_process_message(msg, msg_len, resp, resp_max);
+}
+
+// Task function called from USB task to process CCID
+void task(void) {
+    if (!ready()) return;
+
+    // Check for incoming data
+    uint32_t available = tud_vendor_available();
+    if (available > 0) {
+        uint16_t read_len = tud_vendor_read(ccid_rx_buf + ccid_rx_len,
+                                            CCID_RX_BUFSIZE - ccid_rx_len);
+        ccid_rx_len += read_len;
+
+        // Check if we have a complete CCID message (minimum 10 byte header)
+        if (ccid_rx_len >= 10) {
+            // Extract message length from header (bytes 1-4, little endian)
+            uint32_t data_len = ccid_rx_buf[1] | (ccid_rx_buf[2] << 8) |
+                               (ccid_rx_buf[3] << 16) | (ccid_rx_buf[4] << 24);
+            uint32_t total_len = 10 + data_len;
+
+            if (ccid_rx_len >= total_len) {
+                // Process complete message
+                int resp_len = process_ccid_message(ccid_rx_buf, total_len,
+                                                    ccid_tx_buf, CCID_TX_BUFSIZE);
+
+                // Send response
+                if (resp_len > 0) {
+                    tud_vendor_write(ccid_tx_buf, resp_len);
+                    tud_vendor_flush();
+                }
+
+                // Remove processed message from buffer
+                if (ccid_rx_len > total_len) {
+                    memmove(ccid_rx_buf, ccid_rx_buf + total_len,
+                            ccid_rx_len - total_len);
+                }
+                ccid_rx_len -= total_len;
+            }
+        }
+    }
+}
+
+} // namespace usb_ccid
+
+// TinyUSB Vendor callbacks for CCID
+extern "C" {
+
+// Note: TinyUSB vendor_rx_cb signature includes buffer and size parameters
+void tud_vendor_rx_cb(uint8_t itf, uint8_t const* buffer, uint16_t bufsize) {
+    (void)itf;
+    (void)buffer;
+    (void)bufsize;
+    // Processing happens in usb_ccid::task() which reads via tud_vendor_read()
+}
+
+void tud_vendor_tx_cb(uint8_t itf, uint32_t sent_bytes) {
+    (void)itf;
+    (void)sent_bytes;
+    tud_vendor_write_flush();
+}
+
+// Custom CCID driver registration
+// TinyUSB allows adding custom class drivers via usbd_app_driver_get_cb
+// However, since we're using the standard Vendor class with our own protocol,
+// we don't need a custom driver - just the vendor class callbacks above.
+
+} // extern "C"
+
+#endif // FEATURE_GPG_CCID

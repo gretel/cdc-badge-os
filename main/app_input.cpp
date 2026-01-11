@@ -29,17 +29,654 @@
 #if FEATURE_BLE_UART
 #include "ble_uart.h"
 #endif
+#if FEATURE_BLE_BADGE
+#include "vcard_store.h"
+#include "ble_badge.h"
+#endif
 
 #if FEATURE_CA
 #include "ca.h"
 #endif
 
 #include <cstdio>
+#include <cstdarg>
+#include <cstdlib>
 #include <cstring>
+#include <cctype>
 
+#if FEATURE_BLE_UART || FEATURE_BLE_BADGE
+static bool bluetooth_is_active(void) {
+    bool active = false;
 #if FEATURE_BLE_UART
-static bool ble_is_active(void) {
-    return g_ble_enabled || ble_uart_is_initialized();
+    active = active || g_ble_enabled || ble_uart_is_initialized();
+#endif
+#if FEATURE_BLE_BADGE
+    active = active || ble_badge_is_adv_active() || ble_badge_is_scan_active() ||
+             ble_badge_is_exchange_enabled() || ble_badge_exchange_in_progress();
+#endif
+    return active;
+}
+#endif
+
+#if FEATURE_BLE_BADGE
+// Field categories shown in the main field menu
+enum {
+    VCARD_FIELD_CAT_PHONE,      // -> Phone type submenu
+    VCARD_FIELD_CAT_EMAIL,
+    VCARD_FIELD_CAT_URL,
+    VCARD_FIELD_CAT_ORG,
+    VCARD_FIELD_CAT_TITLE,
+    VCARD_FIELD_CAT_SOCIAL,
+    VCARD_FIELD_CAT_IMPP,       // -> IMPP type submenu
+    VCARD_FIELD_CAT_ADDRESS,    // -> Address type submenu
+    VCARD_FIELD_CAT_COUNT
+};
+
+// Storage field types (include subtypes for vCard export)
+enum {
+    VCARD_FIELD_TYPE_PHONE_LANDLINE,
+    VCARD_FIELD_TYPE_PHONE_MOBILE,
+    VCARD_FIELD_TYPE_PHONE_BUSINESS,
+    VCARD_FIELD_TYPE_PHONE_PAGER,
+    VCARD_FIELD_TYPE_EMAIL,
+    VCARD_FIELD_TYPE_URL,
+    VCARD_FIELD_TYPE_ORG,
+    VCARD_FIELD_TYPE_TITLE,
+    VCARD_FIELD_TYPE_SOCIAL,
+    VCARD_FIELD_TYPE_IMPP_TELEGRAM,
+    VCARD_FIELD_TYPE_IMPP_SIGNAL,
+    VCARD_FIELD_TYPE_IMPP_WHATSAPP,
+    VCARD_FIELD_TYPE_IMPP_DISCORD,
+    VCARD_FIELD_TYPE_IMPP_MATRIX,
+    VCARD_FIELD_TYPE_IMPP_THREEMA,
+    VCARD_FIELD_TYPE_IMPP_OTHER,
+    VCARD_FIELD_TYPE_ADDRESS_HOME,
+    VCARD_FIELD_TYPE_ADDRESS_WORK,
+    VCARD_FIELD_TYPE_COUNT
+};
+
+// Currently selected category and subtype for two-step field selection
+static uint8_t g_vcard_field_category = 0;
+static uint8_t g_vcard_field_subtype = 0;
+
+static uint16_t g_vcard_list_slots[VCARD_MAX_CARDS + 1];
+static uint16_t g_vcard_list_count = 0;
+static uint16_t g_vcard_selected_slot = 0xFFFF;
+static bool g_vcard_selected_is_own = false;
+static char g_vcard_list_labels[VCARD_MAX_CARDS + 1][VIEW_MAX_TEXT_LEN];
+static char g_broadcast_menu_labels[BROADCAST_SUB_IDX_COUNT][VIEW_MAX_TEXT_LEN];
+static char g_broadcast_settings_labels[SETTINGS_SUB_IDX_COUNT][VIEW_MAX_TEXT_LEN];
+static char g_vcard_view_buf[VCARD_MAX_LEN + 1];
+static char g_vcard_qr_buf[VCARD_MAX_LEN + 1];
+static char g_vcard_qr_name[64];
+
+static void vcard_editor_reset(void) {
+    memset(&g_vcard_editor, 0, sizeof(g_vcard_editor));
+}
+
+static void vcard_editor_add_extra(uint8_t type, const char *value) {
+    if (!value || !value[0]) return;
+    if (g_vcard_editor.extra_count >= VCARD_EDITOR_MAX_EXTRAS) return;
+    uint8_t idx = g_vcard_editor.extra_count++;
+    g_vcard_editor.extra_type[idx] = type;
+    strncpy(g_vcard_editor.extra_value[idx], value, sizeof(g_vcard_editor.extra_value[idx]) - 1);
+    g_vcard_editor.extra_value[idx][sizeof(g_vcard_editor.extra_value[idx]) - 1] = '\0';
+}
+
+// Unescape vCard escape sequences: \, -> , | \; -> ; | \\ -> \ | \n -> newline
+static void vcard_unescape(char *str) {
+    if (!str) return;
+    char *src = str;
+    char *dst = str;
+    while (*src) {
+        if (*src == '\\' && *(src + 1)) {
+            char next = *(src + 1);
+            if (next == ',' || next == ';' || next == '\\') {
+                *dst++ = next;
+                src += 2;
+            } else if (next == 'n' || next == 'N') {
+                *dst++ = ' ';  // Replace newline with space for display
+                src += 2;
+            } else {
+                *dst++ = *src++;
+            }
+        } else {
+            *dst++ = *src++;
+        }
+    }
+    *dst = '\0';
+}
+
+// Extract property name from grouped field (e.g., "item1.EMAIL" -> "EMAIL")
+static const char *vcard_extract_property(const char *key, char *out, size_t out_len) {
+    const char *dot = strchr(key, '.');
+    if (dot) {
+        // Skip group prefix (e.g., "item1.")
+        key = dot + 1;
+    }
+    size_t len = strlen(key);
+    if (len >= out_len) len = out_len - 1;
+    for (size_t i = 0; i < len; i++) {
+        out[i] = (char)toupper((unsigned char)key[i]);
+    }
+    out[len] = '\0';
+    return out;
+}
+
+static void vcard_editor_load_from_vcard(const char *vcard) {
+    if (!vcard || !vcard[0]) return;
+    LOG_I("VCARD", "Loading vCard into editor, len=%d", (int)strlen(vcard));
+    const char *p = vcard;
+    while (*p) {
+        const char *line_end = strchr(p, '\n');
+        size_t line_len = line_end ? (size_t)(line_end - p) : strlen(p);
+        if (line_len == 0) {
+            if (!line_end) break;
+            p = line_end + 1;
+            continue;
+        }
+        char line[256];
+        if (line_len >= sizeof(line)) line_len = sizeof(line) - 1;
+        memcpy(line, p, line_len);
+        line[line_len] = '\0';
+        if (line_len > 0 && line[line_len - 1] == '\r') {
+            line[line_len - 1] = '\0';
+        }
+
+        char *colon = strchr(line, ':');
+        if (colon) {
+            *colon = '\0';
+            const char *key = line;
+            char value[256];
+            strncpy(value, colon + 1, sizeof(value) - 1);
+            value[sizeof(value) - 1] = '\0';
+            vcard_unescape(value);  // Decode escape sequences
+
+            // Extract property name (handles grouped fields like "item1.EMAIL")
+            char key_upper[128];
+            vcard_extract_property(key, key_upper, sizeof(key_upper));
+
+            // =========================================================================
+            // vCard 4.0 (RFC 6350) Property Mapping
+            // Reference: https://github.com/kevinioi/vcf-parser ValidationHelper.c
+            // =========================================================================
+
+            // --- IGNORED FIELDS (binary data, metadata, Apple-specific) ---
+            // PHOTO, LOGO, SOUND, KEY: Binary/base64 data - too large for badge
+            // PRODID, REV, UID, VERSION: Metadata - not user-relevant
+            // SOURCE, KIND, XML, CLIENTPIDMAP: Technical metadata
+            // BDAY, ANNIVERSARY, GENDER: Date fields - not supported in editor
+            // LANG, TZ, GEO: Locale data - not needed
+            // MEMBER, RELATED, CATEGORIES: Group/relationship data
+            // FBURL, CALADRURI, CALURI: Calendar URLs - not needed
+            // X-AB*: Apple-specific labels and metadata
+            if (strncmp(key_upper, "PHOTO", 5) == 0 ||
+                strncmp(key_upper, "LOGO", 4) == 0 ||
+                strncmp(key_upper, "SOUND", 5) == 0 ||
+                strncmp(key_upper, "KEY", 3) == 0 ||
+                strncmp(key_upper, "PRODID", 6) == 0 ||
+                strncmp(key_upper, "REV", 3) == 0 ||
+                strncmp(key_upper, "UID", 3) == 0 ||
+                strncmp(key_upper, "VERSION", 7) == 0 ||
+                strncmp(key_upper, "SOURCE", 6) == 0 ||
+                strncmp(key_upper, "KIND", 4) == 0 ||
+                strncmp(key_upper, "XML", 3) == 0 ||
+                strncmp(key_upper, "CLIENTPIDMAP", 12) == 0 ||
+                strncmp(key_upper, "BDAY", 4) == 0 ||
+                strncmp(key_upper, "ANNIVERSARY", 11) == 0 ||
+                strncmp(key_upper, "GENDER", 6) == 0 ||
+                strncmp(key_upper, "LANG", 4) == 0 ||
+                strncmp(key_upper, "TZ", 2) == 0 ||
+                strncmp(key_upper, "GEO", 3) == 0 ||
+                strncmp(key_upper, "MEMBER", 6) == 0 ||
+                strncmp(key_upper, "RELATED", 7) == 0 ||
+                strncmp(key_upper, "CATEGORIES", 10) == 0 ||
+                strncmp(key_upper, "FBURL", 5) == 0 ||
+                strncmp(key_upper, "CALADRURI", 9) == 0 ||
+                strncmp(key_upper, "CALURI", 6) == 0 ||
+                strncmp(key_upper, "BEGIN", 5) == 0 ||
+                strncmp(key_upper, "END", 3) == 0 ||
+                strncmp(key_upper, "X-AB", 4) == 0 ||           // Apple X-ABLabel, X-ABADR, etc.
+                strncmp(key_upper, "X-IMAGETYPE", 11) == 0 ||
+                strncmp(key_upper, "X-IMAGEHASH", 11) == 0 ||
+                strncmp(key_upper, "X-APPLE", 7) == 0 ||
+                strncmp(key_upper, "X-PHONETIC", 10) == 0) {
+                // Skip these fields - not relevant for badge display
+            }
+            // --- NAME FIELDS ---
+            // N: Structured name (Family;Given;Additional;Prefix;Suffix)
+            else if (strncmp(key_upper, "N", 1) == 0 && (key_upper[1] == '\0' || key_upper[1] == ';')) {
+                char tmp[128];
+                strncpy(tmp, value, sizeof(tmp) - 1);
+                tmp[sizeof(tmp) - 1] = '\0';
+                char *family = tmp;
+                char *given = strchr(tmp, ';');
+                if (given) {
+                    *given = '\0';
+                    given++;
+                    char *next_semi = strchr(given, ';');
+                    if (next_semi) *next_semi = '\0';
+                }
+                LOG_D("VCARD", "N field: family='%s', given='%s'", family ? family : "(null)", given ? given : "(null)");
+                if (family && *family) {
+                    strncpy(g_vcard_editor.last, family, sizeof(g_vcard_editor.last) - 1);
+                    g_vcard_editor.last[sizeof(g_vcard_editor.last) - 1] = '\0';
+                    LOG_D("VCARD", "Set last='%s'", g_vcard_editor.last);
+                }
+                if (given && *given) {
+                    strncpy(g_vcard_editor.first, given, sizeof(g_vcard_editor.first) - 1);
+                    g_vcard_editor.first[sizeof(g_vcard_editor.first) - 1] = '\0';
+                    LOG_D("VCARD", "Set first='%s'", g_vcard_editor.first);
+                }
+            }
+            // FN: Formatted name (fallback if N not present)
+            else if (strncmp(key_upper, "FN", 2) == 0 && (key_upper[2] == '\0' || key_upper[2] == ';')) {
+                if (g_vcard_editor.first[0] == '\0' && g_vcard_editor.last[0] == '\0') {
+                    strncpy(g_vcard_editor.first, value, sizeof(g_vcard_editor.first) - 1);
+                    g_vcard_editor.first[sizeof(g_vcard_editor.first) - 1] = '\0';
+                }
+            }
+            // NICKNAME: Alternative name -> store in note if empty
+            else if (strncmp(key_upper, "NICKNAME", 8) == 0) {
+                if (g_vcard_editor.note[0] == '\0') {
+                    strncpy(g_vcard_editor.note, value, sizeof(g_vcard_editor.note) - 1);
+                    g_vcard_editor.note[sizeof(g_vcard_editor.note) - 1] = '\0';
+                }
+            }
+            // --- NOTE FIELD ---
+            // NOTE: Free-form text
+            else if (strncmp(key_upper, "NOTE", 4) == 0) {
+                strncpy(g_vcard_editor.note, value, sizeof(g_vcard_editor.note) - 1);
+                g_vcard_editor.note[sizeof(g_vcard_editor.note) - 1] = '\0';
+            }
+            // --- PHONE FIELDS ---
+            // TEL: Telephone number with TYPE parameter
+            else if (strncmp(key_upper, "TEL", 3) == 0) {
+                if (strstr(key_upper, "PAGER") || strstr(key_upper, "BBP")) {
+                    vcard_editor_add_extra(VCARD_FIELD_TYPE_PHONE_PAGER, value);
+                } else if (strstr(key_upper, "CELL") || strstr(key_upper, "MOBILE") ||
+                           strstr(key_upper, "IPHONE") || strstr(key_upper, "MAIN")) {
+                    vcard_editor_add_extra(VCARD_FIELD_TYPE_PHONE_MOBILE, value);
+                } else if (strstr(key_upper, "WORK") || strstr(key_upper, "BUSINESS")) {
+                    vcard_editor_add_extra(VCARD_FIELD_TYPE_PHONE_BUSINESS, value);
+                } else if (strstr(key_upper, "FAX")) {
+                    vcard_editor_add_extra(VCARD_FIELD_TYPE_PHONE_LANDLINE, value);  // Fax as landline
+                } else {
+                    vcard_editor_add_extra(VCARD_FIELD_TYPE_PHONE_LANDLINE, value);
+                }
+            }
+            // --- EMAIL FIELD ---
+            // EMAIL: Email address
+            else if (strncmp(key_upper, "EMAIL", 5) == 0) {
+                vcard_editor_add_extra(VCARD_FIELD_TYPE_EMAIL, value);
+            }
+            // --- URL FIELDS ---
+            // URL: Web address
+            else if (strncmp(key_upper, "URL", 3) == 0) {
+                vcard_editor_add_extra(VCARD_FIELD_TYPE_URL, value);
+            }
+            // --- ORGANIZATION FIELDS ---
+            // ORG: Organization name (may have multiple components separated by ;)
+            else if (strncmp(key_upper, "ORG", 3) == 0) {
+                vcard_editor_add_extra(VCARD_FIELD_TYPE_ORG, value);
+            }
+            // TITLE: Job title
+            // ROLE: Function/occupation
+            else if (strncmp(key_upper, "TITLE", 5) == 0 || strncmp(key_upper, "ROLE", 4) == 0) {
+                vcard_editor_add_extra(VCARD_FIELD_TYPE_TITLE, value);
+            }
+            // --- IMPP FIELDS (Instant Messaging / Messengers) ---
+            // IMPP: RFC 6350 standard for instant messaging
+            // Modern messengers: Telegram, Signal, WhatsApp, Discord, Matrix, etc.
+            else if (strncmp(key_upper, "IMPP", 4) == 0 ||
+                     strncmp(key_upper, "X-TELEGRAM", 10) == 0 ||
+                     strncmp(key_upper, "X-SIGNAL", 8) == 0 ||
+                     strncmp(key_upper, "X-WHATSAPP", 10) == 0 ||
+                     strncmp(key_upper, "X-DISCORD", 9) == 0 ||
+                     strncmp(key_upper, "X-MATRIX", 8) == 0 ||
+                     strncmp(key_upper, "X-THREEMA", 9) == 0 ||
+                     strncmp(key_upper, "X-WIRE", 6) == 0 ||
+                     strncmp(key_upper, "X-JABBER", 8) == 0 ||
+                     strncmp(key_upper, "X-XMPP", 6) == 0 ||
+                     strncmp(key_upper, "X-AIM", 5) == 0 ||
+                     strncmp(key_upper, "X-MSN", 5) == 0 ||
+                     strncmp(key_upper, "X-SKYPE", 7) == 0 ||
+                     strncmp(key_upper, "X-YAHOO", 7) == 0 ||
+                     strncmp(key_upper, "X-ICQ", 5) == 0 ||
+                     strncmp(key_upper, "X-GOOGLE", 8) == 0) {
+                // Detect specific messenger type from key or value
+                uint8_t impp_type = VCARD_FIELD_TYPE_IMPP_OTHER;
+                if (strstr(key_upper, "TELEGRAM") || strstr(value, "telegram:") || strstr(value, "t.me/")) {
+                    impp_type = VCARD_FIELD_TYPE_IMPP_TELEGRAM;
+                } else if (strstr(key_upper, "SIGNAL") || strstr(value, "signal:")) {
+                    impp_type = VCARD_FIELD_TYPE_IMPP_SIGNAL;
+                } else if (strstr(key_upper, "WHATSAPP") || strstr(value, "whatsapp:") || strstr(value, "wa.me/")) {
+                    impp_type = VCARD_FIELD_TYPE_IMPP_WHATSAPP;
+                } else if (strstr(key_upper, "DISCORD") || strstr(value, "discord:")) {
+                    impp_type = VCARD_FIELD_TYPE_IMPP_DISCORD;
+                } else if (strstr(key_upper, "MATRIX") || strstr(value, "matrix:") || (strstr(value, "@") && strstr(value, ":"))) {
+                    impp_type = VCARD_FIELD_TYPE_IMPP_MATRIX;
+                } else if (strstr(key_upper, "THREEMA") || strstr(value, "threema:")) {
+                    impp_type = VCARD_FIELD_TYPE_IMPP_THREEMA;
+                }
+                vcard_editor_add_extra(impp_type, value);
+            }
+            // --- SOCIAL FIELDS (Social Media Profiles) ---
+            // X-SOCIALPROFILE: Apple extension for social media
+            // Social networks: Twitter/X, Facebook, LinkedIn, GitHub, Instagram, Mastodon
+            else if (strncmp(key_upper, "X-SOCIALPROFILE", 15) == 0 ||
+                     strncmp(key_upper, "X-TWITTER", 9) == 0 ||
+                     strncmp(key_upper, "X-FACEBOOK", 10) == 0 ||
+                     strncmp(key_upper, "X-LINKEDIN", 10) == 0 ||
+                     strncmp(key_upper, "X-GITHUB", 8) == 0 ||
+                     strncmp(key_upper, "X-GITLAB", 8) == 0 ||
+                     strncmp(key_upper, "X-INSTAGRAM", 11) == 0 ||
+                     strncmp(key_upper, "X-MASTODON", 10) == 0 ||
+                     strncmp(key_upper, "X-BLUESKY", 9) == 0 ||
+                     strncmp(key_upper, "X-TIKTOK", 8) == 0 ||
+                     strncmp(key_upper, "X-YOUTUBE", 9) == 0 ||
+                     strncmp(key_upper, "X-REDDIT", 8) == 0) {
+                vcard_editor_add_extra(VCARD_FIELD_TYPE_SOCIAL, value);
+            }
+            // --- ADDRESS FIELD ---
+            // ADR: Structured address (POBox;Extended;Street;City;Region;PostalCode;Country)
+            else if (strncmp(key_upper, "ADR", 3) == 0) {
+                if (strstr(key_upper, "WORK")) {
+                    vcard_editor_add_extra(VCARD_FIELD_TYPE_ADDRESS_WORK, value);
+                } else {
+                    vcard_editor_add_extra(VCARD_FIELD_TYPE_ADDRESS_HOME, value);
+                }
+            }
+            // All other fields are silently ignored (unknown X- fields, etc.)
+        }
+
+        if (!line_end) break;
+        p = line_end + 1;
+    }
+    g_vcard_editor.extra_edit_index = 0;
+}
+
+// Update broadcast submenu labels with toggle states
+static void broadcast_submenu_update_labels(void) {
+    const char *on = i18n_str(STR_ON);
+    const char *off = i18n_str(STR_OFF);
+
+    snprintf(g_broadcast_menu_labels[BROADCAST_SUB_IDX_SEND],
+             sizeof(g_broadcast_menu_labels[BROADCAST_SUB_IDX_SEND]),
+             "%s: %s", i18n_str(STR_BEACON_SEND), ble_badge_is_adv_enabled() ? on : off);
+    snprintf(g_broadcast_menu_labels[BROADCAST_SUB_IDX_RECEIVE],
+             sizeof(g_broadcast_menu_labels[BROADCAST_SUB_IDX_RECEIVE]),
+             "%s: %s", i18n_str(STR_BEACON_RECEIVE), ble_badge_is_scan_enabled() ? on : off);
+
+    g_broadcast_submenu_items[BROADCAST_SUB_IDX_SEND].label = g_broadcast_menu_labels[BROADCAST_SUB_IDX_SEND];
+    g_broadcast_submenu_items[BROADCAST_SUB_IDX_RECEIVE].label = g_broadcast_menu_labels[BROADCAST_SUB_IDX_RECEIVE];
+}
+
+// Update broadcast settings submenu labels with current values
+static void broadcast_settings_update_labels(void) {
+    snprintf(g_broadcast_settings_labels[SETTINGS_SUB_IDX_SEND_INTERVAL],
+             sizeof(g_broadcast_settings_labels[SETTINGS_SUB_IDX_SEND_INTERVAL]),
+             "%s: %lus", i18n_str(STR_VCARD_ADV_INTERVAL), (unsigned long)(ble_badge_get_adv_interval() / 1000));
+    snprintf(g_broadcast_settings_labels[SETTINGS_SUB_IDX_SCAN_INTERVAL],
+             sizeof(g_broadcast_settings_labels[SETTINGS_SUB_IDX_SCAN_INTERVAL]),
+             "%s: %lus", i18n_str(STR_VCARD_SCAN_INTERVAL), (unsigned long)(ble_badge_get_scan_interval() / 1000));
+
+    g_broadcast_settings_items[SETTINGS_SUB_IDX_SEND_INTERVAL].label = g_broadcast_settings_labels[SETTINGS_SUB_IDX_SEND_INTERVAL];
+    g_broadcast_settings_items[SETTINGS_SUB_IDX_SCAN_INTERVAL].label = g_broadcast_settings_labels[SETTINGS_SUB_IDX_SCAN_INTERVAL];
+}
+
+// Navigate back to vCards submenu
+static void go_to_vcard_submenu(void) {
+    build_vcard_submenu();
+    view_list_screen_init(&g_vcard_submenu, i18n_str(STR_VCARDS),
+                          g_vcard_submenu_items, VCARD_SUB_IDX_COUNT);
+    g_app_state = APP_STATE_VCARD_SUBMENU;
+    render_current_state(false);
+}
+
+static void vcard_fields_init_menu(void) {
+    // Main field category menu
+    g_vcard_field_items[VCARD_FIELD_CAT_PHONE].label = i18n_str(STR_PHONE);
+    g_vcard_field_items[VCARD_FIELD_CAT_EMAIL].label = i18n_str(STR_EMAIL);
+    g_vcard_field_items[VCARD_FIELD_CAT_URL].label = i18n_str(STR_URL);
+    g_vcard_field_items[VCARD_FIELD_CAT_ORG].label = i18n_str(STR_ORG);
+    g_vcard_field_items[VCARD_FIELD_CAT_TITLE].label = i18n_str(STR_TITLE);
+    g_vcard_field_items[VCARD_FIELD_CAT_SOCIAL].label = i18n_str(STR_SOCIAL);
+    g_vcard_field_items[VCARD_FIELD_CAT_IMPP].label = i18n_str(STR_IMPP);
+    g_vcard_field_items[VCARD_FIELD_CAT_ADDRESS].label = i18n_str(STR_ADDRESS);
+    g_vcard_field_items[VCARD_FIELD_CAT_COUNT].label = i18n_str(STR_SAVE);
+}
+
+static void vcard_phone_type_init_menu(void) {
+    g_phone_type_items[PHONE_TYPE_IDX_LANDLINE].label = i18n_str(STR_PHONE_LANDLINE);
+    g_phone_type_items[PHONE_TYPE_IDX_MOBILE].label = i18n_str(STR_PHONE_MOBILE);
+    g_phone_type_items[PHONE_TYPE_IDX_BUSINESS].label = i18n_str(STR_PHONE_BUSINESS);
+    g_phone_type_items[PHONE_TYPE_IDX_PAGER].label = i18n_str(STR_PHONE_PAGER);
+}
+
+static void vcard_impp_type_init_menu(void) {
+    g_impp_type_items[IMPP_TYPE_IDX_TELEGRAM].label = i18n_str(STR_IMPP_TELEGRAM);
+    g_impp_type_items[IMPP_TYPE_IDX_SIGNAL].label = i18n_str(STR_IMPP_SIGNAL);
+    g_impp_type_items[IMPP_TYPE_IDX_WHATSAPP].label = i18n_str(STR_IMPP_WHATSAPP);
+    g_impp_type_items[IMPP_TYPE_IDX_DISCORD].label = i18n_str(STR_IMPP_DISCORD);
+    g_impp_type_items[IMPP_TYPE_IDX_MATRIX].label = i18n_str(STR_IMPP_MATRIX);
+    g_impp_type_items[IMPP_TYPE_IDX_THREEMA].label = i18n_str(STR_IMPP_THREEMA);
+    g_impp_type_items[IMPP_TYPE_IDX_OTHER].label = i18n_str(STR_IMPP_OTHER);
+}
+
+static void vcard_address_type_init_menu(void) {
+    g_address_type_items[ADDRESS_TYPE_IDX_HOME].label = i18n_str(STR_ADDRESS_HOME);
+    g_address_type_items[ADDRESS_TYPE_IDX_WORK].label = i18n_str(STR_ADDRESS_WORK);
+}
+
+// Map phone type submenu index to storage type
+static uint8_t phone_type_to_field_type(uint8_t idx) {
+    switch (idx) {
+        case PHONE_TYPE_IDX_LANDLINE: return VCARD_FIELD_TYPE_PHONE_LANDLINE;
+        case PHONE_TYPE_IDX_MOBILE:   return VCARD_FIELD_TYPE_PHONE_MOBILE;
+        case PHONE_TYPE_IDX_BUSINESS: return VCARD_FIELD_TYPE_PHONE_BUSINESS;
+        case PHONE_TYPE_IDX_PAGER:    return VCARD_FIELD_TYPE_PHONE_PAGER;
+        default:                      return VCARD_FIELD_TYPE_PHONE_LANDLINE;
+    }
+}
+
+// Map IMPP type submenu index to storage type
+static uint8_t impp_type_to_field_type(uint8_t idx) {
+    switch (idx) {
+        case IMPP_TYPE_IDX_TELEGRAM: return VCARD_FIELD_TYPE_IMPP_TELEGRAM;
+        case IMPP_TYPE_IDX_SIGNAL:   return VCARD_FIELD_TYPE_IMPP_SIGNAL;
+        case IMPP_TYPE_IDX_WHATSAPP: return VCARD_FIELD_TYPE_IMPP_WHATSAPP;
+        case IMPP_TYPE_IDX_DISCORD:  return VCARD_FIELD_TYPE_IMPP_DISCORD;
+        case IMPP_TYPE_IDX_MATRIX:   return VCARD_FIELD_TYPE_IMPP_MATRIX;
+        case IMPP_TYPE_IDX_THREEMA:  return VCARD_FIELD_TYPE_IMPP_THREEMA;
+        case IMPP_TYPE_IDX_OTHER:    return VCARD_FIELD_TYPE_IMPP_OTHER;
+        default:                     return VCARD_FIELD_TYPE_IMPP_OTHER;
+    }
+}
+
+// Map address type submenu index to storage type
+static uint8_t address_type_to_field_type(uint8_t idx) {
+    switch (idx) {
+        case ADDRESS_TYPE_IDX_HOME: return VCARD_FIELD_TYPE_ADDRESS_HOME;
+        case ADDRESS_TYPE_IDX_WORK: return VCARD_FIELD_TYPE_ADDRESS_WORK;
+        default:                    return VCARD_FIELD_TYPE_ADDRESS_HOME;
+    }
+}
+
+static void vcard_refresh_list(void) {
+    g_vcard_list_count = 0;
+    g_vcard_selected_slot = 0xFFFF;
+    g_vcard_selected_is_own = false;
+
+    if (vcard_store_has_own()) {
+        snprintf(g_vcard_list_labels[g_vcard_list_count], sizeof(g_vcard_list_labels[g_vcard_list_count]),
+                 "%s", i18n_str(STR_MY_VCARD));
+        g_vcard_list_items[g_vcard_list_count].label = g_vcard_list_labels[g_vcard_list_count];
+        g_vcard_list_slots[g_vcard_list_count] = 0xFFFF;
+        g_vcard_list_count++;
+    }
+
+    uint16_t sorted[VCARD_MAX_CARDS];
+    uint16_t count = vcard_store_get_sorted(sorted, VCARD_MAX_CARDS);
+    for (uint16_t i = 0; i < count && g_vcard_list_count < (VCARD_MAX_CARDS + 1); i++) {
+        char name[VIEW_MAX_TEXT_LEN];
+        if (vcard_store_get_display(sorted[i], name, sizeof(name))) {
+            snprintf(g_vcard_list_labels[g_vcard_list_count], sizeof(g_vcard_list_labels[g_vcard_list_count]),
+                     "%s", name);
+        } else {
+            snprintf(g_vcard_list_labels[g_vcard_list_count], sizeof(g_vcard_list_labels[g_vcard_list_count]),
+                     "%s", i18n_str(STR_VCARDS));
+        }
+        g_vcard_list_items[g_vcard_list_count].label = g_vcard_list_labels[g_vcard_list_count];
+        g_vcard_list_slots[g_vcard_list_count] = sorted[i];
+        g_vcard_list_count++;
+    }
+
+    if (g_vcard_list_count == 0) {
+        g_vcard_list_items[0].label = i18n_str(STR_NO_VCARDS);
+        g_vcard_list_slots[0] = 0xFFFF;
+        g_vcard_list_count = 1;
+    }
+}
+
+static bool vcard_build_from_editor(char *out, size_t max_len, char *err, size_t err_len) {
+    if (!out || max_len == 0) return false;
+    size_t used = 0;
+
+    auto append = [&](const char *fmt, ...) -> bool {
+        va_list ap;
+        va_start(ap, fmt);
+        int n = vsnprintf(out + used, max_len - used, fmt, ap);
+        va_end(ap);
+        if (n < 0 || (size_t)n >= max_len - used) {
+            if (err && err_len > 0) snprintf(err, err_len, "vCard too large");
+            return false;
+        }
+        used += (size_t)n;
+        return true;
+    };
+
+    if (!append("BEGIN:VCARD\n")) return false;
+    if (!append("VERSION:4.0\n")) return false;
+    // Only include N and FN fields if at least one name is set
+    if (g_vcard_editor.first[0] || g_vcard_editor.last[0]) {
+        if (!append("N:%s;%s;;;\n", g_vcard_editor.last, g_vcard_editor.first)) return false;
+        // FN: trim leading/trailing spaces when one name is empty
+        if (g_vcard_editor.first[0] && g_vcard_editor.last[0]) {
+            if (!append("FN:%s %s\n", g_vcard_editor.first, g_vcard_editor.last)) return false;
+        } else if (g_vcard_editor.first[0]) {
+            if (!append("FN:%s\n", g_vcard_editor.first)) return false;
+        } else {
+            if (!append("FN:%s\n", g_vcard_editor.last)) return false;
+        }
+    }
+    if (g_vcard_editor.note[0]) {
+        if (!append("NOTE:%s\n", g_vcard_editor.note)) return false;
+    }
+
+    for (uint8_t i = 0; i < g_vcard_editor.extra_count; i++) {
+        const char *val = g_vcard_editor.extra_value[i];
+        if (!val[0]) continue;
+        switch (g_vcard_editor.extra_type[i]) {
+            // Phone types
+            case VCARD_FIELD_TYPE_PHONE_LANDLINE:
+                if (!append("TEL;TYPE=HOME:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_PHONE_MOBILE:
+                if (!append("TEL;TYPE=CELL:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_PHONE_BUSINESS:
+                if (!append("TEL;TYPE=WORK:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_PHONE_PAGER:
+                if (!append("TEL;TYPE=PAGER:%s\n", val)) return false;
+                break;
+            // Email, URL, Org, Title
+            case VCARD_FIELD_TYPE_EMAIL:
+                if (!append("EMAIL:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_URL:
+                if (!append("URL:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_ORG:
+                if (!append("ORG:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_TITLE:
+                if (!append("TITLE:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_SOCIAL:
+                if (!append("X-SOCIALPROFILE:%s\n", val)) return false;
+                break;
+            // IMPP types
+            case VCARD_FIELD_TYPE_IMPP_TELEGRAM:
+                if (!append("IMPP:telegram:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_IMPP_SIGNAL:
+                if (!append("IMPP:signal:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_IMPP_WHATSAPP:
+                if (!append("IMPP:whatsapp:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_IMPP_DISCORD:
+                if (!append("IMPP:discord:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_IMPP_MATRIX:
+                if (!append("IMPP:matrix:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_IMPP_THREEMA:
+                if (!append("IMPP:threema:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_IMPP_OTHER:
+                if (!append("IMPP:%s\n", val)) return false;
+                break;
+            // Address types
+            case VCARD_FIELD_TYPE_ADDRESS_HOME:
+                if (!append("ADR;TYPE=HOME:%s\n", val)) return false;
+                break;
+            case VCARD_FIELD_TYPE_ADDRESS_WORK:
+                if (!append("ADR;TYPE=WORK:%s\n", val)) return false;
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (!append("END:VCARD\n")) return false;
+    return true;
+}
+
+static bool vcard_load_selected(char *out, size_t max_len) {
+    if (!out || max_len == 0) return false;
+    if (g_vcard_selected_is_own) {
+        return vcard_store_get_own(out, max_len) > 0;
+    }
+    if (g_vcard_selected_slot == 0xFFFF) {
+        return false;
+    }
+    return vcard_store_get(g_vcard_selected_slot, out, max_len) > 0;
+}
+
+static app_state_t g_vcard_qr_return_state = APP_STATE_LOCK_SCREEN;
+
+static void vcard_show_qr(const char *vcard, const char *name, app_state_t return_state) {
+    if (!vcard || !vcard[0]) return;
+    strncpy(g_vcard_qr_buf, vcard, sizeof(g_vcard_qr_buf) - 1);
+    g_vcard_qr_buf[sizeof(g_vcard_qr_buf) - 1] = '\0';
+    // Filter empty fields to make QR code smaller
+    size_t len = strlen(g_vcard_qr_buf);
+    vcard_filter_empty_fields(g_vcard_qr_buf, len);
+    if (name && name[0]) {
+        strncpy(g_vcard_qr_name, name, sizeof(g_vcard_qr_name) - 1);
+        g_vcard_qr_name[sizeof(g_vcard_qr_name) - 1] = '\0';
+    } else {
+        g_vcard_qr_name[0] = '\0';
+    }
+    view_qr_code_init(&g_qr_view, i18n_str(STR_VCARD_QR),
+                      g_vcard_qr_name[0] ? g_vcard_qr_name : NULL,
+                      g_vcard_qr_buf);
+    g_vcard_qr_return_state = return_state;
+    g_app_state = APP_STATE_VCARD_QR;
+    render_current_state(false);
 }
 #endif
 
@@ -102,8 +739,12 @@ void handle_key(char key) {
             } else if (key == '3') {
                 // Open quick menu (limited - WiFi/BLE moved to main menu)
                 g_lock_quick_items[0] = {"Light", 1};
-                g_lock_quick_items[1] = {"Sleep", 2};
-                view_context_menu_init(&g_lock_quick_menu, "Quick Menu", g_lock_quick_items, 2);
+                uint8_t quick_count = 1;
+#if FEATURE_BLE_BADGE
+                g_lock_quick_items[quick_count++] = {i18n_str(STR_VCARD_QR), 3};
+#endif
+                g_lock_quick_items[quick_count++] = {i18n_str(STR_SLEEP), 2};
+                view_context_menu_init(&g_lock_quick_menu, "Quick Menu", g_lock_quick_items, quick_count);
                 view_context_menu_show(&g_lock_quick_menu);
                 g_app_state = APP_STATE_LOCK_QUICK_MENU;
             }
@@ -136,6 +777,17 @@ void handle_key(char key) {
                             enter_deep_sleep();  // Does not return
                         }
                         break;
+#if FEATURE_BLE_BADGE
+                    case 3:  // QR vCard
+                        if (vcard_store_get_own(g_vcard_view_buf, sizeof(g_vcard_view_buf)) > 0) {
+                            char name_buf[64] = {0};
+                            vcard_store_get_display_own(name_buf, sizeof(name_buf));
+                            vcard_show_qr(g_vcard_view_buf, name_buf, APP_STATE_LOCK_SCREEN);
+                            return;  // Don't fall through to lock screen
+                        }
+                        view_toast_error(i18n_str(STR_NO_VCARDS), 1000);
+                        break;
+#endif
                     default:  // Cancel (0)
                         break;
                 }
@@ -215,27 +867,30 @@ void handle_key(char key) {
                     render_current_state(false);
                 } else
 #endif
+#if FEATURE_BLE_BADGE
+                if (sel == MENU_IDX_REMOTE_BADGE) {
+                    build_remote_badge_menu();
+                    view_list_screen_init(&g_remote_badge_menu, i18n_str(STR_REMOTE_BADGE),
+                                          g_remote_badge_items, REMOTE_BADGE_IDX_COUNT);
+                    g_app_state = APP_STATE_REMOTE_BADGE_MENU;
+                    render_current_state(false);
+                } else
+#endif
                 if (sel == MENU_IDX_TOOLS) {
                     build_tools_menu();
-                    view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, 2);
+                    view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, g_tools_item_count);
                     g_app_state = APP_STATE_TOOLS_MENU;
-                    render_current_state(false);
-                } else if (sel == MENU_IDX_SELFTEST) {
-                    build_selftest_text(g_selftest_buf, sizeof(g_selftest_buf));
-                    view_info_screen_init(&g_info_view, "System Test", g_selftest_buf);
-                    g_app_state = APP_STATE_SELFTEST;
                     render_current_state(false);
                 } else if (sel == MENU_IDX_SETTINGS) {
                     go_to_settings_menu();
                 }
                 // Deep Sleep moved to lock screen quick menu (key 3)
             } else if (key == '3') {
-                // Open quick menu for WiFi/BLE toggle
+                // Open quick menu (Light/WiFi/Sleep)
                 g_main_quick_items[0] = {"Light", 1};
-                g_main_quick_items[1] = {"Bluetooth", 2};
-                g_main_quick_items[2] = {"WiFi", 3};
-                g_main_quick_items[3] = {"Sleep", 4};
-                view_context_menu_init(&g_main_quick_menu, "Quick Menu", g_main_quick_items, 4);
+                g_main_quick_items[1] = {i18n_str(STR_WIFI_MENU), 2};
+                g_main_quick_items[2] = {i18n_str(STR_SLEEP), 3};
+                view_context_menu_init(&g_main_quick_menu, "Quick Menu", g_main_quick_items, 3);
                 view_context_menu_show(&g_main_quick_menu);
                 g_app_state = APP_STATE_MAIN_QUICK_MENU;
             } else if (key == 'N') {
@@ -265,38 +920,14 @@ void handle_key(char key) {
                         }
                         LOG_I("KEY", "Backlight forced: %s", g_backlight_forced_on ? "ON" : "OFF");
                         break;
-                    case 2:  // Bluetooth
-#if FEATURE_BLE_UART
-                        if (!g_ble_enabled) {
-                            if (wifi_manager_is_init()) {
-                                view_toast_error(i18n_str(STR_BLUETOOTH_DISABLE_WIFI), 1500);
-                                break;
-                            }
-                            if (!ble_uart_is_initialized()) {
-                                ble_uart_init();
-                            }
-                            ble_uart_set_power_mode(BLE_POWER_ACTIVE);
-                            g_ble_enabled = true;
-                            view_toast_show(i18n_str(STR_BLUETOOTH_ON), 1000);
-                        } else {
-                            ble_uart_set_power_mode(BLE_POWER_OFF);
-                            ble_uart_deinit();
-                            g_ble_enabled = false;
-                            view_toast_show(i18n_str(STR_BLUETOOTH_OFF), 1000);
-                        }
-                        LOG_I("KEY", "BLE: %s", g_ble_enabled ? "ON" : "OFF");
-#else
-                        view_toast_error("BLE disabled", 1000);
-#endif
-                        break;
-                    case 3:  // WiFi
+                    case 2:  // WiFi
                         if (wifi_manager_get_state() == WIFI_STATE_CONNECTED) {
                             wifi_manager_disconnect();
                             wifi_manager_deinit();
                             view_toast_show(i18n_str(STR_WIFI_DISCONNECTED), 1000);
                         } else if (wifi_manager_has_config()) {
-#if FEATURE_BLE_UART
-                            if (ble_is_active()) {
+#if FEATURE_BLE_UART || FEATURE_BLE_BADGE
+                            if (bluetooth_is_active()) {
                                 view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
                                 break;
                             }
@@ -312,7 +943,7 @@ void handle_key(char key) {
                             view_toast_error(i18n_str(STR_WIFI_NO_CONFIG), 1000);
                         }
                         break;
-                    case 4:  // Deep Sleep
+                    case 3:  // Deep Sleep
                         if (power_is_usb_connected()) {
                             view_toast_error(i18n_str(STR_UNPLUG_USB), 1500);
                         } else {
@@ -1167,14 +1798,14 @@ void handle_key(char key) {
 
             // Normal list handling
             if (key == '2') {
-                view_list_screen_navigate(&g_wifi_list, false);
+                view_wifi_list_navigate(&g_wifi_list, false);
                 render_current_state(true);
             } else if (key == '8') {
-                view_list_screen_navigate(&g_wifi_list, true);
+                view_wifi_list_navigate(&g_wifi_list, true);
                 render_current_state(true);
             } else if (key == 'Y' || key == '5') {
                 // Select network or show context menu
-                g_wifi_selected_index = view_list_screen_get_selection(&g_wifi_list);
+                g_wifi_selected_index = view_wifi_list_get_selection(&g_wifi_list);
                 wifi_network_t net;
                 if (wifi_manager_get_network(g_wifi_selected_index, &net)) {
                     view_context_menu_init(&g_wifi_context_menu, net.ssid, g_wifi_context_items, 3);
@@ -1182,7 +1813,7 @@ void handle_key(char key) {
                 }
             } else if (key == '3') {
                 // Context menu
-                g_wifi_selected_index = view_list_screen_get_selection(&g_wifi_list);
+                g_wifi_selected_index = view_wifi_list_get_selection(&g_wifi_list);
                 view_context_menu_init(&g_wifi_context_menu, "WiFi", g_wifi_context_items, 3);
                 view_context_menu_show(&g_wifi_context_menu);
             } else if (key == 'N') {
@@ -1291,8 +1922,8 @@ void handle_key(char key) {
                 g_wifi_wizard.use_dhcp = (sel == 0);
                 if (g_wifi_wizard.use_dhcp) {
                     // DHCP - start connecting
-#if FEATURE_BLE_UART
-                    if (ble_is_active()) {
+#if FEATURE_BLE_UART || FEATURE_BLE_BADGE
+                    if (bluetooth_is_active()) {
                         view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
                         render_current_state(false);
                         break;
@@ -1397,8 +2028,8 @@ void handle_key(char key) {
                     render_current_state(true);
                 } else {
                     ip_input_to_string(&g_ip_input, g_wifi_wizard.subnet, sizeof(g_wifi_wizard.subnet));
-#if FEATURE_BLE_UART
-                    if (ble_is_active()) {
+#if FEATURE_BLE_UART || FEATURE_BLE_BADGE
+                    if (bluetooth_is_active()) {
                         view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
                         render_current_state(false);
                         break;
@@ -1469,54 +2100,773 @@ void handle_key(char key) {
                 render_current_state(true);
             } else if (key == 'Y' || key == '5') {
                 uint8_t sel = view_list_screen_get_selection(&g_tools_menu);
-                if (sel == 0) {
-                    // NTP Sync - check if WiFi already connected
-#if FEATURE_BLE_UART
-                    if (ble_is_active()) {
-                        view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
+                switch (sel) {
+                    case TOOLS_IDX_WIFI:
+                        // WiFi submenu
+                        build_tools_wifi_menu();
+                        view_list_screen_init(&g_tools_wifi_menu, i18n_str(STR_WIFI_MENU), g_tools_wifi_items, 4);
+                        g_app_state = APP_STATE_TOOLS_WIFI_MENU;
                         render_current_state(false);
                         break;
-                    }
-#endif
-                    if (wifi_manager_get_state() == WIFI_STATE_CONNECTED) {
-                        // WiFi already connected - no session needed, just use existing connection
-                        g_ntp_wifi_session = 0;  // No session = don't disconnect after
-                        uint32_t ntp_server = wifi_manager_get_ntp_server();
-                        ntp_sync_start(ntp_server);
-                        g_ntp_sync_phase = 2;  // Skip to NTP sync phase
-                        view_info_screen_init(&g_info_view, i18n_str(STR_NTP_SYNC), i18n_str(STR_NTP_SYNCING));
-                        g_app_state = APP_STATE_TOOLS_NTP_SYNC;
+#if FEATURE_BLE_UART
+                    case TOOLS_IDX_BLE_SERIAL:
+                        // BLE Serial toggle
+                        if (!g_ble_enabled) {
+                            if (wifi_manager_is_init()) {
+                                view_toast_error(i18n_str(STR_BLUETOOTH_DISABLE_WIFI), 1500);
+                                break;
+                            }
+                            if (!ble_uart_is_initialized()) {
+                                ble_uart_init();
+                            }
+                            ble_uart_set_power_mode(BLE_POWER_ACTIVE);
+                            g_ble_enabled = true;
+                            view_toast_show(i18n_str(STR_BLUETOOTH_ON), 1000);
+                        } else {
+                            ble_uart_set_power_mode(BLE_POWER_OFF);
+                            ble_uart_deinit();
+                            g_ble_enabled = false;
+                            view_toast_show(i18n_str(STR_BLUETOOTH_OFF), 1000);
+                        }
+                        LOG_I("KEY", "BLE: %s", g_ble_enabled ? "ON" : "OFF");
+                        g_tools_items[sel].icon_disabled = !g_ble_enabled;
                         render_current_state(false);
-                    } else {
-                        // Need to connect WiFi first - acquire session
-                        if (!wifi_manager_has_config()) {
-                            view_toast_error(i18n_str(STR_WIFI_NO_CONFIG), 1500);
+                        break;
+#endif
+                    case TOOLS_IDX_NTP:
+                        // NTP Sync - check if WiFi already connected
+#if FEATURE_BLE_UART || FEATURE_BLE_BADGE
+                        if (bluetooth_is_active()) {
+                            view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
                             render_current_state(false);
                             break;
                         }
-                        // Acquire WiFi session for NTP
-                        g_ntp_wifi_session = wifi_manager_session_acquire();
-                        wifi_manager_init();
-                        wifi_config_stored_t config;
-                        wifi_manager_load_config(&config);
-                        wifi_manager_connect(&config);
-                        g_wifi_connect_start = millis();
-                        g_ntp_sync_phase = 1;  // Connecting WiFi
-                        view_info_screen_init(&g_info_view, i18n_str(STR_NTP_SYNC), i18n_str(STR_WIFI_CONNECTING));
-                        g_app_state = APP_STATE_TOOLS_NTP_SYNC;
+#endif
+                        if (wifi_manager_get_state() == WIFI_STATE_CONNECTED) {
+                            // WiFi already connected - no session needed, just use existing connection
+                            g_ntp_wifi_session = 0;  // No session = don't disconnect after
+                            uint32_t ntp_server = wifi_manager_get_ntp_server();
+                            ntp_sync_start(ntp_server);
+                            g_ntp_sync_phase = 2;  // Skip to NTP sync phase
+                            view_info_screen_init(&g_info_view, i18n_str(STR_NTP_SYNC), i18n_str(STR_NTP_SYNCING));
+                            g_app_state = APP_STATE_TOOLS_NTP_SYNC;
+                            render_current_state(false);
+                        } else {
+                            // Need to connect WiFi first - acquire session
+                            if (!wifi_manager_has_config()) {
+                                view_toast_error(i18n_str(STR_WIFI_NO_CONFIG), 1500);
+                                render_current_state(false);
+                                break;
+                            }
+                            // Acquire WiFi session for NTP
+                            g_ntp_wifi_session = wifi_manager_session_acquire();
+                            wifi_manager_init();
+                            wifi_config_stored_t config;
+                            wifi_manager_load_config(&config);
+                            wifi_manager_connect(&config);
+                            g_wifi_connect_start = millis();
+                            g_ntp_sync_phase = 1;  // Connecting WiFi
+                            view_info_screen_init(&g_info_view, i18n_str(STR_NTP_SYNC), i18n_str(STR_WIFI_CONNECTING));
+                            g_app_state = APP_STATE_TOOLS_NTP_SYNC;
+                            render_current_state(false);
+                        }
+                        break;
+                    case TOOLS_IDX_SELFTEST:
+                        build_selftest_text(g_selftest_buf, sizeof(g_selftest_buf));
+                        view_info_screen_init(&g_info_view, "System Test", g_selftest_buf);
+                        g_app_state = APP_STATE_SELFTEST;
                         render_current_state(false);
-                    }
-                } else if (sel == 1) {
-                    // WiFi submenu
-                    build_tools_wifi_menu();
-                    view_list_screen_init(&g_tools_wifi_menu, i18n_str(STR_WIFI_MENU), g_tools_wifi_items, 4);
-                    g_app_state = APP_STATE_TOOLS_WIFI_MENU;
-                    render_current_state(false);
+                        break;
                 }
             } else if (key == 'N') {
                 go_to_main_menu();
             }
             break;
+
+#if FEATURE_BLE_BADGE
+        // Remote Badge main menu (3 submenus: vCards, Broadcast, Settings)
+        case APP_STATE_REMOTE_BADGE_MENU:
+            if (key == '2') {
+                view_list_screen_navigate(&g_remote_badge_menu, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_remote_badge_menu, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                uint8_t sel = view_list_screen_get_selection(&g_remote_badge_menu);
+                switch (sel) {
+                    case REMOTE_BADGE_IDX_VCARDS:
+                        build_vcard_submenu();
+                        view_list_screen_init(&g_vcard_submenu, i18n_str(STR_VCARDS),
+                                              g_vcard_submenu_items, VCARD_SUB_IDX_COUNT);
+                        g_app_state = APP_STATE_VCARD_SUBMENU;
+                        render_current_state(false);
+                        break;
+                    case REMOTE_BADGE_IDX_BROADCAST:
+                        build_broadcast_submenu();
+                        broadcast_submenu_update_labels();
+                        view_list_screen_init(&g_broadcast_submenu, i18n_str(STR_VCARD_BROADCAST),
+                                              g_broadcast_submenu_items, BROADCAST_SUB_IDX_COUNT);
+                        g_app_state = APP_STATE_BROADCAST_SUBMENU;
+                        render_current_state(false);
+                        break;
+                    case REMOTE_BADGE_IDX_SETTINGS:
+                        build_broadcast_settings_menu();
+                        broadcast_settings_update_labels();
+                        view_list_screen_init(&g_broadcast_settings_menu, i18n_str(STR_BROADCAST_SETTINGS),
+                                              g_broadcast_settings_items, SETTINGS_SUB_IDX_COUNT);
+                        g_app_state = APP_STATE_BROADCAST_SETTINGS;
+                        render_current_state(false);
+                        break;
+                }
+            } else if (key == 'N') {
+                go_to_main_menu();
+            }
+            break;
+
+        // vCards submenu (Edit, Exchange, List)
+        case APP_STATE_VCARD_SUBMENU:
+            if (key == '2') {
+                view_list_screen_navigate(&g_vcard_submenu, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_vcard_submenu, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                uint8_t sel = view_list_screen_get_selection(&g_vcard_submenu);
+                switch (sel) {
+                    case VCARD_SUB_IDX_EDIT:
+                        vcard_editor_reset();
+                        if (vcard_store_has_own()) {
+                            char existing[VCARD_MAX_LEN + 1];
+                            if (vcard_store_get_own(existing, sizeof(existing)) > 0) {
+                                vcard_editor_load_from_vcard(existing);
+                            }
+                        }
+                        view_t9_input_init(&g_t9_input, i18n_str(STR_FIRST_NAME), g_vcard_editor.first);
+                        g_app_state = APP_STATE_VCARD_ADD_FIRST;
+                        render_current_state(false);
+                        break;
+                    case VCARD_SUB_IDX_EXCHANGE:
+                        if (wifi_manager_is_init()) {
+                            view_toast_error(i18n_str(STR_BLUETOOTH_DISABLE_WIFI), 1500);
+                            break;
+                        }
+#if FEATURE_BLE_UART
+                        if (bluetooth_is_active()) {
+                            ble_uart_set_power_mode(BLE_POWER_OFF);
+                            ble_uart_deinit();
+                            g_ble_enabled = false;
+                        }
+#endif
+                        ble_badge_init();
+                        ble_badge_set_exchange_enabled(!ble_badge_is_exchange_enabled());
+                        if (ble_badge_is_exchange_enabled()) {
+                            view_toast_show(i18n_str(STR_VCARD_EXCHANGE), 1000);
+                        }
+                        render_current_state(true);
+                        break;
+                    case VCARD_SUB_IDX_LIST:
+                        vcard_refresh_list();
+                        view_list_screen_init(&g_vcard_list, i18n_str(STR_VCARD_LIST),
+                                              g_vcard_list_items, g_vcard_list_count);
+                        g_app_state = APP_STATE_VCARD_LIST;
+                        render_current_state(false);
+                        break;
+                }
+            } else if (key == 'N') {
+                build_remote_badge_menu();
+                view_list_screen_init(&g_remote_badge_menu, i18n_str(STR_REMOTE_BADGE),
+                                      g_remote_badge_items, REMOTE_BADGE_IDX_COUNT);
+                g_app_state = APP_STATE_REMOTE_BADGE_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        // Exchange mode - currently just a placeholder
+        case APP_STATE_VCARD_EXCHANGE:
+            if (key == 'N') {
+                go_to_vcard_submenu();
+            }
+            break;
+
+        // Broadcast submenu (Send, Receive toggles)
+        case APP_STATE_BROADCAST_SUBMENU:
+            if (key == '2') {
+                view_list_screen_navigate(&g_broadcast_submenu, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_broadcast_submenu, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                uint8_t sel = view_list_screen_get_selection(&g_broadcast_submenu);
+                if (wifi_manager_is_init()) {
+                    view_toast_error(i18n_str(STR_BLUETOOTH_DISABLE_WIFI), 1500);
+                    break;
+                }
+#if FEATURE_BLE_UART
+                if (bluetooth_is_active()) {
+                    ble_uart_set_power_mode(BLE_POWER_OFF);
+                    ble_uart_deinit();
+                    g_ble_enabled = false;
+                }
+#endif
+                ble_badge_init();
+                switch (sel) {
+                    case BROADCAST_SUB_IDX_SEND:
+                        ble_badge_set_adv_enabled(!ble_badge_is_adv_enabled());
+                        break;
+                    case BROADCAST_SUB_IDX_RECEIVE:
+                        ble_badge_set_scan_enabled(!ble_badge_is_scan_enabled());
+                        break;
+                }
+                broadcast_submenu_update_labels();
+                render_current_state(true);
+            } else if (key == 'N') {
+                build_remote_badge_menu();
+                view_list_screen_init(&g_remote_badge_menu, i18n_str(STR_REMOTE_BADGE),
+                                      g_remote_badge_items, REMOTE_BADGE_IDX_COUNT);
+                g_app_state = APP_STATE_REMOTE_BADGE_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        // Broadcast settings submenu (Send interval, Scan interval)
+        case APP_STATE_BROADCAST_SETTINGS:
+            if (key == '2') {
+                view_list_screen_navigate(&g_broadcast_settings_menu, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_broadcast_settings_menu, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                uint8_t sel = view_list_screen_get_selection(&g_broadcast_settings_menu);
+                switch (sel) {
+                    case SETTINGS_SUB_IDX_SEND_INTERVAL: {
+                        uint32_t current = ble_badge_get_adv_interval() / 1000;
+                        view_slider_init(&g_slider, i18n_str(STR_VCARD_ADV_INTERVAL),
+                                         10, 600, current, 10, "%d", "s",
+                                         i18n_str(STR_HINT_BRIGHTNESS));
+                        g_app_state = APP_STATE_VCARD_ADV_INTERVAL;
+                        render_current_state(false);
+                        break;
+                    }
+                    case SETTINGS_SUB_IDX_SCAN_INTERVAL: {
+                        uint32_t current = ble_badge_get_scan_interval() / 1000;
+                        view_slider_init(&g_slider, i18n_str(STR_VCARD_SCAN_INTERVAL),
+                                         10, 120, current, 10, "%d", "s",
+                                         i18n_str(STR_HINT_BRIGHTNESS));
+                        g_app_state = APP_STATE_VCARD_SCAN_INTERVAL;
+                        render_current_state(false);
+                        break;
+                    }
+                }
+            } else if (key == 'N') {
+                build_remote_badge_menu();
+                view_list_screen_init(&g_remote_badge_menu, i18n_str(STR_REMOTE_BADGE),
+                                      g_remote_badge_items, REMOTE_BADGE_IDX_COUNT);
+                g_app_state = APP_STATE_REMOTE_BADGE_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_ADD_FIRST:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (g_t9_input.len > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    vcard_editor_reset();
+                    go_to_vcard_submenu();
+                }
+            } else if (key == 'Y') {
+                strncpy(g_vcard_editor.first, view_t9_input_get_text(&g_t9_input), sizeof(g_vcard_editor.first) - 1);
+                g_vcard_editor.first[sizeof(g_vcard_editor.first) - 1] = '\0';
+                view_t9_input_init(&g_t9_input, i18n_str(STR_LAST_NAME), g_vcard_editor.last);
+                g_app_state = APP_STATE_VCARD_ADD_LAST;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_ADD_LAST:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (g_t9_input.len > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    view_t9_input_init(&g_t9_input, i18n_str(STR_FIRST_NAME), g_vcard_editor.first);
+                    g_app_state = APP_STATE_VCARD_ADD_FIRST;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                strncpy(g_vcard_editor.last, view_t9_input_get_text(&g_t9_input), sizeof(g_vcard_editor.last) - 1);
+                g_vcard_editor.last[sizeof(g_vcard_editor.last) - 1] = '\0';
+                view_t9_input_init(&g_t9_input, i18n_str(STR_DESCRIPTION), g_vcard_editor.note);
+                g_app_state = APP_STATE_VCARD_ADD_NOTE;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_ADD_NOTE:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (g_t9_input.len > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    view_t9_input_init(&g_t9_input, i18n_str(STR_LAST_NAME), g_vcard_editor.last);
+                    g_app_state = APP_STATE_VCARD_ADD_LAST;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                strncpy(g_vcard_editor.note, view_t9_input_get_text(&g_t9_input), sizeof(g_vcard_editor.note) - 1);
+                g_vcard_editor.note[sizeof(g_vcard_editor.note) - 1] = '\0';
+                vcard_fields_init_menu();
+                view_list_screen_init(&g_vcard_field_menu, i18n_str(STR_VCARD_ADD),
+                                      g_vcard_field_items, VCARD_FIELD_CAT_COUNT + 1);
+                g_app_state = APP_STATE_VCARD_FIELD_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_FIELD_MENU:
+            if (key == '2') {
+                view_list_screen_navigate(&g_vcard_field_menu, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_vcard_field_menu, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                uint8_t sel = view_list_screen_get_selection(&g_vcard_field_menu);
+                if (sel == VCARD_FIELD_CAT_COUNT) {
+                    // Save selected
+                    char vcard_out[VCARD_MAX_LEN + 1];
+                    char err[64] = {0};
+                    if (vcard_build_from_editor(vcard_out, sizeof(vcard_out), err, sizeof(err)) &&
+                        vcard_store_set_own(vcard_out, strlen(vcard_out), err, sizeof(err))) {
+                        view_toast_success(i18n_str(STR_SAVED), 1000);
+                    } else {
+                        view_toast_error(err[0] ? err : i18n_str(STR_SAVE_FAILED), 1500);
+                    }
+                    go_to_vcard_submenu();
+                } else if (sel == VCARD_FIELD_CAT_PHONE) {
+                    // Phone -> submenu
+                    g_vcard_field_category = sel;
+                    vcard_phone_type_init_menu();
+                    view_list_screen_init(&g_phone_type_menu, i18n_str(STR_PHONE),
+                                          g_phone_type_items, PHONE_TYPE_IDX_COUNT);
+                    g_app_state = APP_STATE_VCARD_PHONE_TYPE;
+                    render_current_state(false);
+                } else if (sel == VCARD_FIELD_CAT_IMPP) {
+                    // IMPP -> submenu
+                    g_vcard_field_category = sel;
+                    vcard_impp_type_init_menu();
+                    view_list_screen_init(&g_impp_type_menu, i18n_str(STR_IMPP),
+                                          g_impp_type_items, IMPP_TYPE_IDX_COUNT);
+                    g_app_state = APP_STATE_VCARD_IMPP_TYPE;
+                    render_current_state(false);
+                } else if (sel == VCARD_FIELD_CAT_ADDRESS) {
+                    // Address -> submenu
+                    g_vcard_field_category = sel;
+                    vcard_address_type_init_menu();
+                    view_list_screen_init(&g_address_type_menu, i18n_str(STR_ADDRESS),
+                                          g_address_type_items, ADDRESS_TYPE_IDX_COUNT);
+                    g_app_state = APP_STATE_VCARD_ADDRESS_TYPE;
+                    render_current_state(false);
+                } else {
+                    // Direct entry for Email, URL, Org, Title, Social
+                    if (g_vcard_editor.extra_count >= VCARD_EDITOR_MAX_EXTRAS) {
+                        view_toast_error(i18n_str(STR_VCARD_TOO_BIG), 1500);
+                        break;
+                    }
+                    g_vcard_field_category = sel;
+                    uint8_t field_type = VCARD_FIELD_TYPE_EMAIL;
+                    switch (sel) {
+                        case VCARD_FIELD_CAT_EMAIL: field_type = VCARD_FIELD_TYPE_EMAIL; break;
+                        case VCARD_FIELD_CAT_URL:   field_type = VCARD_FIELD_TYPE_URL; break;
+                        case VCARD_FIELD_CAT_ORG:   field_type = VCARD_FIELD_TYPE_ORG; break;
+                        case VCARD_FIELD_CAT_TITLE: field_type = VCARD_FIELD_TYPE_TITLE; break;
+                        case VCARD_FIELD_CAT_SOCIAL: field_type = VCARD_FIELD_TYPE_SOCIAL; break;
+                    }
+                    g_vcard_editor.extra_edit_index = g_vcard_editor.extra_count++;
+                    g_vcard_editor.extra_type[g_vcard_editor.extra_edit_index] = field_type;
+                    g_vcard_editor.extra_value[g_vcard_editor.extra_edit_index][0] = '\0';
+                    const char *title = g_vcard_field_items[sel].label;
+                    view_t9_input_init(&g_t9_input, title, "");
+                    g_app_state = APP_STATE_VCARD_FIELD_VALUE;
+                    render_current_state(false);
+                }
+            } else if (key == 'N') {
+                go_to_vcard_submenu();
+            }
+            break;
+
+        case APP_STATE_VCARD_PHONE_TYPE:
+            if (key == '2') {
+                view_list_screen_navigate(&g_phone_type_menu, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_phone_type_menu, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                uint8_t sel = view_list_screen_get_selection(&g_phone_type_menu);
+                if (g_vcard_editor.extra_count >= VCARD_EDITOR_MAX_EXTRAS) {
+                    view_toast_error(i18n_str(STR_VCARD_TOO_BIG), 1500);
+                    break;
+                }
+                g_vcard_field_subtype = sel;
+                g_vcard_editor.extra_edit_index = g_vcard_editor.extra_count++;
+                g_vcard_editor.extra_type[g_vcard_editor.extra_edit_index] = phone_type_to_field_type(sel);
+                g_vcard_editor.extra_value[g_vcard_editor.extra_edit_index][0] = '\0';
+                view_t9_input_init(&g_t9_input, g_phone_type_items[sel].label, "");
+                g_app_state = APP_STATE_VCARD_FIELD_VALUE;
+                render_current_state(false);
+            } else if (key == 'N') {
+                vcard_fields_init_menu();
+                view_list_screen_init(&g_vcard_field_menu, i18n_str(STR_VCARD_ADD),
+                                      g_vcard_field_items, VCARD_FIELD_CAT_COUNT + 1);
+                g_app_state = APP_STATE_VCARD_FIELD_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_IMPP_TYPE:
+            if (key == '2') {
+                view_list_screen_navigate(&g_impp_type_menu, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_impp_type_menu, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                uint8_t sel = view_list_screen_get_selection(&g_impp_type_menu);
+                if (g_vcard_editor.extra_count >= VCARD_EDITOR_MAX_EXTRAS) {
+                    view_toast_error(i18n_str(STR_VCARD_TOO_BIG), 1500);
+                    break;
+                }
+                g_vcard_field_subtype = sel;
+                g_vcard_editor.extra_edit_index = g_vcard_editor.extra_count++;
+                g_vcard_editor.extra_type[g_vcard_editor.extra_edit_index] = impp_type_to_field_type(sel);
+                g_vcard_editor.extra_value[g_vcard_editor.extra_edit_index][0] = '\0';
+                view_t9_input_init(&g_t9_input, g_impp_type_items[sel].label, "");
+                g_app_state = APP_STATE_VCARD_FIELD_VALUE;
+                render_current_state(false);
+            } else if (key == 'N') {
+                vcard_fields_init_menu();
+                view_list_screen_init(&g_vcard_field_menu, i18n_str(STR_VCARD_ADD),
+                                      g_vcard_field_items, VCARD_FIELD_CAT_COUNT + 1);
+                g_app_state = APP_STATE_VCARD_FIELD_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_ADDRESS_TYPE:
+            if (key == '2') {
+                view_list_screen_navigate(&g_address_type_menu, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_address_type_menu, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                uint8_t sel = view_list_screen_get_selection(&g_address_type_menu);
+                if (g_vcard_editor.extra_count >= VCARD_EDITOR_MAX_EXTRAS) {
+                    view_toast_error(i18n_str(STR_VCARD_TOO_BIG), 1500);
+                    break;
+                }
+                g_vcard_field_subtype = sel;
+                g_vcard_editor.extra_edit_index = g_vcard_editor.extra_count++;
+                g_vcard_editor.extra_type[g_vcard_editor.extra_edit_index] = address_type_to_field_type(sel);
+                g_vcard_editor.extra_value[g_vcard_editor.extra_edit_index][0] = '\0';
+                view_t9_input_init(&g_t9_input, g_address_type_items[sel].label, "");
+                g_app_state = APP_STATE_VCARD_FIELD_VALUE;
+                render_current_state(false);
+            } else if (key == 'N') {
+                vcard_fields_init_menu();
+                view_list_screen_init(&g_vcard_field_menu, i18n_str(STR_VCARD_ADD),
+                                      g_vcard_field_items, VCARD_FIELD_CAT_COUNT + 1);
+                g_app_state = APP_STATE_VCARD_FIELD_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_FIELD_VALUE:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (g_t9_input.len > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    if (g_vcard_editor.extra_count > 0 &&
+                        g_vcard_editor.extra_edit_index + 1 == g_vcard_editor.extra_count) {
+                        g_vcard_editor.extra_count--;
+                    }
+                    vcard_fields_init_menu();
+                    view_list_screen_init(&g_vcard_field_menu, i18n_str(STR_VCARD_ADD),
+                                          g_vcard_field_items, VCARD_FIELD_CAT_COUNT + 1);
+                    g_app_state = APP_STATE_VCARD_FIELD_MENU;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                uint8_t idx = g_vcard_editor.extra_edit_index;
+                strncpy(g_vcard_editor.extra_value[idx], view_t9_input_get_text(&g_t9_input),
+                        sizeof(g_vcard_editor.extra_value[idx]) - 1);
+                g_vcard_editor.extra_value[idx][sizeof(g_vcard_editor.extra_value[idx]) - 1] = '\0';
+                vcard_fields_init_menu();
+                view_list_screen_init(&g_vcard_field_menu, i18n_str(STR_VCARD_ADD),
+                                      g_vcard_field_items, VCARD_FIELD_CAT_COUNT + 1);
+                g_app_state = APP_STATE_VCARD_FIELD_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_ADV_INTERVAL:
+            if (key == '2' || key == '6') {
+                view_slider_adjust(&g_slider, true);
+                render_current_state(true);
+            } else if (key == '4' || key == '8') {
+                view_slider_adjust(&g_slider, false);
+                render_current_state(true);
+            } else if (key == 'Y') {
+                uint16_t val = view_slider_get_value(&g_slider);
+                ble_badge_set_adv_interval((uint32_t)val * 1000);
+                build_broadcast_settings_menu();
+                broadcast_settings_update_labels();
+                view_list_screen_init(&g_broadcast_settings_menu, i18n_str(STR_BROADCAST_SETTINGS),
+                                      g_broadcast_settings_items, SETTINGS_SUB_IDX_COUNT);
+                g_app_state = APP_STATE_BROADCAST_SETTINGS;
+                render_current_state(false);
+            } else if (key == 'N') {
+                build_broadcast_settings_menu();
+                broadcast_settings_update_labels();
+                view_list_screen_init(&g_broadcast_settings_menu, i18n_str(STR_BROADCAST_SETTINGS),
+                                      g_broadcast_settings_items, SETTINGS_SUB_IDX_COUNT);
+                g_app_state = APP_STATE_BROADCAST_SETTINGS;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_SCAN_INTERVAL:
+            if (key == '2' || key == '6') {
+                view_slider_adjust(&g_slider, true);
+                render_current_state(true);
+            } else if (key == '4' || key == '8') {
+                view_slider_adjust(&g_slider, false);
+                render_current_state(true);
+            } else if (key == 'Y') {
+                uint16_t val = view_slider_get_value(&g_slider);
+                ble_badge_set_scan_interval(10000, (uint32_t)val * 1000);
+                build_broadcast_settings_menu();
+                broadcast_settings_update_labels();
+                view_list_screen_init(&g_broadcast_settings_menu, i18n_str(STR_BROADCAST_SETTINGS),
+                                      g_broadcast_settings_items, SETTINGS_SUB_IDX_COUNT);
+                g_app_state = APP_STATE_BROADCAST_SETTINGS;
+                render_current_state(false);
+            } else if (key == 'N') {
+                build_broadcast_settings_menu();
+                broadcast_settings_update_labels();
+                view_list_screen_init(&g_broadcast_settings_menu, i18n_str(STR_BROADCAST_SETTINGS),
+                                      g_broadcast_settings_items, SETTINGS_SUB_IDX_COUNT);
+                g_app_state = APP_STATE_BROADCAST_SETTINGS;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_LIST:
+            if (key == '2') {
+                view_list_screen_navigate(&g_vcard_list, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_vcard_list, true);
+                render_current_state(true);
+            } else if (key == '3') {
+                uint16_t sel = view_list_screen_get_selection(&g_vcard_list);
+                if (sel < g_vcard_list_count) {
+                    g_vcard_selected_slot = g_vcard_list_slots[sel];
+                    g_vcard_selected_is_own = (g_vcard_selected_slot == 0xFFFF);
+                    g_vcard_context_items[0] = {i18n_str(STR_VIEW), 1};
+                    g_vcard_context_items[1] = {i18n_str(STR_VCARD_SHOW_QR), 2};
+                    g_vcard_context_items[2] = {i18n_str(STR_DELETE), 3};
+                    view_context_menu_init(&g_vcard_context_menu, i18n_str(STR_SELECT),
+                                           g_vcard_context_items, 3);
+                    view_context_menu_show(&g_vcard_context_menu);
+                    g_app_state = APP_STATE_VCARD_CONTEXT_MENU;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                uint16_t sel = view_list_screen_get_selection(&g_vcard_list);
+                if (sel < g_vcard_list_count) {
+                    g_vcard_selected_slot = g_vcard_list_slots[sel];
+                    g_vcard_selected_is_own = (g_vcard_selected_slot == 0xFFFF);
+                    if (vcard_load_selected(g_vcard_view_buf, sizeof(g_vcard_view_buf))) {
+                        view_info_screen_init(&g_info_view, i18n_str(STR_VIEW), g_vcard_view_buf);
+                        g_app_state = APP_STATE_VCARD_VIEW;
+                        render_current_state(false);
+                    }
+                }
+            } else if (key == 'N') {
+                go_to_vcard_submenu();
+            }
+            break;
+
+        case APP_STATE_VCARD_CONTEXT_MENU:
+            if (key == '2') {
+                view_context_menu_navigate(&g_vcard_context_menu, false);
+                view_context_menu_render(&g_vcard_context_menu);
+            } else if (key == '8') {
+                view_context_menu_navigate(&g_vcard_context_menu, true);
+                view_context_menu_render(&g_vcard_context_menu);
+            } else if (key == 'Y') {
+                uint8_t action = view_context_menu_get_action(&g_vcard_context_menu);
+                view_context_menu_hide(&g_vcard_context_menu);
+                if (action == 1) {
+                    if (vcard_load_selected(g_vcard_view_buf, sizeof(g_vcard_view_buf))) {
+                        view_info_screen_init(&g_info_view, i18n_str(STR_VIEW), g_vcard_view_buf);
+                        g_app_state = APP_STATE_VCARD_VIEW;
+                        render_current_state(false);
+                    }
+                } else if (action == 2) {
+                    if (vcard_load_selected(g_vcard_view_buf, sizeof(g_vcard_view_buf))) {
+                        char name_buf[64] = {0};
+                        if (g_vcard_selected_is_own) {
+                            vcard_store_get_display_own(name_buf, sizeof(name_buf));
+                        } else {
+                            vcard_store_get_display(g_vcard_selected_slot, name_buf, sizeof(name_buf));
+                        }
+                        vcard_show_qr(g_vcard_view_buf, name_buf, APP_STATE_VCARD_LIST);
+                    }
+                } else if (action == 3) {
+                    bool deleted = false;
+                    if (g_vcard_selected_is_own) {
+                        deleted = vcard_store_clear_own();
+                    } else {
+                        deleted = vcard_store_delete(g_vcard_selected_slot);
+                    }
+                    if (deleted) {
+                        view_toast_success(i18n_str(STR_DELETED), 1000);
+                    } else {
+                        view_toast_error(i18n_str(STR_DELETE_FAILED), 1000);
+                    }
+                    vcard_refresh_list();
+                    view_list_screen_init(&g_vcard_list, i18n_str(STR_VCARD_LIST),
+                                          g_vcard_list_items, g_vcard_list_count);
+                    g_app_state = APP_STATE_VCARD_LIST;
+                    render_current_state(false);
+                }
+            } else if (key == 'N') {
+                view_context_menu_hide(&g_vcard_context_menu);
+                g_app_state = APP_STATE_VCARD_LIST;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_VIEW:
+            if (key == '2' || key == '8') {
+                view_info_screen_scroll(&g_info_view, key == '8');
+                render_current_state(true);
+            } else if (key == 'N') {
+                g_app_state = APP_STATE_VCARD_LIST;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_QR:
+            if (key) {
+                gui_backlight_off();  // Turn off backlight when leaving QR view
+                g_app_state = g_vcard_qr_return_state;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_NEARBY_LIST:
+            if (key == '2') {
+                view_list_screen_navigate(&g_vcard_nearby_list, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_vcard_nearby_list, true);
+                render_current_state(true);
+            } else if (key == 'Y') {
+                uint16_t sel = view_list_screen_get_selection(&g_vcard_nearby_list);
+                if (sel < g_vcard_nearby_count) {
+                    if (!ble_badge_exchange_with(g_vcard_nearby_peers[sel].addr)) {
+                        view_toast_error(i18n_str(STR_VCARD_SEND_FAILED), 1000);
+                        break;
+                    }
+                    view_info_screen_init(&g_info_view, i18n_str(STR_VCARD_SEND),
+                                          i18n_str(STR_VCARD_SENDING));
+                    g_app_state = APP_STATE_VCARD_SEND_PROGRESS;
+                    render_current_state(false);
+                }
+            } else if (key == 'N') {
+                go_to_vcard_submenu();
+            }
+            break;
+
+        case APP_STATE_VCARD_SEND_PROGRESS:
+            if (key == 'N') {
+                ble_badge_exchange_cancel();
+                g_app_state = APP_STATE_VCARD_NEARBY_LIST;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_VCARD_NEARBY_ALERT:
+            if (key == 'N' || key == 'Y') {
+                g_vcard_nearby_alert_until = 0;
+                g_app_state = g_vcard_nearby_return_state;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_BLE_PAIRING_CONFIRM:
+            if (key == 'Y') {
+                ble_badge_confirm_pairing(true);
+                g_app_state = g_ble_pairing_return_state;
+                render_current_state(false);
+            } else if (key == 'N') {
+                ble_badge_confirm_pairing(false);
+                g_app_state = g_ble_pairing_return_state;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_BLE_PAIRING_PASSKEY:
+            if (key >= '0' && key <= '9') {
+                view_pin_entry_digit(&g_pin_entry, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (g_pin_entry.len == 0) {
+                    ble_badge_reply_passkey(false, 0);
+                    g_app_state = g_ble_pairing_return_state;
+                    render_current_state(false);
+                } else {
+                    view_pin_entry_backspace(&g_pin_entry);
+                    render_current_state(true);
+                }
+            } else if (key == 'Y') {
+                const char *pin = view_pin_entry_get_pin(&g_pin_entry);
+                uint32_t passkey = (uint32_t)strtoul(pin, NULL, 10);
+                ble_badge_reply_passkey(true, passkey);
+                g_app_state = g_ble_pairing_return_state;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_BLE_PAIRING_DISPLAY:
+            if (key == 'N' || key == 'Y') {
+                g_app_state = g_ble_pairing_return_state;
+                render_current_state(false);
+            }
+            break;
+#endif
 
         case APP_STATE_TOOLS_NTP_SYNC:
             if (key == 'N') {
@@ -1529,7 +2879,7 @@ void handle_key(char key) {
                 }
                 g_ntp_sync_phase = 0;
                 build_tools_menu();
-                view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, 2);
+                view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, g_tools_item_count);
                 g_app_state = APP_STATE_TOOLS_MENU;
                 render_current_state(false);
             }
@@ -1547,8 +2897,8 @@ void handle_key(char key) {
                 if (sel == 0) {
                     // Connect - use saved config
                     if (wifi_manager_has_config()) {
-#if FEATURE_BLE_UART
-                        if (ble_is_active()) {
+#if FEATURE_BLE_UART || FEATURE_BLE_BADGE
+                        if (bluetooth_is_active()) {
                             view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
                             render_current_state(false);
                             break;
@@ -1568,8 +2918,8 @@ void handle_key(char key) {
                     }
                 } else if (sel == 1) {
                     // Setup - start WiFi scan
-#if FEATURE_BLE_UART
-                    if (ble_is_active()) {
+#if FEATURE_BLE_UART || FEATURE_BLE_BADGE
+                    if (bluetooth_is_active()) {
                         view_toast_error(i18n_str(STR_WIFI_DISABLE_BLUETOOTH), 1500);
                         render_current_state(false);
                         break;
@@ -1644,7 +2994,7 @@ void handle_key(char key) {
                 }
             } else if (key == 'N') {
                 build_tools_menu();
-                view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, 2);
+                view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, g_tools_item_count);
                 g_app_state = APP_STATE_TOOLS_MENU;
                 render_current_state(false);
             }
@@ -1719,7 +3069,7 @@ void handle_key(char key) {
                         } else {
                             size_t out_len = 0;
                             if (ca_export_pubkey_base64(g_ca_detail_text, sizeof(g_ca_detail_text), &out_len)) {
-                                view_qr_code_init(&g_qr_view, "CA Public Key", g_ca_detail_text);
+                                view_qr_code_init(&g_qr_view, i18n_str(STR_CA_QR_PUBKEY), NULL, g_ca_detail_text);
                                 g_app_state = APP_STATE_CA_QR_CODE;
                                 render_current_state(false);
                             } else {
@@ -1751,7 +3101,8 @@ void handle_key(char key) {
             break;
 
         case APP_STATE_CA_QR_CODE:
-            if (key == 'N') {
+            if (key) {
+                gui_backlight_off();  // Turn off backlight when leaving QR view
                 g_app_state = APP_STATE_CA_MENU;
                 render_current_state(false);
             }
@@ -1985,5 +3336,6 @@ void handle_key(char key) {
             }
             break;
 #endif
+
     }
 }

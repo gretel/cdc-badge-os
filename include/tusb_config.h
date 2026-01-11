@@ -86,6 +86,28 @@ extern "C" {
 #define CFG_TUD_MIDI                0   // MIDI not used
 #define CFG_TUD_CUSTOM_CLASS        0   // Custom class not used
 
+// ============================================================================
+// CCID SmartCard via Vendor Class
+// ============================================================================
+// CCID uses TinyUSB Vendor class with custom driver since TinyUSB doesn't
+// have native CCID support. The CCID class descriptor is provided in the
+// configuration descriptor and a custom driver handles the protocol.
+//
+// TUSB_CCID_ENABLED is set via platformio.ini build_flags:
+// -D TUSB_CCID_ENABLED=1 when FEATURE_GPG_CCID is enabled
+
+#ifndef TUSB_CCID_ENABLED
+#define TUSB_CCID_ENABLED 0  // Default: disabled (sync with feature_flags.h FEATURE_GPG_CCID)
+#endif
+
+#if TUSB_CCID_ENABLED
+#define CFG_TUD_VENDOR              1   // Vendor class for CCID
+#define CFG_TUD_VENDOR_RX_BUFSIZE   512  // Reduced from 2048 to save RAM
+#define CFG_TUD_VENDOR_TX_BUFSIZE   512  // Reduced from 2048 to save RAM
+#else
+#define CFG_TUD_VENDOR              0
+#endif
+
 #ifdef __cplusplus
 }
 #endif

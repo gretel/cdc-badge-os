@@ -173,16 +173,20 @@ static void draw_usb_icon(Gdey029T94 &display, int x, int y) {
 }
 
 // Draw BLE icon (simplified Bluetooth rune)
-static void draw_ble_icon(Gdey029T94 &display, int x, int y) {
+static void draw_ble_icon_color(Gdey029T94 &display, int x, int y, uint16_t color) {
     int h = 12;
     // Central vertical
-    display.drawLine(x + 4, y, x + 4, y + h, EPD_BLACK);
+    display.drawLine(x + 4, y, x + 4, y + h, color);
     // Top right diagonal
-    display.drawLine(x + 4, y, x + 8, y + 3, EPD_BLACK);
-    display.drawLine(x + 8, y + 3, x + 1, y + h/2, EPD_BLACK);
+    display.drawLine(x + 4, y, x + 8, y + 3, color);
+    display.drawLine(x + 8, y + 3, x + 1, y + h/2, color);
     // Bottom right diagonal
-    display.drawLine(x + 1, y + h/2, x + 8, y + h - 3, EPD_BLACK);
-    display.drawLine(x + 8, y + h - 3, x + 4, y + h, EPD_BLACK);
+    display.drawLine(x + 1, y + h/2, x + 8, y + h - 3, color);
+    display.drawLine(x + 8, y + h - 3, x + 4, y + h, color);
+}
+
+static void draw_ble_icon(Gdey029T94 &display, int x, int y) {
+    draw_ble_icon_color(display, x, y, EPD_BLACK);
 }
 
 // Draw comic-style sleep icon (stacked Z's getting smaller) for deep sleep
@@ -211,31 +215,57 @@ static void draw_sleep_icon(Gdey029T94 &display, int x, int y) {
 }
 
 // Draw WiFi icon (3 signal arcs + dot at base)
-static void draw_wifi_icon(Gdey029T94 &display, int x, int y) {
+static void draw_wifi_icon_color(Gdey029T94 &display, int x, int y, uint16_t color) {
     int cx = x + 6;  // center x
     int by = y + 12; // base y
 
     // Base dot
-    display.fillCircle(cx, by, 1, EPD_BLACK);
+    display.fillCircle(cx, by, 1, color);
 
     // Signal arcs (from small to large)
     // Arc 1 (smallest)
     for (int i = -20; i <= 20; i++) {
         int px = cx + (i * 3 / 20);
         int py = by - 4 + (i * i / 100);
-        display.drawPixel(px, py, EPD_BLACK);
+        display.drawPixel(px, py, color);
     }
     // Arc 2 (medium)
     for (int i = -30; i <= 30; i++) {
         int px = cx + (i * 5 / 30);
         int py = by - 7 + (i * i / 150);
-        display.drawPixel(px, py, EPD_BLACK);
+        display.drawPixel(px, py, color);
     }
     // Arc 3 (largest)
     for (int i = -40; i <= 40; i++) {
         int px = cx + (i * 6 / 40);
         int py = by - 10 + (i * i / 180);
-        display.drawPixel(px, py, EPD_BLACK);
+        display.drawPixel(px, py, color);
+    }
+}
+
+static void draw_wifi_icon(Gdey029T94 &display, int x, int y) {
+    draw_wifi_icon_color(display, x, y, EPD_BLACK);
+}
+
+static void draw_list_icon(Gdey029T94 &display, view_list_icon_t icon, bool disabled,
+                           int x, int y, bool inverted) {
+    if (icon == VIEW_LIST_ICON_NONE) return;
+
+    uint16_t color = inverted ? EPD_WHITE : EPD_BLACK;
+    switch (icon) {
+        case VIEW_LIST_ICON_WIFI:
+            draw_wifi_icon_color(display, x, y, color);
+            break;
+        case VIEW_LIST_ICON_BLE:
+            draw_ble_icon_color(display, x, y, color);
+            break;
+        default:
+            break;
+    }
+
+    if (disabled) {
+        display.drawLine(x, y, x + 11, y + 11, color);
+        display.drawLine(x, y + 11, x + 11, y, color);
     }
 }
 
@@ -489,7 +519,7 @@ void view_info_screen_render(const view_info_screen_t *view, bool partial) {
 // ============================================================================
 
 void view_list_screen_init(view_list_screen_t *view, const char *title,
-                           const view_list_item_t *items, uint8_t count) {
+                           const view_list_item_t *items, uint16_t count) {
     if (!view) return;
 
     view->title = title;
@@ -532,7 +562,7 @@ void view_list_screen_navigate(view_list_screen_t *view, bool down) {
     }
 }
 
-uint8_t view_list_screen_get_selection(const view_list_screen_t *view) {
+uint16_t view_list_screen_get_selection(const view_list_screen_t *view) {
     return view ? view->selection : 0;
 }
 
@@ -546,14 +576,24 @@ void view_list_screen_render(const view_list_screen_t *view, bool partial) {
 
     display.setFont(&FreeMonoBold9pt7b);
 
+    bool has_icons = false;
+    for (uint16_t i = 0; i < view->item_count; i++) {
+        if (view->items[i].icon != VIEW_LIST_ICON_NONE) {
+            has_icons = true;
+            break;
+        }
+    }
+
     if (view->item_count == 0) {
         display.setTextColor(EPD_BLACK);
         display.setCursor(10, 50);
         display.print("(empty)");
     } else {
         int y = 38;
-        for (uint8_t i = 0; i < VIEW_LIST_VISIBLE_ITEMS && (view->scroll_pos + i) < view->item_count; i++) {
-            uint8_t idx = view->scroll_pos + i;
+        int icon_x = 10;
+        int label_x = has_icons ? 28 : 10;
+        for (uint16_t i = 0; i < VIEW_LIST_VISIBLE_ITEMS && (view->scroll_pos + i) < view->item_count; i++) {
+            uint16_t idx = view->scroll_pos + i;
             bool is_selected = (idx == view->selection);
 
             if (is_selected) {
@@ -563,7 +603,13 @@ void view_list_screen_render(const view_list_screen_t *view, bool partial) {
                 display.setTextColor(EPD_BLACK);
             }
 
-            display.setCursor(10, y);
+            if (has_icons) {
+                draw_list_icon(display, (view_list_icon_t)view->items[idx].icon,
+                               view->items[idx].icon_disabled,
+                               icon_x, y - 12, is_selected);
+            }
+
+            display.setCursor(label_x, y);
             display.print(view->items[idx].label ? view->items[idx].label : "");
             y += LINE_HEIGHT;
         }
@@ -654,6 +700,24 @@ void view_t9_input_backspace(view_t9_input_t *view) {
     view->len--;
     view->buffer[view->len] = '\0';
     view->last_key = 0;
+    view->cursor_active = false;
+}
+
+void view_t9_input_force_digit(view_t9_input_t *view, char key) {
+    if (!view) return;
+    if (key < '0' || key > '9') return;
+
+    if (view->len > 0 && view->last_key == key && view->cursor_active) {
+        view->buffer[view->len - 1] = key;
+    } else if (view->len < VIEW_MAX_TEXT_LEN - 1) {
+        view->buffer[view->len] = key;
+        view->len++;
+        view->buffer[view->len] = '\0';
+    }
+
+    view->last_key = 0;
+    view->char_index = 0;
+    view->last_press_ms = 0;
     view->cursor_active = false;
 }
 
@@ -1552,6 +1616,199 @@ void view_toast_error(const char *message, uint16_t duration_ms) {
 }
 
 // ============================================================================
+// WiFi List View
+// ============================================================================
+
+// Draw signal strength bars (4 bars, each 3px wide, 2px gap)
+// Heights: 4, 7, 10, 13 pixels from bottom
+static void draw_signal_bars(Gdey029T94 &display, int x, int y, int8_t rssi, bool inverted) {
+    // Determine number of bars based on RSSI
+    // Excellent: > -50 dBm (4 bars)
+    // Good: -50 to -60 dBm (3 bars)
+    // Fair: -60 to -70 dBm (2 bars)
+    // Weak: < -70 dBm (1 bar)
+    int bars;
+    if (rssi > -50) bars = 4;
+    else if (rssi > -60) bars = 3;
+    else if (rssi > -70) bars = 2;
+    else bars = 1;
+
+    uint16_t fg = inverted ? EPD_WHITE : EPD_BLACK;
+
+    int bar_width = 3;
+    int gap = 1;
+    int base_y = y + 13;  // Bottom of tallest bar
+
+    for (int i = 0; i < 4; i++) {
+        int bar_height = 4 + i * 3;  // 4, 7, 10, 13
+        int bx = x + i * (bar_width + gap);
+        int by = base_y - bar_height;
+
+        if (i < bars) {
+            // Filled bar
+            display.fillRect(bx, by, bar_width, bar_height, fg);
+        } else {
+            // Empty bar (outline only)
+            display.drawRect(bx, by, bar_width, bar_height, fg);
+        }
+    }
+}
+
+// Draw lock icon (simple padlock)
+static void draw_lock_icon(Gdey029T94 &display, int x, int y, bool inverted) {
+    uint16_t fg = inverted ? EPD_WHITE : EPD_BLACK;
+
+    // Lock body (filled rectangle)
+    display.fillRect(x, y + 5, 9, 7, fg);
+
+    // Lock shackle (arc at top)
+    display.drawRect(x + 2, y, 5, 6, fg);
+    display.drawRect(x + 3, y + 1, 3, 4, inverted ? EPD_BLACK : EPD_WHITE);
+}
+
+void view_wifi_list_init(view_wifi_list_t *view, const char *title) {
+    if (!view) return;
+    view->title = title;
+    view->item_count = 0;
+    view->selection = 0;
+    view->scroll_pos = 0;
+}
+
+int view_wifi_list_add(view_wifi_list_t *view, const char *ssid, int8_t rssi, uint8_t auth_mode) {
+    if (!view || view->item_count >= VIEW_WIFI_MAX_ITEMS) return -1;
+
+    int idx = view->item_count;
+    strncpy(view->items[idx].ssid, ssid, sizeof(view->items[idx].ssid) - 1);
+    view->items[idx].ssid[sizeof(view->items[idx].ssid) - 1] = '\0';
+    view->items[idx].rssi = rssi;
+    view->items[idx].auth_mode = auth_mode;
+    view->item_count++;
+
+    return idx;
+}
+
+void view_wifi_list_clear(view_wifi_list_t *view) {
+    if (!view) return;
+    view->item_count = 0;
+    view->selection = 0;
+    view->scroll_pos = 0;
+}
+
+void view_wifi_list_sort(view_wifi_list_t *view) {
+    if (!view || view->item_count < 2) return;
+
+    // Simple bubble sort by RSSI (descending - strongest first)
+    for (uint16_t i = 0; i < view->item_count - 1; i++) {
+        for (uint16_t j = 0; j < view->item_count - i - 1; j++) {
+            if (view->items[j].rssi < view->items[j + 1].rssi) {
+                // Swap
+                view_wifi_item_t tmp = view->items[j];
+                view->items[j] = view->items[j + 1];
+                view->items[j + 1] = tmp;
+            }
+        }
+    }
+}
+
+void view_wifi_list_navigate(view_wifi_list_t *view, bool down) {
+    if (!view || view->item_count == 0) return;
+
+    if (down) {
+        if (view->selection < view->item_count - 1) {
+            view->selection++;
+        } else {
+            view->selection = 0;
+            view->scroll_pos = 0;
+        }
+        if (view->selection >= view->scroll_pos + VIEW_LIST_VISIBLE_ITEMS) {
+            view->scroll_pos = view->selection - VIEW_LIST_VISIBLE_ITEMS + 1;
+        }
+    } else {
+        if (view->selection > 0) {
+            view->selection--;
+        } else {
+            view->selection = view->item_count - 1;
+            if (view->item_count > VIEW_LIST_VISIBLE_ITEMS) {
+                view->scroll_pos = view->item_count - VIEW_LIST_VISIBLE_ITEMS;
+            }
+        }
+        if (view->selection < view->scroll_pos) {
+            view->scroll_pos = view->selection;
+        }
+    }
+}
+
+uint16_t view_wifi_list_get_selection(const view_wifi_list_t *view) {
+    return view ? view->selection : 0;
+}
+
+void view_wifi_list_render(const view_wifi_list_t *view, bool partial) {
+    if (!view) return;
+
+    Gdey029T94 &display = gui_get_display();
+    gui_clear();
+
+    draw_header(display, view->title ? view->title : "WiFi");
+
+    display.setFont(&FreeMonoBold9pt7b);
+
+    if (view->item_count == 0) {
+        display.setTextColor(EPD_BLACK);
+        display.setCursor(10, 50);
+        display.print("(empty)");
+    } else {
+        int y = 38;
+        for (uint16_t i = 0; i < VIEW_LIST_VISIBLE_ITEMS && (view->scroll_pos + i) < view->item_count; i++) {
+            uint16_t idx = view->scroll_pos + i;
+            const view_wifi_item_t *item = &view->items[idx];
+            bool is_selected = (idx == view->selection);
+
+            if (is_selected) {
+                display.fillRect(0, y - 12, display.width(), 17, EPD_BLACK);
+                display.setTextColor(EPD_WHITE);
+            } else {
+                display.setTextColor(EPD_BLACK);
+            }
+
+            // Draw signal bars (x=4, centered vertically in row)
+            draw_signal_bars(display, 4, y - 11, item->rssi, is_selected);
+
+            // Draw SSID (truncated to ~14 chars to leave room for auth+lock)
+            char ssid_display[15];
+            strncpy(ssid_display, item->ssid, 14);
+            ssid_display[14] = '\0';
+
+            display.setCursor(22, y);
+            display.print(ssid_display);
+
+            // Draw lock icon for encrypted networks
+            if (item->auth_mode != 0) {
+                draw_lock_icon(display, display.width() - 15, y - 10, is_selected);
+            }
+
+            y += LINE_HEIGHT;
+        }
+
+        // Scroll indicators
+        display.setTextColor(EPD_BLACK);
+        if (view->scroll_pos > 0) {
+            display.setCursor(display.width() - 15, 38);
+            display.print("^");
+        }
+        if (view->scroll_pos + VIEW_LIST_VISIBLE_ITEMS < view->item_count) {
+            display.setCursor(display.width() - 15, 38 + LINE_HEIGHT * (VIEW_LIST_VISIBLE_ITEMS - 1));
+            display.print("v");
+        }
+    }
+
+    // Footer
+    char hint[64];
+    snprintf(hint, sizeof(hint), "%d/%d  %s", view->selection + 1, view->item_count, i18n_str(STR_HINT_SELECT));
+    draw_hints(display, hint);
+    gui_flush(false);
+}
+
+// ============================================================================
 // Context Menu Overlay
 // ============================================================================
 
@@ -1669,12 +1926,21 @@ static struct {
     int offset_x;
     int offset_y;
     int scale;
+    int actual_size;    // Filled during sizing pass
+    bool sizing_pass;   // True = just measure, don't draw
 } qr_render_ctx;
 
-// QR code display callback - draws directly to e-paper
+// QR code display callback - draws directly to e-paper (or just measures)
 static void qr_display_callback(esp_qrcode_handle_t qrcode) {
-    Gdey029T94 &display = gui_get_display();
     int size = esp_qrcode_get_size(qrcode);
+    qr_render_ctx.actual_size = size;
+
+    // If sizing pass, just record size and return
+    if (qr_render_ctx.sizing_pass) {
+        return;
+    }
+
+    Gdey029T94 &display = gui_get_display();
     int scale = qr_render_ctx.scale;
     int x0 = qr_render_ctx.offset_x;
     int y0 = qr_render_ctx.offset_y;
@@ -1696,9 +1962,10 @@ static void qr_display_callback(esp_qrcode_handle_t qrcode) {
     }
 }
 
-void view_qr_code_init(view_qr_code_t *view, const char *title, const char *data) {
+void view_qr_code_init(view_qr_code_t *view, const char *title, const char *subtitle, const char *data) {
     if (!view) return;
     view->title = title;
+    view->subtitle = subtitle;
     view->data = data;
     view->scale = 0;  // Auto-calculate
 }
@@ -1706,43 +1973,34 @@ void view_qr_code_init(view_qr_code_t *view, const char *title, const char *data
 void view_qr_code_render(const view_qr_code_t *view, bool partial) {
     if (!view || !view->data) return;
 
+    // Enable backlight for better QR scanning
+    gui_backlight_on();
+
     Gdey029T94 &display = gui_get_display();
     display.fillScreen(EPD_WHITE);
     display.setTextColor(EPD_BLACK);
 
     // Display: 296x128 pixels
-    // Layout: QR code on LEFT (max size), title/hint on RIGHT
+    // Layout: QR code fills display height, text on right if space
     const int display_height = 128;
     const int display_width = 296;
-    const int qr_margin = 2;  // Small margin around QR
+    const int qr_margin = 0;  // No margin - maximize QR size
 
-    // QR code max height = display height - margins
-    int max_qr_height = display_height - (qr_margin * 2);
+    // QR code uses full display height
+    int max_qr_height = display_height;
 
     // Generate QR code with callback
+    // Version 20 = 97 modules, can hold ~858 alphanumeric chars (ECC_LOW)
     esp_qrcode_config_t cfg = {
         .display_func = qr_display_callback,
-        .max_qrcode_version = 10,
+        .max_qrcode_version = 20,
         .qrcode_ecc_level = ESP_QRCODE_ECC_LOW,
         .user_data = NULL
     };
 
-    // QR version n has size 17 + 4*n modules
-    // Version 10 = 57 modules (worst case)
-    // For 124px available: scale = 124/57 = 2.17 -> use 2
-    int est_modules = 57;  // Assume max version for layout
-    int scale = max_qr_height / est_modules;
-    if (scale < 1) scale = 1;
-
-    // Calculate QR pixel size
-    int qr_pixel_size = est_modules * scale;
-
-    // Position QR code on left, vertically centered
-    qr_render_ctx.offset_x = qr_margin;
-    qr_render_ctx.offset_y = (display_height - qr_pixel_size) / 2;
-    qr_render_ctx.scale = scale;
-
-    // Generate and render QR code
+    // First pass: determine actual QR size (without drawing)
+    qr_render_ctx.sizing_pass = true;
+    qr_render_ctx.actual_size = 0;
     esp_err_t err = esp_qrcode_generate(&cfg, view->data);
     if (err != ESP_OK) {
         LOG_E("VIEW", "QR generate failed: %s", esp_err_to_name(err));
@@ -1753,16 +2011,49 @@ void view_qr_code_render(const view_qr_code_t *view, bool partial) {
         return;
     }
 
+    int actual_modules = qr_render_ctx.actual_size;
+    if (actual_modules <= 0) actual_modules = 97;  // Fallback
+
+    // QR code includes 4-module quiet zone on each side (added by library)
+    // So effective size = actual_modules (quiet zone is inside the reported size)
+
+    // Calculate optimal scale to fill display height exactly
+    // Use the largest scale that fits
+    int scale = max_qr_height / actual_modules;
+    if (scale < 1) scale = 1;
+
+    // Calculate actual QR pixel size
+    int qr_pixel_size = actual_modules * scale;
+
+    // If there's significant unused space, try to center better or use remaining space
+    int unused_height = max_qr_height - qr_pixel_size;
+
+    // Position QR code on left, vertically centered in available space
+    qr_render_ctx.offset_x = qr_margin;
+    qr_render_ctx.offset_y = unused_height / 2;
+    qr_render_ctx.scale = scale;
+
+    // Second pass: actually render
+    qr_render_ctx.sizing_pass = false;
+    err = esp_qrcode_generate(&cfg, view->data);
+    if (err != ESP_OK) {
+        LOG_E("VIEW", "QR render failed: %s", esp_err_to_name(err));
+        gui_flush_sync(false);
+        return;
+    }
+
+    LOG_I("VIEW", "QR: %d modules, scale=%d, %dx%d px", actual_modules, scale, qr_pixel_size, qr_pixel_size);
+
     // Right side text area starts after QR code
     int text_area_x = qr_margin + qr_pixel_size + 8;
     int text_area_width = display_width - text_area_x - 4;
 
     // Draw title on right side (top)
+    int y = 14;
     if (view->title && view->title[0]) {
         display.setFont(&FreeMonoBold9pt7b);
 
         // Word wrap title into text area
-        int y = 14;
         const char *p = view->title;
         char line[32];
         int max_chars = text_area_width / 7;  // Approx char width at 9pt
@@ -1782,6 +2073,22 @@ void view_qr_code_render(const view_qr_code_t *view, bool partial) {
             p += len;
             y += 16;
         }
+    }
+
+    if (view->subtitle && view->subtitle[0] && y < 98) {
+        display.setFont(NULL);
+        int max_chars = text_area_width / 6;  // Approx char width for default font
+        if (max_chars > 31) max_chars = 31;
+        char line[32];
+        int len = 0;
+        while (view->subtitle[len] && len < max_chars) {
+            line[len] = view->subtitle[len];
+            len++;
+        }
+        line[len] = '\0';
+        display.setCursor(text_area_x, y + 2);
+        display.print(line);
+        y += 12;
     }
 
     // Draw hint at bottom right

@@ -57,6 +57,11 @@
 #define FEATURE_BLE_UART 1   // BLE UART for wireless serial console
 #endif
 
+// BLE Badge vCard feature (badge2badge + QR)
+#ifndef FEATURE_BLE_BADGE
+#define FEATURE_BLE_BADGE 1
+#endif
+
 // Compile-time check: BLE UART requires Bluetooth to be enabled in sdkconfig
 #if FEATURE_BLE_UART
   #if !defined(CONFIG_BT_ENABLED) || !CONFIG_BT_ENABLED
@@ -72,7 +77,7 @@
 #endif
 
 #ifndef FEATURE_SECURE_SERIAL
-#define FEATURE_SECURE_SERIAL 0  // DISABLED FOR TESTING
+#define FEATURE_SECURE_SERIAL 1  // Require PIN auth for sensitive commands
 #endif
 
 #ifndef FEATURE_CA
@@ -86,5 +91,25 @@
 
 // Note: SSH key support is provided via FIDO2 (ed25519-sk keys)
 // No separate FEATURE_SSH needed - use ssh-keygen -t ed25519-sk with the badge
+
+// ============================================================================
+// GPG Key Management
+// ============================================================================
+#ifndef FEATURE_GPG
+#define FEATURE_GPG 1  // GPG key storage and signing
+#endif
+
+// GPG over USB CCID (SmartCard interface)
+// Requires FEATURE_GPG and FEATURE_USB
+#ifndef FEATURE_GPG_CCID
+#define FEATURE_GPG_CCID 0  // USB CCID SmartCard interface (disabled by default)
+#endif
+
+#if FEATURE_GPG_CCID && !FEATURE_GPG
+  #error "FEATURE_GPG_CCID requires FEATURE_GPG to be enabled!"
+#endif
+#if FEATURE_GPG_CCID && !FEATURE_USB
+  #error "FEATURE_GPG_CCID requires FEATURE_USB to be enabled!"
+#endif
 
 #endif

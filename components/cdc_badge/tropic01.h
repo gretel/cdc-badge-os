@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -10,15 +11,21 @@ extern "C" {
 // R-Memory slot definitions
 #define TR01_RMEM_SLOT_PIN       30    // PIN hash storage
 #define TR01_RMEM_SLOT_CONFIG    31    // Device config
-#define TR01_RMEM_SLOT_FIDO_START 0    // FIDO2/SSH credentials: 0-29
-#define TR01_RMEM_SLOT_FIDO_END   29   // Extended from 26 to include SSH keys
+#define TR01_RMEM_SLOT_CA        32    // CA metadata
+#define TR01_RMEM_SLOT_FIDO_START 0    // FIDO2/SSH credentials: 0-28
+#define TR01_RMEM_SLOT_FIDO_END   28   // Reduced from 29 to free slot 29 for GPG
 #define TR01_RMEM_SLOT_TOTP_START 33   // TOTP accounts: 33-132
 #define TR01_RMEM_SLOT_TOTP_END   132
+#define TR01_RMEM_SLOT_GPG       134   // GPG metadata (User-ID, fingerprint, etc.)
+#define TR01_RMEM_SLOT_GPG_RECV_START 140  // Received public keys: 140-149
+#define TR01_RMEM_SLOT_GPG_RECV_END   149
 
 // ECC slot definitions
-#define TR01_ECC_SLOT_FIDO_START  0    // FIDO2/SSH keys: 0-29 (P-256 or Ed25519)
-#define TR01_ECC_SLOT_FIDO_END    29   // Extended from 26 to include SSH keys
+#define TR01_ECC_SLOT_FIDO_START  0    // FIDO2/SSH keys: 0-28 (P-256 or Ed25519)
+#define TR01_ECC_SLOT_FIDO_END    28   // Reduced from 29 to free slot 29 for GPG
+#define TR01_ECC_SLOT_GPG         29   // GPG master key
 #define TR01_ECC_SLOT_ATTEST      30   // FIDO2 attestation key
+#define TR01_ECC_SLOT_CA          31   // CA root key
 #define TR01_ECC_SLOT_COUNT       32
 
 // ECC curve types (use CDC_ prefix to avoid collision with libtropic enums)
@@ -63,8 +70,17 @@ bool tropic01_ecdsa_sign(uint8_t slot, const uint8_t *hash, uint32_t hash_len,
 bool tropic01_eddsa_sign(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
                          uint8_t *signature);
 
-// Random number generator
+// Random number generator (hardware TRNG)
 bool tropic01_get_random(uint8_t *buffer, uint16_t size);
+
+// Secure random: TROPIC01 TRNG with ESP32 fallback
+// Use this instead of esp_random() for security-critical random data
+// Returns true if TROPIC01 was used, false if ESP32 fallback was used
+bool secure_random(uint8_t *buffer, uint16_t size);
+
+// Fill buffer with random bytes (esp_random style compatibility)
+// Prefer secure_random() for new code
+void secure_random_fill(uint8_t *buffer, size_t size);
 
 // Diagnostics API
 bool tropic01_get_chip_id(uint8_t *serial_num, uint8_t serial_size);

@@ -2,6 +2,7 @@
 
 #include "cdc_time.h"
 #include "power_management.h"
+#include "temp_sensor.h"
 
 #include "esp_heap_caps.h"
 
@@ -48,8 +49,13 @@ void system_status_build_selftest_text(const hw_status_t *status, char *buf, siz
                     power_get_battery_percent(),
                     power_is_charging() ? "(chg)" : "");
 
+    // Temperature (internal sensor)
+    float temp_c = 0.0f;
+    if (temp_sensor_get_celsius(&temp_c)) {
+        pos += snprintf(buf + pos, buf_size - pos, "Temp: %.1f C\n", (double)temp_c);
+    }
+
     // Uptime
     pos += snprintf(buf + pos, buf_size - pos, "Uptime: %lu s\n",
                     (unsigned long)(millis() / 1000));
 }
-

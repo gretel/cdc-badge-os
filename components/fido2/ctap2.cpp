@@ -10,7 +10,6 @@
 #include "tropic01.h"
 #include "cdc_log.h"
 #include "feature_flags.h"
-#include "esp_random.h"
 #include <esp_system.h>
 #include <mbedtls/ecdsa.h>
 #include <mbedtls/ecp.h>
@@ -125,7 +124,8 @@ static uint8_t build_authenticator_data(
 
 static int ctap2_random(void *ctx, unsigned char *out, size_t len) {
     (void)ctx;
-    esp_fill_random(out, len);
+    // Use TROPIC01 TRNG (with ESP32 fallback)
+    secure_random_fill(out, len);
     return 0;
 }
 
@@ -1612,9 +1612,9 @@ static bool aes_256_cbc_encrypt_p2(const uint8_t *key, const uint8_t *input,
     mbedtls_aes_context aes;
     mbedtls_aes_init(&aes);
 
-    // Generate random IV
+    // Generate random IV using TROPIC01 TRNG
     uint8_t iv[16];
-    esp_fill_random(iv, 16);
+    secure_random_fill(iv, 16);
 
     // Copy IV to output first
     memcpy(output, iv, 16);
@@ -1965,7 +1965,7 @@ static uint8_t client_pin_get_pin_token(const uint8_t *params, uint16_t params_l
 
     // PIN correct - reset retries and generate pinToken
     g_client_pin.pin_retries = PIN_RETRIES_MAX;
-    esp_fill_random(g_client_pin.pin_token, PIN_TOKEN_SIZE);
+    secure_random_fill(g_client_pin.pin_token, PIN_TOKEN_SIZE);
     g_client_pin.pin_token_valid = true;
 
     // Encrypt pinToken with shared secret
