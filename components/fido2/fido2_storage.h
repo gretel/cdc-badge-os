@@ -16,14 +16,14 @@ extern "C" {
 // ============================================================================
 // Storage Layout
 // ============================================================================
-// ECC Slots 0-29:    Private keys (P-256 or Ed25519 for WebAuthn/SSH)
-// R-Memory 0-29:     Credential metadata (rp_id, user_id, sign_count, curve, etc.)
+// ECC Slots 0-28:    Private keys (P-256 or Ed25519 for WebAuthn/SSH)
+// R-Memory 0-28:     Credential metadata (rp_id, user_id, sign_count, curve, etc.)
 // NVS "fido2":       Global auth counter, PIN hash
 
 #define FIDO2_ECC_SLOT_BASE     0
-#define FIDO2_ECC_SLOT_MAX      29
+#define FIDO2_ECC_SLOT_MAX      28
 #define FIDO2_RMEM_SLOT_BASE    0
-#define FIDO2_RMEM_SLOT_MAX     29
+#define FIDO2_RMEM_SLOT_MAX     28
 
 // ============================================================================
 // Initialization
@@ -74,7 +74,7 @@ bool fido2_storage_create_credential(
 /**
  * Get curve type for a credential.
  *
- * @param slot ECC slot index (0-29)
+ * @param slot ECC slot index (0-28)
  * @return CDC_CURVE_P256 or CDC_CURVE_ED25519, or 0xFF on error
  */
 uint8_t fido2_storage_get_curve(uint8_t slot);

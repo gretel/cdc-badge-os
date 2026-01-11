@@ -78,6 +78,7 @@ static bool g_gatts_connected = false;
 static uint16_t g_gatts_conn_id = 0;
 static uint16_t g_gatts_mtu_payload = BLE_BADGE_TX_PAYLOAD_DEFAULT;
 static esp_bd_addr_t g_gatts_bda = {0};
+static esp_bd_addr_t g_own_bda = {0};  // Own BLE address to filter self from scan
 
 static bool g_pairing_pending = false;
 static bool g_pairing_passkey_req = false;
@@ -571,6 +572,17 @@ static void handle_scan_result(const esp_ble_gap_cb_param_t *param) {
     auto *scan = &param->scan_rst;
     if (scan->rssi < g_rssi_threshold) return;
 
+    // Filter out own device from scan results
+    // Also filter if own_bda is all zeros (not yet initialized)
+    bool own_bda_valid = false;
+    for (int i = 0; i < 6; i++) {
+        if (g_own_bda[i] != 0) { own_bda_valid = true; break; }
+    }
+    if (own_bda_valid && memcmp(scan->bda, g_own_bda, sizeof(esp_bd_addr_t)) == 0) {
+        LOG_D(BLE_BADGE_TAG, "Filtered self from scan");
+        return;
+    }
+
     uint8_t name_len = 0;
     uint8_t *name = esp_ble_resolve_adv_data((uint8_t *)scan->ble_adv, ESP_BLE_AD_TYPE_NAME_CMPL, &name_len);
     char name_buf[BLE_BADGE_NAME_MAX] = {0};
@@ -603,7 +615,11 @@ static void handle_scan_result(const esp_ble_gap_cb_param_t *param) {
                                                        vcard_service_uuid);
     g_peers_last_seen[idx] = millis();
 
-    if (!g_pending_nearby_set && blacklist_allows(scan->bda)) {
+    // Only trigger nearby alert for CDC Badge devices (with vCard service UUID)
+    if (!g_pending_nearby_set && g_peers[idx].exchange_ready && blacklist_allows(scan->bda)) {
+        LOG_I(BLE_BADGE_TAG, "Nearby CDC Badge: %s BDA=%02X:%02X:%02X:%02X:%02X:%02X RSSI=%d",
+              name_buf, scan->bda[0], scan->bda[1], scan->bda[2],
+              scan->bda[3], scan->bda[4], scan->bda[5], scan->rssi);
         g_pending_nearby = g_peers[idx];
         g_pending_nearby_set = true;
     }
@@ -1092,6 +1108,15 @@ bool ble_badge_init(void) {
     }
 
     esp_ble_gatt_set_local_mtu(185);
+
+    // Get own BLE address to filter self from scan results
+    const uint8_t *own_addr = esp_bt_dev_get_address();
+    if (own_addr) {
+        memcpy(g_own_bda, own_addr, sizeof(esp_bd_addr_t));
+        LOG_I(BLE_BADGE_TAG, "Own BDA: %02X:%02X:%02X:%02X:%02X:%02X",
+              g_own_bda[0], g_own_bda[1], g_own_bda[2],
+              g_own_bda[3], g_own_bda[4], g_own_bda[5]);
+    }
 
     esp_ble_gap_set_scan_params(&scan_params);
     g_initialized = true;

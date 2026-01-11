@@ -375,8 +375,8 @@ uint8_t ctap2_get_info(uint8_t *response, uint16_t *response_len) {
     cbor_writer_t w;
     cbor_writer_init(&w, response + 1, *response_len - 1);
 
-    // Response is a map (10 items for FIDO 2.1 compliance with algorithms)
-    cbor_encode_map(&w, 10);
+    // Response is a map (9 items for FIDO 2.0 compliance)
+    cbor_encode_map(&w, 9);
 
     // 0x01: versions (FIDO_2_0, U2F_V2)
     cbor_encode_uint(&w, 0x01);
@@ -430,22 +430,6 @@ uint8_t ctap2_get_info(uint8_t *response, uint16_t *response_len) {
     cbor_encode_uint(&w, 0x09);
     cbor_encode_array(&w, 1);
     cbor_encode_text(&w, INFO_TRANSPORTS[0]);
-
-    // 0x0A: algorithms (FIDO 2.1) - supported public key credential algorithms
-    cbor_encode_uint(&w, 0x0A);
-    cbor_encode_array(&w, 2);
-    // ES256 (P-256/ECDSA)
-    cbor_encode_map(&w, 2);
-    cbor_encode_text(&w, "type");
-    cbor_encode_text(&w, "public-key");
-    cbor_encode_text(&w, "alg");
-    cbor_encode_int(&w, COSE_ALG_ES256);
-    // EdDSA (Ed25519)
-    cbor_encode_map(&w, 2);
-    cbor_encode_text(&w, "type");
-    cbor_encode_text(&w, "public-key");
-    cbor_encode_text(&w, "alg");
-    cbor_encode_int(&w, COSE_ALG_EDDSA);
 
     if (cbor_writer_error(&w)) {
         response[0] = CTAP2_ERR_OTHER;
@@ -789,11 +773,14 @@ uint8_t ctap2_make_credential(const uint8_t *params, uint16_t params_len,
         return CTAP2_ERR_OPERATION_DENIED;
     }
 
+    LOG_I("CTAP2", "User presence OK, creating credential (curve=%d)...", curve);
+
     // Create credential
     uint8_t slot;
     uint8_t cred_id[FIDO2_CRED_ID_LEN];
     uint8_t pubkey[64];  // P-256: X||Y, Ed25519: 32 bytes (only first half used)
 
+    LOG_I("CTAP2", "Calling fido2_storage_create_credential...");
     if (!fido2_storage_create_credential(
             rp_id, rp_id_hash, user_id, user_id_len, user_name,
             rk, cred_protect, curve, &slot, cred_id, pubkey)) {

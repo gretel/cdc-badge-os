@@ -84,7 +84,7 @@
 #define FEATURE_CA 1  // Certificate Authority
 #endif
 
-// PKCS#11 requires wolfPKCS11 evaluation - disabled until proven viable
+// PKCS#11 also on GPG - planned
 #ifndef FEATURE_CA_PKCS11
 #define FEATURE_CA_PKCS11 0
 #endif
@@ -102,7 +102,7 @@
 // GPG over USB CCID (SmartCard interface)
 // Requires FEATURE_GPG and FEATURE_USB
 #ifndef FEATURE_GPG_CCID
-#define FEATURE_GPG_CCID 0  // USB CCID SmartCard interface (disabled by default)
+#define FEATURE_GPG_CCID 0  // USB CCID SmartCard interface, not yet implemented
 #endif
 
 #if FEATURE_GPG_CCID && !FEATURE_GPG

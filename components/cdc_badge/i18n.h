@@ -175,6 +175,7 @@ typedef enum {
     STR_TX_POWER,           // "TX Power"
     STR_VCARD_RECEIVE,      // "Receive"
     STR_VCARD_EXCHANGE,     // "Exchange"
+    STR_VCARD_EXCHANGE_MSG, // "Scanning for badges..."
     STR_VCARD_SEND,         // "Send"
     STR_VCARD_SHOW_QR,      // "Show QR"
     STR_VCARD_NEARBY,       // "Nearby: %s"
