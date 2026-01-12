@@ -53,29 +53,23 @@ void update_lock_screen_data(void) {
     }
 #endif
 
-    float temp_c = 0.0f;
-    bool temp_ok = temp_sensor_get_celsius(&temp_c);
-
     if (cdc_rtc_is_time_set()) {
         cdc_rtc_get_time_str(g_lock_screen.clock, sizeof(g_lock_screen.clock));
-        // Compact date format DD.MM
         struct tm timeinfo;
         cdc_rtc_get_time(&timeinfo);
-        if (temp_ok) {
-            snprintf(g_lock_screen.date, sizeof(g_lock_screen.date), "%02u.%02u %.1fC",
-                     (unsigned)(timeinfo.tm_mday & 0xFF), (unsigned)((timeinfo.tm_mon + 1) & 0xFF),
-                     (double)temp_c);
-        } else {
-            snprintf(g_lock_screen.date, sizeof(g_lock_screen.date), "%02u.%02u",
-                     (unsigned)(timeinfo.tm_mday & 0xFF), (unsigned)((timeinfo.tm_mon + 1) & 0xFF));
-        }
+        snprintf(g_lock_screen.date, sizeof(g_lock_screen.date), "%02u.%02u",
+                 (unsigned)(timeinfo.tm_mday & 0xFF), (unsigned)((timeinfo.tm_mon + 1) & 0xFF));
     } else {
         strncpy(g_lock_screen.clock, "--:--", sizeof(g_lock_screen.clock));
-        if (temp_ok) {
-            snprintf(g_lock_screen.date, sizeof(g_lock_screen.date), "%dC", (int)temp_c);
-        } else {
-            g_lock_screen.date[0] = '\0';
-        }
+        g_lock_screen.date[0] = '\0';
+    }
+
+    // Append temperature if available
+    float temp_c = 0.0f;
+    if (temp_sensor_get_celsius(&temp_c)) {
+        size_t len = strlen(g_lock_screen.date);
+        snprintf(g_lock_screen.date + len, sizeof(g_lock_screen.date) - len,
+                 "%s%dC", len > 0 ? " " : "", (int)temp_c);
     }
 }
 

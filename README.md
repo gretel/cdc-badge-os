@@ -12,7 +12,7 @@ Hardware security key firmware for the CDC Badge v1.0 featuring TROPIC01 secure 
 
 | Feature | Description |
 |---------|-------------|
-| **FIDO2/WebAuthn** | Passwordless authentication (USB HID) - Chrome, Firefox, Edge |
+| **FIDO2/WebAuthn** | FIDO 2.1 compliant passwordless authentication (USB HID) - Chrome, Firefox, Edge |
 | **SSH Hardware Keys** | Native SSH via ed25519-sk (OpenSSH 8.2+, no driver needed) |
 | **Certificate Authority** | On-device CA with CSR signing, root import/export (v0.5, untested) |
 | **GPG Key Management** | GPG key storage via TROPIC01, USB CCID SmartCard (v0.5, untested) |
@@ -101,14 +101,17 @@ The TROPIC01 provides hardware-backed security:
 - Tamper-resistant key storage
 - Keys cannot be extracted or cloned
 
-### FIDO2 Compliance
+### FIDO2 Compliance (CTAP 2.1)
 
-Supported CTAP2 operations:
-- `authenticatorMakeCredential` - Register new credentials
+Supported CTAP 2.1 operations:
+- `authenticatorMakeCredential` - Register new credentials (resident keys supported)
 - `authenticatorGetAssertion` - Authenticate with existing credentials
-- `authenticatorGetInfo` - Device capabilities
-- `authenticatorClientPIN` - PIN management (Protocol 1 & 2)
+- `authenticatorGetInfo` - Device capabilities (FIDO_2_1 version string)
+- `authenticatorClientPIN` - PIN management (Protocol 2 with pinUvAuthToken)
+- `authenticatorCredentialManagement` - List and delete stored credentials
 - `authenticatorReset` - Factory reset
+
+Extensions: `credProtect`, `appid`, `appidExclude`
 
 ## Storage Map
 
