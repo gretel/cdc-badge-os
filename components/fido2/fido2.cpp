@@ -45,7 +45,8 @@ static void fido2_task(void* arg) {
                 ctaphid_process_packet(packet);
             }
 
-            // Send pending responses before reading more packets
+            // Send pending responses before reading more packets (with brief wait)
+            int inner_retry = 0;
             while (ctaphid_has_response()) {
                 if (usb_fido::ready()) {
                     uint8_t response[64];
@@ -55,11 +56,16 @@ static void fido2_task(void* arg) {
                             break;
                         }
                         LOG_D("FIDO2", "Sent response packet");
+                        inner_retry = 0;
                         vTaskDelay(pdMS_TO_TICKS(1));
                     }
                 } else {
-                    LOG_D("FIDO2", "USB not ready, waiting...");
-                    break;
+                    inner_retry++;
+                    if (inner_retry > 10) {  // Brief wait, then continue in outer loop
+                        LOG_D("FIDO2", "USB not ready, deferring to outer loop");
+                        break;
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(5));
                 }
             }
 
@@ -69,7 +75,8 @@ static void fido2_task(void* arg) {
             }
         }
 
-        // Send any remaining response packets
+        // Send any remaining response packets (with retry on USB not ready)
+        int retry_count = 0;
         while (ctaphid_has_response()) {
             if (usb_fido::ready()) {
                 uint8_t response[64];
@@ -79,10 +86,17 @@ static void fido2_task(void* arg) {
                         break;
                     }
                     LOG_D("FIDO2", "Sent response packet (outer)");
+                    retry_count = 0;  // Reset retry counter on success
                     vTaskDelay(pdMS_TO_TICKS(1));
                 }
             } else {
-                break;
+                // Wait for USB to be ready instead of giving up
+                retry_count++;
+                if (retry_count > 100) {  // ~1 second timeout
+                    LOG_W("FIDO2", "USB not ready timeout, aborting response");
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(10));
             }
         }
 

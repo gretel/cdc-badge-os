@@ -1682,7 +1682,8 @@ void handle_key(char key) {
                 // Skip device PIN if already verified via ClientPIN protocol
                 if (fido2_is_pin_verified()) {
                     LOG_I("FIDO2", "PIN already verified via ClientPIN - skipping device PIN");
-                    fido2_set_pin_verified(false);  // Clear flag after use
+                    // NOTE: Don't clear pin_verified here! UV flag needs it for authData.
+                    // Flag is cleared after CTAP2 operation completes in ctap2.cpp
                     fido2_prompt_complete(FIDO2_UP_APPROVED);
                 } else if (g_fido_was_locked && pin_storage_is_set()) {
                     // Was on lock screen AND PIN is set → require PIN to unlock
