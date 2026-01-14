@@ -73,6 +73,7 @@ typedef enum {
     // Password vault states
     APP_STATE_PASSWORD_LIST,
     APP_STATE_PASSWORD_DETAIL,
+    APP_STATE_PASSWORD_PREVIEW,
     // Password add/edit wizard states
     APP_STATE_PASSWORD_ADD_NAME,
     APP_STATE_PASSWORD_ADD_USERNAME,
@@ -306,6 +307,7 @@ extern uint16_t g_password_slots[PASSWORD_MAX_ENTRIES];
 extern uint16_t g_password_count;
 extern uint16_t g_password_selected_slot;
 extern char g_password_detail_text[512];
+extern char g_password_preview_msg[32];
 extern view_context_menu_t g_password_context_menu;
 extern const view_context_item_t g_password_context_items[];
 extern password_wizard_t g_password_wizard;

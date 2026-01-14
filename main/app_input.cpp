@@ -1685,19 +1685,18 @@ void handle_key(char key) {
                     char notes[PASSWORD_NOTES_LEN + 1];
                     notes[0] = '\0';
                     if (password_store_get_secret(g_password_selected_slot, password, sizeof(password), notes, sizeof(notes))) {
-                        char msg[32];
                         if (strlen(password) > 24) {
-                            snprintf(msg, sizeof(msg), "%.21s...", password);
+                            snprintf(g_password_preview_msg, sizeof(g_password_preview_msg), "%.21s...", password);
                         } else {
-                            snprintf(msg, sizeof(msg), "%.31s", password);
+                            snprintf(g_password_preview_msg, sizeof(g_password_preview_msg), "%.31s", password);
                         }
-                        view_toast_hold_success(msg);
+                        g_app_state = APP_STATE_PASSWORD_PREVIEW;
+                        render_current_state(false);
                     } else {
                         view_toast_error("Load failed", 1200);
                     }
                     memset(password, 0, sizeof(password));
                     memset(notes, 0, sizeof(notes));
-                    go_to_password_list();
                 }
             } else if (key == '3') {
                 // Show context menu
@@ -1745,6 +1744,12 @@ void handle_key(char key) {
                     g_app_state = APP_STATE_PASSWORD_LIST;
                 }
             } else if (key == 'N') {
+                go_to_password_list();
+            }
+            break;
+
+        case APP_STATE_PASSWORD_PREVIEW:
+            if (key != 0) {
                 go_to_password_list();
             }
             break;

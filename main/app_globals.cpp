@@ -65,6 +65,7 @@ EXT_RAM_BSS_ATTR uint16_t g_password_slots[PASSWORD_MAX_ENTRIES];
 uint16_t g_password_count = 0;
 uint16_t g_password_selected_slot = 0;
 char g_password_detail_text[512];
+char g_password_preview_msg[32];
 
 view_context_menu_t g_password_context_menu;
 const view_context_item_t g_password_context_items[] = {
