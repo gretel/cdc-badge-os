@@ -26,52 +26,54 @@ static bool g_attest_initialized = false;
 // Helper Functions
 // ============================================================================
 
-static void sha256(const uint8_t *data, size_t len, uint8_t *hash) {
-    mbedtls_sha256(data, len, hash, 0);
-}
-
 // Sign with attestation key (slot 30)
+// TROPIC01 internally computes SHA256(data) before signing!
+// We must pass raw data, NOT a pre-computed hash.
 static bool u2f_attest_sign(const uint8_t *data, size_t data_len,
                              uint8_t *signature, uint8_t *sig_len) {
-    // Hash the data
-    uint8_t hash[32];
-    sha256(data, data_len, hash);
-
     // Sign with TROPIC01 slot 30
-    uint8_t raw_sig[64];  // R || S
-    if (!tropic01_ecdsa_sign(U2F_ATTEST_SLOT, hash, 32, raw_sig)) {
+    // TROPIC01 does: sign(SHA256(data)) internally
+    uint8_t raw_sig[64];  // R || S (each 32 bytes)
+    if (!tropic01_ecdsa_sign(U2F_ATTEST_SLOT, data, data_len, raw_sig)) {
         LOG_E("U2F", "Attestation signing failed");
         return false;
     }
 
-    // Convert to DER format
+    // Convert raw R||S to DER format
+    // DER: 0x30 <total_len> 0x02 <r_len> [0x00] <R> 0x02 <s_len> [0x00] <S>
     uint8_t *p = signature;
-    *p++ = 0x30;  // SEQUENCE
+    *p++ = 0x30;  // SEQUENCE tag
 
-    // Calculate lengths for R and S
-    int r_len = 32, s_len = 32;
-    int r_pad = (raw_sig[0] & 0x80) ? 1 : 0;
-    int s_pad = (raw_sig[32] & 0x80) ? 1 : 0;
+    // Find first non-zero byte in R (skip leading zeros)
+    int r_start = 0;
+    while (r_start < 31 && raw_sig[r_start] == 0) r_start++;
+    int r_len = 32 - r_start;
+    // Add padding byte if MSB is set (to keep it positive)
+    int r_pad = (raw_sig[r_start] & 0x80) ? 1 : 0;
 
-    // Skip leading zeros but keep at least one byte
-    while (r_len > 1 && raw_sig[32 - r_len] == 0 && !(raw_sig[33 - r_len] & 0x80)) r_len--;
-    while (s_len > 1 && raw_sig[64 - s_len] == 0 && !(raw_sig[65 - s_len] & 0x80)) s_len--;
+    // Find first non-zero byte in S (skip leading zeros)
+    int s_start = 0;
+    while (s_start < 31 && raw_sig[32 + s_start] == 0) s_start++;
+    int s_len = 32 - s_start;
+    // Add padding byte if MSB is set
+    int s_pad = (raw_sig[32 + s_start] & 0x80) ? 1 : 0;
 
-    int total_len = 2 + r_len + r_pad + 2 + s_len + s_pad;
+    // Total length: 2 (R header) + r_pad + r_len + 2 (S header) + s_pad + s_len
+    int total_len = 2 + r_pad + r_len + 2 + s_pad + s_len;
     *p++ = total_len;
 
     // R integer
-    *p++ = 0x02;
-    *p++ = r_len + r_pad;
+    *p++ = 0x02;  // INTEGER tag
+    *p++ = r_pad + r_len;
     if (r_pad) *p++ = 0x00;
-    memcpy(p, raw_sig + (32 - r_len), r_len);
+    memcpy(p, raw_sig + r_start, r_len);
     p += r_len;
 
     // S integer
-    *p++ = 0x02;
-    *p++ = s_len + s_pad;
+    *p++ = 0x02;  // INTEGER tag
+    *p++ = s_pad + s_len;
     if (s_pad) *p++ = 0x00;
-    memcpy(p, raw_sig + 32 + (32 - s_len), s_len);
+    memcpy(p, raw_sig + 32 + s_start, s_len);
     p += s_len;
 
     *sig_len = p - signature;
@@ -146,19 +148,32 @@ bool u2f_init_attestation(void) {
     memcpy(t, ecdsa_sha256_oid, sizeof(ecdsa_sha256_oid));
     t += sizeof(ecdsa_sha256_oid);
 
-    // Issuer: CN=CDC Badge U2F (13 chars)
-    // Structure: SEQUENCE { SET { SEQUENCE { OID(CN), UTF8String } } }
-    // Lengths: UTF8=13, inner SEQ=5+2+13=20, SET=22, outer SEQ=24
-    static const uint8_t issuer[] = {
-        0x30, 0x18,  // SEQUENCE (24 bytes)
-        0x31, 0x16,  // SET (22 bytes)
-        0x30, 0x14,  // SEQUENCE (20 bytes)
-        0x06, 0x03, 0x55, 0x04, 0x03,  // OID: CN (5 bytes)
-        0x0C, 0x0D,  // UTF8String length=13
-        'C', 'D', 'C', ' ', 'B', 'a', 'd', 'g', 'e', ' ', 'U', '2', 'F'
+    // FIDO2-konformer Subject: C=DE, O=CDC, OU=Authenticator Attestation, CN=CDC Badge FIDO2
+    // Total: 13 + 14 + 36 + 26 = 89 bytes content
+    static const uint8_t fido2_subject[] = {
+        0x30, 0x59,  // SEQUENCE (89 bytes)
+        // C=DE (13 bytes: SET(11) = SEQ(9) = OID(5) + PrintableString(2+2))
+        0x31, 0x0B, 0x30, 0x09,
+        0x06, 0x03, 0x55, 0x04, 0x06,  // OID: C (2.5.4.6)
+        0x13, 0x02, 'D', 'E',
+        // O=CDC (14 bytes: SET(12) = SEQ(10) = OID(5) + UTF8String(2+3))
+        0x31, 0x0C, 0x30, 0x0A,
+        0x06, 0x03, 0x55, 0x04, 0x0A,  // OID: O (2.5.4.10)
+        0x0C, 0x03, 'C', 'D', 'C',
+        // OU=Authenticator Attestation (36 bytes: SET(34) = SEQ(32) = OID(5) + UTF8String(2+25))
+        0x31, 0x22, 0x30, 0x20,
+        0x06, 0x03, 0x55, 0x04, 0x0B,  // OID: OU (2.5.4.11)
+        0x0C, 0x19,
+        'A', 'u', 't', 'h', 'e', 'n', 't', 'i', 'c', 'a', 't', 'o', 'r', ' ',
+        'A', 't', 't', 'e', 's', 't', 'a', 't', 'i', 'o', 'n',
+        // CN=CDC Badge FIDO2 (26 bytes: SET(24) = SEQ(22) = OID(5) + UTF8String(2+15))
+        0x31, 0x18, 0x30, 0x16,
+        0x06, 0x03, 0x55, 0x04, 0x03,  // OID: CN (2.5.4.3)
+        0x0C, 0x0F,
+        'C', 'D', 'C', ' ', 'B', 'a', 'd', 'g', 'e', ' ', 'F', 'I', 'D', 'O', '2'
     };
-    memcpy(t, issuer, sizeof(issuer));
-    t += sizeof(issuer);
+    memcpy(t, fido2_subject, sizeof(fido2_subject));
+    t += sizeof(fido2_subject);
 
     // Validity (2024-01-01 to 2049-12-31)
     // UTCTime: 00-49 = 2000-2049, 50-99 = 1950-1999
@@ -171,8 +186,8 @@ bool u2f_init_attestation(void) {
     t += sizeof(validity);
 
     // Subject: same as issuer
-    memcpy(t, issuer, sizeof(issuer));
-    t += sizeof(issuer);
+    memcpy(t, fido2_subject, sizeof(fido2_subject));
+    t += sizeof(fido2_subject);
 
     // Subject Public Key Info
     // AlgorithmIdentifier: ecPublicKey + prime256v1
@@ -189,6 +204,24 @@ bool u2f_init_attestation(void) {
     // Public key (0x04 || X || Y)
     memcpy(t, g_attest_pubkey, 65);
     t += 65;
+
+    // FIDO2 Extensions: basicConstraints (critical, CA:FALSE) + keyUsage (digitalSignature)
+    static const uint8_t fido2_extensions[] = {
+        0xA3, 0x1D,  // [3] EXPLICIT (29 bytes)
+        0x30, 0x1B,  // SEQUENCE (27 bytes)
+        // basicConstraints: critical, CA:FALSE
+        0x30, 0x0C,
+        0x06, 0x03, 0x55, 0x1D, 0x13,  // OID 2.5.29.19
+        0x01, 0x01, 0xFF,              // critical=TRUE
+        0x04, 0x02, 0x30, 0x00,        // CA:FALSE
+        // keyUsage: digitalSignature
+        0x30, 0x0B,
+        0x06, 0x03, 0x55, 0x1D, 0x0F,  // OID 2.5.29.15
+        0x04, 0x04,
+        0x03, 0x02, 0x07, 0x80         // digitalSignature bit
+    };
+    memcpy(t, fido2_extensions, sizeof(fido2_extensions));
+    t += sizeof(fido2_extensions);
 
     size_t tbs_len = t - tbs;
 
@@ -249,7 +282,8 @@ bool u2f_init_attestation(void) {
     g_attest_cert_len = p - cert;
     g_attest_initialized = true;
 
-    LOG_I("U2F", "Attestation certificate generated (%d bytes)", g_attest_cert_len);
+    LOG_I("U2F", "FIDO2 attestation certificate generated (%d bytes)", g_attest_cert_len);
+
     return true;
 }
 

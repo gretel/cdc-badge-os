@@ -533,15 +533,16 @@ uint32_t fido2_storage_increment_sign_count(uint8_t slot) {
 // Signing Operations (requires TROPIC01 access)
 // ============================================================================
 
-bool fido2_storage_sign(uint8_t slot, const uint8_t *hash,
+bool fido2_storage_sign(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
                         uint8_t *signature, uint8_t *sig_len) {
     if (slot > FIDO2_ECC_SLOT_MAX || !g_storage.creds[slot].valid) {
         return false;
     }
 
-    // ECDSA sign returns raw R||S (64 bytes)
+    // ECDSA sign: TROPIC01 hashes the message internally with SHA-256
+    // Pass raw message, NOT a pre-computed hash!
     uint8_t raw_sig[64];
-    if (!tropic01_ecdsa_sign(slot, hash, 32, raw_sig)) {
+    if (!tropic01_ecdsa_sign(slot, msg, msg_len, raw_sig)) {
         LOG_E("FIDO2", "ECDSA sign failed for slot %d", slot);
         return false;
     }
