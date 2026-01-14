@@ -40,7 +40,9 @@ typedef enum {
 // Render status bar icons at specified position
 // Returns total width used
 int view_render_status_icons(uint16_t icons, int x, int y);
-#define VIEW_LIST_MAX_ITEMS 256
+// Note: Each feature defines its own list size (TOTP_MAX_ACCOUNTS, FIDO2_MAX_CREDENTIALS, etc.)
+// This constant is for documentation only - actual arrays use feature-specific sizes
+#define VIEW_LIST_MAX_ITEMS 500  // Maximum for password entries (largest list)
 #define VIEW_LIST_VISIBLE_ITEMS 4
 #define VIEW_T9_TIMEOUT_MS 2000
 #define VIEW_PIN_MAX_LEN 6
@@ -343,6 +345,8 @@ void view_toast_success(const char *message, uint16_t duration_ms);
 
 // Show error toast (X icon + message)
 void view_toast_error(const char *message, uint16_t duration_ms);
+// Show success toast and wait for any keypress
+void view_toast_hold_success(const char *message);
 
 // ============================================================================
 // T9 Character Mapping (exposed for external use)

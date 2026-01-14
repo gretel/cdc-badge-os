@@ -26,8 +26,8 @@
 // Configuration
 // ============================================================================
 
-// Debug flags
-#define CTAP2_DEBUG                 1   // Verbose CBOR/response dumps (TEMP DEBUG)
+// Debug flags (set to 1 to enable)
+#define CTAP2_DEBUG                 0   // Verbose CBOR/response dumps
 #define CTAP2_DEBUG_COMMANDS        0   // Command logging
 
 // AAGUID - Authenticator Attestation GUID (unique per device model)
@@ -999,93 +999,24 @@ uint8_t ctap2_make_credential(const uint8_t *params, uint16_t params_len,
           g_client_pin.pin_token_valid, fido2_is_pin_verified());
 
     // Use packed attestation with FIDO2-compliant certificate
-    // TEMP: Use self-attestation to debug
-    bool use_none_attestation = false;
-    bool use_self_attestation = true;  // TEMP DEBUG: skip certificate, test self-attestation
-
-    if (use_self_attestation) {
-        // Self attestation: sign with credential key, no certificate
-        LOG_I("CTAP2", "Using SELF attestation (debug) with slot %d", slot);
-        LOG_I("CTAP2", "authData_len=%u, to_sign_len=%u", auth_data_len, to_sign_len);
-
-        // DEBUG: Log public key X and Y separately (fits in log line)
-        {
-            char hex[66];
-            for (int i = 0; i < 32; i++) sprintf(hex + i*2, "%02X", pubkey[i]);
-            LOG_I("CTAP2", "PK_X: %s", hex);
-            for (int i = 0; i < 32; i++) sprintf(hex + i*2, "%02X", pubkey[32+i]);
-            LOG_I("CTAP2", "PK_Y: %s", hex);
-        }
-
-        // DEBUG: Log clientDataHash
-        {
-            char hex[66];
-            for (int i = 0; i < 32; i++) sprintf(hex + i*2, "%02X", client_data_hash[i]);
-            LOG_I("CTAP2", "CDH: %s", hex);
-        }
-
-        // DEBUG: Compute and log SHA256(to_sign)
-        {
-            uint8_t hash[32];
-            mbedtls_sha256(to_sign, to_sign_len, hash, 0);
-            char hex[66];
-            for (int i = 0; i < 32; i++) sprintf(hex + i*2, "%02X", hash[i]);
-            LOG_I("CTAP2", "HASH: %s", hex);
-        }
-
-        att_cert = NULL;
-        att_cert_len = 0;
-
+    if (u2f_get_attestation_cert(&att_cert, &att_cert_len)) {
+        // Basic attestation with certificate
         // Send KEEPALIVE before signing (TROPIC01 ECDSA takes ~100ms)
         ctap2_send_keepalive(CTAPHID_STATUS_PROCESSING);
 
-        if (!fido2_storage_sign_der(slot, to_sign, to_sign_len, signature, &sig_len)) {
-            LOG_E("CTAP2", "Self attestation signing failed");
+        if (!u2f_attestation_sign(to_sign, to_sign_len, signature, &sig_len)) {
+            LOG_E("CTAP2", "Attestation signing failed");
             response[0] = CTAP2_ERR_OTHER;
             *response_len = 1;
             return CTAP2_ERR_OTHER;
         }
-        LOG_I("CTAP2", "sig_len=%u", sig_len);
-
-        // DEBUG: Log signature in two parts (DER can be up to 72 bytes)
-        {
-            char hex[80];
-            int half = sig_len / 2;
-            for (int i = 0; i < half; i++) sprintf(hex + i*2, "%02X", signature[i]);
-            hex[half*2] = 0;
-            LOG_I("CTAP2", "SIG1: %s", hex);
-            for (int i = 0; i < sig_len - half; i++) sprintf(hex + i*2, "%02X", signature[half+i]);
-            hex[(sig_len-half)*2] = 0;
-            LOG_I("CTAP2", "SIG2: %s", hex);
-        }
-
-        // DEBUG: Verify pubkey matches
-        uint8_t verify_pubkey[64];
-        if (fido2_storage_get_pubkey(slot, verify_pubkey)) {
-            LOG_I("CTAP2", "PK match: %s", memcmp(pubkey, verify_pubkey, 64) == 0 ? "OK" : "FAIL!");
-        }
-    } else if (!use_none_attestation && u2f_get_attestation_cert(&att_cert, &att_cert_len) &&
-        u2f_attestation_sign(to_sign, to_sign_len, signature, &sig_len)) {
-        // Basic attestation with certificate
-        LOG_I("CTAP2", "Using basic attestation with certificate (cert=%u, sig=%u)", att_cert_len, sig_len);
-        LOG_I("CTAP2", "authData_len=%u, to_sign_len=%u", auth_data_len, to_sign_len);
-    } else if (use_none_attestation) {
-        // None attestation - simplest format for debugging
-        LOG_I("CTAP2", "Using NONE attestation (debug)");
-        att_cert = NULL;
-        att_cert_len = 0;
-        sig_len = 0;  // No signature for "none" attestation
+        LOG_I("CTAP2", "Using basic attestation (cert=%u, sig=%u)", att_cert_len, sig_len);
     } else {
-        // Fallback to self attestation with credential key
-        // CTAP2 packed attestation requires DER-encoded signature!
-        LOG_W("CTAP2", "Attestation not available, using self attestation");
-        att_cert = NULL;
-        att_cert_len = 0;
-        if (!fido2_storage_sign_der(slot, to_sign, to_sign_len, signature, &sig_len)) {
-            response[0] = CTAP2_ERR_OTHER;
-            *response_len = 1;
-            return CTAP2_ERR_OTHER;
-        }
+        // Attestation certificate not available - return error
+        LOG_E("CTAP2", "Attestation certificate not initialized");
+        response[0] = CTAP2_ERR_OTHER;
+        *response_len = 1;
+        return CTAP2_ERR_OTHER;
     }
 
     uint8_t status = ctap2_build_make_credential_response_packed(

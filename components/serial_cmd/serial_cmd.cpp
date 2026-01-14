@@ -5,6 +5,7 @@
 //   Display: SET_NAME, SET_INFO, SET_INFO2
 //   vCard: VCARD_SET, VCARD_GET
 //   TOTP: TOTP_LIST, TOTP_ADD, TOTP_DEL, TOTP_GET, TOTP_TYPE
+//   Passwords: PASS_LIST, PASS_ADD, PASS_EDIT, PASS_DEL, PASS_GET, PASS_SEND
 //   FIDO2: FIDO_STATUS, FIDO_LIST, FIDO_DEL, FIDO_RESET
 //   TROPIC01: TR01_STATUS, TR01_SLOTS
 //
@@ -18,10 +19,14 @@
 #include "tropic01_cache.h"
 #include "pin_storage.h"
 #include "esp_timer.h"
+#include <esp_attr.h>
 
 #if FEATURE_TOTP
 #include "totp_store.h"
 #include "totp.h"
+#endif
+#if FEATURE_PASSWORD
+#include "password_store.h"
 #endif
 
 #if FEATURE_FIDO2
@@ -42,6 +47,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
 #include <sys/time.h>
 #include <time.h>
@@ -190,6 +196,26 @@ static void show_help(void) {
 #endif
     console_printf("  TOTP_GET <index>     - Generate code\r\n");
     console_printf("  TOTP_TYPE <index> [enter] - Type code via keyboard\r\n");
+    console_printf("\r\n");
+#endif
+
+#if FEATURE_PASSWORD
+    console_printf("Passwords:\r\n");
+#if FEATURE_SECURE_SERIAL
+    console_printf("  PASS_LIST            - List entries (auth req.)\r\n");
+    console_printf("  PASS_ADD ...         - Add entry (auth req.)\r\n");
+    console_printf("  PASS_EDIT ...        - Edit entry (auth req.)\r\n");
+    console_printf("  PASS_DEL <index>     - Delete entry (auth req.)\r\n");
+    console_printf("  PASS_GET <index>     - Show entry (auth req.)\r\n");
+    console_printf("  PASS_SEND <index> [enter] - Type password (auth req.)\r\n");
+#else
+    console_printf("  PASS_LIST            - List entries\r\n");
+    console_printf("  PASS_ADD name user url password [notes]\r\n");
+    console_printf("  PASS_EDIT index name user url password [notes]\r\n");
+    console_printf("  PASS_DEL <index>     - Delete entry\r\n");
+    console_printf("  PASS_GET <index>     - Show entry\r\n");
+    console_printf("  PASS_SEND <index> [enter] - Type password\r\n");
+#endif
     console_printf("\r\n");
 #endif
 
@@ -399,6 +425,10 @@ static void cmd_status(void) {
     console_printf("TOTP accounts: %d/%d\r\n", totp_store_count(), TOTP_MAX_ACCOUNTS);
 #endif
 
+#if FEATURE_PASSWORD
+    console_printf("Passwords: %d entries\r\n", password_store_count());
+#endif
+
 #if FEATURE_FIDO2
     console_printf("FIDO2 credentials: %d/%d\r\n", fido2_get_credential_count(), FIDO2_MAX_CREDENTIALS);
     console_printf("FIDO2 initialized: %s\r\n", fido2_is_initialized() ? "yes" : "no");
@@ -593,6 +623,229 @@ static void cmd_totp_type(char *args) {
 #endif // FEATURE_TOTP
 
 // ============================================================================
+// Password Vault Commands
+// ============================================================================
+
+#if FEATURE_PASSWORD
+
+typedef struct {
+    uint16_t slot;
+    char name[PASSWORD_NAME_LEN];
+} pass_list_entry_t;
+
+EXT_RAM_BSS_ATTR static pass_list_entry_t g_pass_list[PASSWORD_MAX_ENTRIES];
+
+static uint16_t pass_build_sorted_list(pass_list_entry_t *out, uint16_t max_entries) {
+    if (!out || max_entries == 0) return 0;
+
+    uint16_t slots[PASSWORD_MAX_ENTRIES];
+    uint16_t count = password_store_list_slots(slots, max_entries);
+    uint16_t out_count = 0;
+
+    for (uint16_t i = 0; i < count && out_count < max_entries; i++) {
+        password_meta_t meta;
+        if (password_store_get_meta(slots[i], &meta)) {
+            out[out_count].slot = slots[i];
+            strncpy(out[out_count].name, meta.name, sizeof(out[out_count].name) - 1);
+            out[out_count].name[sizeof(out[out_count].name) - 1] = '\0';
+            out_count++;
+        }
+    }
+
+    // Sort by name (case-insensitive)
+    for (uint16_t i = 1; i < out_count; i++) {
+        uint16_t j = i;
+        while (j > 0 && strcasecmp(out[j - 1].name, out[j].name) > 0) {
+            pass_list_entry_t tmp = out[j - 1];
+            out[j - 1] = out[j];
+            out[j] = tmp;
+            j--;
+        }
+    }
+
+    return out_count;
+}
+
+static bool pass_slot_from_index(int index, uint16_t *slot_out) {
+    if (!slot_out || index < 0) return false;
+    uint16_t count = pass_build_sorted_list(g_pass_list, PASSWORD_MAX_ENTRIES);
+    if (index >= (int)count) return false;
+    *slot_out = g_pass_list[index].slot;
+    return true;
+}
+
+static void cmd_pass_list(void) {
+    uint16_t count = pass_build_sorted_list(g_pass_list, PASSWORD_MAX_ENTRIES);
+    if (count == 0) {
+        console_printf("No password entries stored.\r\n");
+        return;
+    }
+
+    console_printf("=== Password Entries (%d) ===\r\n", count);
+    for (uint16_t i = 0; i < count; i++) {
+        password_meta_t meta;
+        if (password_store_get_meta(g_pass_list[i].slot, &meta)) {
+            console_printf("[%d] %s", i, meta.name);
+            if (strlen(meta.username) > 0) {
+                console_printf(" (%s)", meta.username);
+            }
+            if (strlen(meta.url) > 0) {
+                console_printf(" - %s", meta.url);
+            }
+            console_printf(" [slot %d]\r\n", g_pass_list[i].slot);
+        }
+    }
+    console_flush();
+}
+
+static void cmd_pass_add(char *args) {
+    char name[PASSWORD_NAME_LEN] = {0};
+    char username[PASSWORD_USERNAME_LEN] = {0};
+    char url[PASSWORD_URL_LEN] = {0};
+    char password[PASSWORD_MAX_LEN + 1] = {0};
+    char notes[PASSWORD_NOTES_LEN + 1] = {0};
+
+    int parsed = sscanf(args, "%31s %31s %63s %95s %255[^\n]",
+                        name, username, url, password, notes);
+    if (parsed < 4) {
+        console_printf("ERROR: Usage: PASS_ADD name user url password [notes]\r\n");
+        return;
+    }
+    if (parsed < 5) notes[0] = '\0';
+
+    password_meta_t meta = {};
+    strncpy(meta.name, name, sizeof(meta.name) - 1);
+    strncpy(meta.username, username, sizeof(meta.username) - 1);
+    strncpy(meta.url, url, sizeof(meta.url) - 1);
+
+    uint16_t slot = 0;
+    if (password_store_add(&meta, password, notes, &slot)) {
+        console_printf("OK: Added '%s' at slot %d\r\n", name, slot);
+    } else {
+        console_printf("ERROR: Failed to add entry (storage full or too large)\r\n");
+    }
+
+    memset(password, 0, sizeof(password));
+    memset(notes, 0, sizeof(notes));
+}
+
+static void cmd_pass_edit(char *args) {
+    int index = -1;
+    char name[PASSWORD_NAME_LEN] = {0};
+    char username[PASSWORD_USERNAME_LEN] = {0};
+    char url[PASSWORD_URL_LEN] = {0};
+    char password[PASSWORD_MAX_LEN + 1] = {0};
+    char notes[PASSWORD_NOTES_LEN + 1] = {0};
+
+    int parsed = sscanf(args, "%d %31s %31s %63s %95s %255[^\n]",
+                        &index, name, username, url, password, notes);
+    if (parsed < 5 || index < 0) {
+        console_printf("ERROR: Usage: PASS_EDIT index name user url password [notes]\r\n");
+        return;
+    }
+    if (parsed < 6) notes[0] = '\0';
+
+    uint16_t slot = 0;
+    if (!pass_slot_from_index(index, &slot)) {
+        console_printf("ERROR: Invalid index\r\n");
+        return;
+    }
+
+    password_meta_t meta = {};
+    strncpy(meta.name, name, sizeof(meta.name) - 1);
+    strncpy(meta.username, username, sizeof(meta.username) - 1);
+    strncpy(meta.url, url, sizeof(meta.url) - 1);
+
+    if (password_store_update(slot, &meta, password, notes)) {
+        console_printf("OK: Updated '%s'\r\n", name);
+    } else {
+        console_printf("ERROR: Update failed\r\n");
+    }
+
+    memset(password, 0, sizeof(password));
+    memset(notes, 0, sizeof(notes));
+}
+
+static void cmd_pass_del(char *args) {
+    int index = -1;
+    if (sscanf(args, "%d", &index) != 1 || index < 0) {
+        console_printf("ERROR: Usage: PASS_DEL <index>\r\n");
+        return;
+    }
+
+    uint16_t slot = 0;
+    if (!pass_slot_from_index(index, &slot)) {
+        console_printf("ERROR: Invalid index\r\n");
+        return;
+    }
+
+    if (password_store_delete(slot)) {
+        console_printf("OK: Deleted entry %d\r\n", index);
+    } else {
+        console_printf("ERROR: Delete failed\r\n");
+    }
+}
+
+static void cmd_pass_get(char *args) {
+    int index = -1;
+    if (sscanf(args, "%d", &index) != 1 || index < 0) {
+        console_printf("ERROR: Usage: PASS_GET <index>\r\n");
+        return;
+    }
+
+    uint16_t slot = 0;
+    if (!pass_slot_from_index(index, &slot)) {
+        console_printf("ERROR: Invalid index\r\n");
+        return;
+    }
+
+    password_meta_t meta;
+    char password[PASSWORD_MAX_LEN + 1];
+    char notes[PASSWORD_NOTES_LEN + 1];
+    if (!password_store_get_meta(slot, &meta) ||
+        !password_store_get_secret(slot, password, sizeof(password), notes, sizeof(notes))) {
+        console_printf("ERROR: Failed to read entry\r\n");
+        return;
+    }
+
+    console_printf("=== Password Entry [%d] ===\r\n", index);
+    console_printf("Name: %s\r\n", meta.name);
+    console_printf("User: %s\r\n", strlen(meta.username) ? meta.username : "(none)");
+    console_printf("URL:  %s\r\n", strlen(meta.url) ? meta.url : "(none)");
+    console_printf("Pass: %s\r\n", password);
+    console_printf("Notes: %s\r\n", strlen(notes) ? notes : "(none)");
+    console_flush();
+
+    memset(password, 0, sizeof(password));
+    memset(notes, 0, sizeof(notes));
+}
+
+static void cmd_pass_send(char *args) {
+    int index = -1;
+    char enter_str[8] = {0};
+    int parsed = sscanf(args, "%d %7s", &index, enter_str);
+    if (parsed < 1 || index < 0) {
+        console_printf("ERROR: Usage: PASS_SEND <index> [enter]\r\n");
+        return;
+    }
+
+    uint16_t slot = 0;
+    if (!pass_slot_from_index(index, &slot)) {
+        console_printf("ERROR: Invalid index\r\n");
+        return;
+    }
+
+    bool press_enter = (strcasecmp(enter_str, "enter") == 0);
+    if (password_store_type(slot, press_enter)) {
+        console_printf("OK: Password typed%s\r\n", press_enter ? " (with Enter)" : "");
+    } else {
+        console_printf("ERROR: Failed to type password (USB not ready?)\r\n");
+    }
+}
+
+#endif // FEATURE_PASSWORD
+
+// ============================================================================
 // FIDO2 Commands
 // ============================================================================
 
@@ -743,6 +996,10 @@ static void cmd_tr01_slots(void) {
     // TOTP slots
     uint16_t totp_count = tropic01_cache_rmem_count_range(TR01_RMEM_SLOT_TOTP_START, TR01_RMEM_SLOT_TOTP_END);
     console_printf("  TOTP (33-132): %d used\r\n", totp_count);
+
+#if FEATURE_PASSWORD
+    console_printf("  Passwords (150-511): %d entries (NVS)\r\n", password_store_count());
+#endif
 
     // CA slot
 #if FEATURE_CA
@@ -908,6 +1165,7 @@ static void cmd_tr01_wipe(void) {
         console_printf("  - All FIDO2 credentials (ECC 0-26, R-mem 0-26)\r\n");
         console_printf("  - FIDO2 Attestation key (ECC 30)\r\n");
         console_printf("  - All TOTP accounts (R-mem 33-132)\r\n");
+        console_printf("  - Password vault entries (R-mem 150-511) + metadata (NVS)\r\n");
         console_printf("  - Device PIN (R-mem 30)\r\n");
         console_printf("  - CA Root key (ECC 31) and CA data (R-mem 133)\r\n");
         console_printf("\r\nDevice pairing keys are NOT affected.\r\n");
@@ -994,6 +1252,18 @@ static void cmd_confirm(void) {
                 }
             }
         }
+
+#if FEATURE_PASSWORD
+        // Erase Password vault slots (150-511)
+        for (int i = TR01_RMEM_SLOT_PASS_START; i <= TR01_RMEM_SLOT_PASS_END; i++) {
+            if (tropic01_rmem_erase(i)) {
+                tropic01_cache_rmem_invalidate(i);
+                rmem_deleted++;
+            }
+        }
+        // Clear password metadata (NVS)
+        password_store_clear_all();
+#endif
 
         // Erase CA data (133)
         if (tropic01_cache_rmem_exists(TR01_RMEM_SLOT_CA)) {
@@ -1829,6 +2099,16 @@ static void execute_command(char *cmd) {
     if (strncasecmp(cmd, "TOTP_DEL ", 9) == 0) { cmd_totp_del(cmd + 9); return; }
     if (strncasecmp(cmd, "TOTP_GET ", 9) == 0) { cmd_totp_get(cmd + 9); return; }
     if (strncasecmp(cmd, "TOTP_TYPE ", 10) == 0) { cmd_totp_type(cmd + 10); return; }
+#endif
+
+#if FEATURE_PASSWORD
+    // Password commands
+    if (strcasecmp(cmd, "PASS_LIST") == 0) { cmd_pass_list(); return; }
+    if (strncasecmp(cmd, "PASS_ADD ", 9) == 0) { cmd_pass_add(cmd + 9); return; }
+    if (strncasecmp(cmd, "PASS_EDIT ", 10) == 0) { cmd_pass_edit(cmd + 10); return; }
+    if (strncasecmp(cmd, "PASS_DEL ", 9) == 0) { cmd_pass_del(cmd + 9); return; }
+    if (strncasecmp(cmd, "PASS_GET ", 9) == 0) { cmd_pass_get(cmd + 9); return; }
+    if (strncasecmp(cmd, "PASS_SEND ", 10) == 0) { cmd_pass_send(cmd + 10); return; }
 #endif
 
 #if FEATURE_FIDO2

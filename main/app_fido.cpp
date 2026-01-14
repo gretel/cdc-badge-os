@@ -10,10 +10,20 @@
 #include "i18n.h"
 #include "tropic01.h"
 
+#include <esp_attr.h>
 #include <cstring>
+#include <algorithm>
 
-// Static buffers for list item labels (must persist)
-static char g_fido_labels[FIDO2_MAX_CREDENTIALS][100];
+// Static buffers for list item labels (must persist) - in PSRAM to save DRAM
+EXT_RAM_BSS_ATTR static char g_fido_labels[FIDO2_MAX_CREDENTIALS][100];
+
+// Comparison helper for sorting - case-insensitive string compare
+static int strcasecmp_safe(const char *a, const char *b) {
+    if (!a && !b) return 0;
+    if (!a) return -1;
+    if (!b) return 1;
+    return strcasecmp(a, b);
+}
 
 void build_fido_context_menu(void) {
     g_fido_context_items_count = 0;
@@ -28,7 +38,11 @@ void build_fido_context_menu(void) {
 
 static void populate_fido_list(void) {
     uint8_t count = fido2_get_credential_count();
+    if (count == 0) return;
+
+    // Build labels and initialize sort map
     for (uint8_t i = 0; i < count && i < FIDO2_MAX_CREDENTIALS; i++) {
+        g_fido_sort_map[i] = i;  // Initialize: display index = store index
         fido2_credential_info_t info;
         if (fido2_get_credential_info(i, &info)) {
             // Format: "rp_id (user)" or just "rp_id" - truncate safely
@@ -39,12 +53,21 @@ static void populate_fido_list(void) {
                 snprintf(g_fido_labels[i], sizeof(g_fido_labels[i]),
                          "%.45s", info.rp_id);
             }
-            g_fido_items[i].label = g_fido_labels[i];
         }
     }
-    if (count > 0) {
-        view_list_screen_init(&g_fido_list, i18n_str(STR_FIDO2_KEYS), g_fido_items, count);
+
+    // Sort the sort map by label (case-insensitive)
+    std::sort(g_fido_sort_map, g_fido_sort_map + count, [](uint8_t a, uint8_t b) {
+        return strcasecmp_safe(g_fido_labels[a], g_fido_labels[b]) < 0;
+    });
+
+    // Reorder items according to sorted map
+    for (uint8_t display_idx = 0; display_idx < count; display_idx++) {
+        uint8_t store_idx = g_fido_sort_map[display_idx];
+        g_fido_items[display_idx].label = g_fido_labels[store_idx];
     }
+
+    view_list_screen_init(&g_fido_list, i18n_str(STR_FIDO2_KEYS), g_fido_items, count);
 }
 
 void go_to_fido_list(void) {
@@ -57,10 +80,13 @@ void go_to_fido_list(void) {
     render_current_state(false);
 }
 
-void show_fido_detail(uint8_t index) {
-    g_fido_selected_index = index;
+void show_fido_detail(uint8_t display_index) {
+    g_fido_selected_index = display_index;
+    // Convert display index to store index via sort map
+    uint8_t store_index = g_fido_sort_map[display_index];
+
     fido2_credential_info_t info;
-    if (fido2_get_credential_info(index, &info)) {
+    if (fido2_get_credential_info(store_index, &info)) {
         // Determine key type: SSH keys have "ssh:" prefix in rp_id
         const char *key_type = (strncmp(info.rp_id, "ssh:", 4) == 0) ? "SSH" : "WebAuthn";
         const char *algo_name = (info.curve == CDC_CURVE_ED25519) ? "Ed25519" : "P-256";

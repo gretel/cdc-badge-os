@@ -55,6 +55,7 @@ static struct {
         uint8_t rp_id_hash[32];
         char rp_id[FIDO2_RP_ID_MAX_LEN];
         char user_name[FIDO2_USER_NAME_MAX_LEN];
+        uint8_t user_id[FIDO2_USER_ID_MAX_LEN];  // User handle for replacement detection
         uint8_t user_id_len;
         uint32_t sign_count;
         bool resident;
@@ -131,7 +132,11 @@ uint8_t fido2_storage_init(void) {
                         memcpy(g_storage.creds[i].rp_id_hash, stored->rp_id_hash, 32);
                         strncpy(g_storage.creds[i].rp_id, stored->rp_id, FIDO2_RP_ID_MAX_LEN - 1);
                         strncpy(g_storage.creds[i].user_name, stored->user_name, FIDO2_USER_NAME_MAX_LEN - 1);
+                        // Cache user_id for replacement detection
                         g_storage.creds[i].user_id_len = stored->user_id_len;
+                        if (stored->user_id_len > 0) {
+                            memcpy(g_storage.creds[i].user_id, stored->user_id, stored->user_id_len);
+                        }
                         g_storage.creds[i].sign_count = stored->sign_count;
                         g_storage.creds[i].resident = (stored->flags & FIDO2_FLAG_RESIDENT) != 0;
                         g_storage.creds[i].cred_protect = stored->cred_protect;
@@ -209,6 +214,33 @@ uint8_t fido2_storage_find_by_rp_resident(const uint8_t *rp_id_hash,
 bool fido2_storage_is_resident(uint8_t slot) {
     if (slot > FIDO2_ECC_SLOT_MAX) return false;
     return g_storage.creds[slot].valid && g_storage.creds[slot].resident;
+}
+
+int8_t fido2_storage_find_by_rp_user(const uint8_t *rp_id_hash,
+                                      const uint8_t *user_id,
+                                      uint8_t user_id_len) {
+    if (!rp_id_hash) return -1;
+
+    for (uint8_t i = 0; i <= FIDO2_ECC_SLOT_MAX; i++) {
+        if (!g_storage.creds[i].valid) continue;
+
+        // Check RP ID hash match
+        if (memcmp(g_storage.creds[i].rp_id_hash, rp_id_hash, 32) != 0) continue;
+
+        // Check User ID match
+        if (g_storage.creds[i].user_id_len != user_id_len) continue;
+        if (user_id_len == 0) {
+            // Both have empty user_id - match!
+            LOG_D("FIDO2", "Found existing credential in slot %d (empty user_id)", i);
+            return i;
+        }
+        if (user_id && memcmp(g_storage.creds[i].user_id, user_id, user_id_len) == 0) {
+            LOG_D("FIDO2", "Found existing credential in slot %d for replacement", i);
+            return i;
+        }
+    }
+
+    return -1;  // No existing credential found
 }
 
 int8_t fido2_storage_find_slot_by_cred_id(const uint8_t *cred_id, uint16_t cred_id_len) {
@@ -364,11 +396,30 @@ bool fido2_storage_create_credential(
         return false;
     }
 
-    // Find free slot
-    int8_t slot = fido2_storage_find_free_slot();
-    if (slot < 0) {
-        LOG_E("FIDO2", "No free slots");
-        return false;
+    // FIDO2 spec: If credential with same RP ID + User ID exists, replace it
+    int8_t existing_slot = fido2_storage_find_by_rp_user(rp_id_hash, user_id, user_id_len);
+    int8_t slot;
+
+    if (existing_slot >= 0) {
+        // Replace existing credential
+        LOG_I("FIDO2", "Replacing existing credential in slot %d", existing_slot);
+        slot = existing_slot;
+
+        // Erase existing key and metadata
+        tropic01_ecc_key_erase(slot);
+        uint16_t rmem_slot = FIDO2_RMEM_SLOT_BASE + slot;
+        tropic01_rmem_erase(rmem_slot);
+
+        // Update cache: mark as invalid temporarily, will be re-validated after creation
+        g_storage.creds[slot].valid = false;
+        g_storage.cred_count--;
+    } else {
+        // Find free slot for new credential
+        slot = fido2_storage_find_free_slot();
+        if (slot < 0) {
+            LOG_E("FIDO2", "No free slots");
+            return false;
+        }
     }
 
     const char *curve_name = (curve == CDC_CURVE_ED25519) ? "Ed25519" : "P-256";
@@ -451,7 +502,11 @@ bool fido2_storage_create_credential(
     memcpy(g_storage.creds[slot].rp_id_hash, rp_id_hash, 32);
     strncpy(g_storage.creds[slot].rp_id, stored.rp_id, FIDO2_RP_ID_MAX_LEN - 1);
     strncpy(g_storage.creds[slot].user_name, stored.user_name, FIDO2_USER_NAME_MAX_LEN - 1);
+    // Cache user_id for replacement detection
     g_storage.creds[slot].user_id_len = stored.user_id_len;
+    if (stored.user_id_len > 0) {
+        memcpy(g_storage.creds[slot].user_id, stored.user_id, stored.user_id_len);
+    }
     g_storage.creds[slot].sign_count = 0;
     g_storage.creds[slot].resident = resident_key;
     g_storage.creds[slot].cred_protect = cred_protect;

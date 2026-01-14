@@ -134,7 +134,8 @@ Extensions: `credProtect`, `appid`, `appidExclude`
 | 31 | Device Config |
 | 32 | CA Metadata |
 | 33-132 | TOTP Accounts (max 100) |
-| 133-511 | Free |
+| 133-149 | Free |
+| 150-511 | Password Vault Entries |
 
 ### NVS (ESP32 Flash)
 
@@ -145,6 +146,7 @@ Extensions: `credProtect`, `appid`, `appidExclude`
 | `badge` | `name`, `info`, `info2` | Display text |
 | `fido2` | `auth_count` | Global auth counter |
 | `vcard` | `own`, `c_*` | Own vCard, collected vCards |
+| `pass` | `p###` | Password vault metadata (name/user/url) |
 
 ## Hardware
 

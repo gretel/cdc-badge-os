@@ -5,6 +5,7 @@
 #include "cdc_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "esp_heap_caps.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -24,7 +25,8 @@ typedef struct {
     char display[64];
 } vcard_meta_t;
 
-static vcard_meta_t g_cards[VCARD_MAX_CARDS];
+// Store vCard metadata in PSRAM to save internal DRAM
+EXT_RAM_BSS_ATTR static vcard_meta_t g_cards[VCARD_MAX_CARDS];
 static bool g_cards_loaded = false;
 static uint16_t g_card_count = 0;
 

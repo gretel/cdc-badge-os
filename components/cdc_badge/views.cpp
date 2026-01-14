@@ -1576,6 +1576,20 @@ static void toast_wait(uint16_t duration_ms) {
     }
 }
 
+static void toast_wait_any_key(void) {
+    // Wait for key release to avoid immediate dismissal
+    while (pin_expander_get_key() != 0) {
+        delay(10);
+    }
+    while (true) {
+        char key = pin_expander_get_key();
+        if (key != 0) {
+            break;
+        }
+        delay(10);
+    }
+}
+
 void view_toast_show(const char *message, uint16_t duration_ms) {
     if (!message) return;
 
@@ -1613,6 +1627,19 @@ void view_toast_error(const char *message, uint16_t duration_ms) {
 
     // Wait for duration (interruptable by Y/N)
     toast_wait(duration_ms);
+}
+
+void view_toast_hold_success(const char *message) {
+    if (!message) return;
+
+    Gdey029T94 &display = gui_get_display();
+    draw_toast_box(display, message, 1);
+
+    // Synchronous partial update for toast (must block)
+    gui_flush_sync(false);
+
+    // Wait for any key
+    toast_wait_any_key();
 }
 
 // ============================================================================

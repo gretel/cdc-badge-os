@@ -12,6 +12,9 @@
 #if FEATURE_TOTP
 #include "totp_store.h"
 #endif
+#if FEATURE_PASSWORD
+#include "password_store.h"
+#endif
 
 #if FEATURE_FIDO2
 #include "fido2.h"
@@ -21,6 +24,7 @@
 
 #if FEATURE_BLE_BADGE
 #include "ble_badge.h"
+#include "vcard_store.h"
 #endif
 
 // App states
@@ -64,6 +68,17 @@ typedef enum {
     APP_STATE_TOTP_ADD_DIGITS,
     APP_STATE_TOTP_ADD_ALGO,
     APP_STATE_TOTP_ADD_PERIOD,
+#endif
+#if FEATURE_PASSWORD
+    // Password vault states
+    APP_STATE_PASSWORD_LIST,
+    APP_STATE_PASSWORD_DETAIL,
+    // Password add/edit wizard states
+    APP_STATE_PASSWORD_ADD_NAME,
+    APP_STATE_PASSWORD_ADD_USERNAME,
+    APP_STATE_PASSWORD_ADD_URL,
+    APP_STATE_PASSWORD_ADD_PASSWORD,
+    APP_STATE_PASSWORD_ADD_NOTES,
 #endif
 #if FEATURE_FIDO2
     // FIDO2 states
@@ -144,6 +159,9 @@ enum {
 #if FEATURE_TOTP
     MENU_IDX_TOTP,
 #endif
+#if FEATURE_PASSWORD
+    MENU_IDX_PASSWORD,
+#endif
 #if FEATURE_FIDO2
     MENU_IDX_FIDO2,
 #endif
@@ -212,6 +230,18 @@ typedef struct {
 } totp_wizard_t;
 #endif
 
+#if FEATURE_PASSWORD
+typedef struct {
+    char name[PASSWORD_NAME_LEN];
+    char username[PASSWORD_USERNAME_LEN];
+    char url[PASSWORD_URL_LEN];
+    char password[PASSWORD_MAX_LEN + 1];
+    char notes[PASSWORD_NOTES_LEN + 1];
+    bool edit_mode;
+    uint16_t edit_slot;
+} password_wizard_t;
+#endif
+
 #if FEATURE_CA
 // CA Wizard data (X.509 DN fields + validity)
 #define CA_FIELD_MAX_LEN 64
@@ -255,6 +285,7 @@ extern view_qr_code_t g_qr_view;
 #if FEATURE_TOTP
 extern view_list_screen_t g_totp_list;
 extern view_list_item_t g_totp_items[TOTP_MAX_ACCOUNTS];
+extern uint8_t g_totp_sort_map[TOTP_MAX_ACCOUNTS];  // Maps display index -> store index
 extern view_totp_code_t g_totp_code;
 extern uint8_t g_totp_selected_index;
 extern view_context_menu_t g_totp_context_menu;
@@ -268,9 +299,22 @@ extern view_list_screen_t g_totp_algo_menu;
 extern view_list_item_t g_totp_algo_items[3];
 #endif
 
+#if FEATURE_PASSWORD
+extern view_list_screen_t g_password_list;
+extern view_list_item_t g_password_items[PASSWORD_MAX_ENTRIES];
+extern uint16_t g_password_slots[PASSWORD_MAX_ENTRIES];
+extern uint16_t g_password_count;
+extern uint16_t g_password_selected_slot;
+extern char g_password_detail_text[512];
+extern view_context_menu_t g_password_context_menu;
+extern const view_context_item_t g_password_context_items[];
+extern password_wizard_t g_password_wizard;
+#endif
+
 #if FEATURE_FIDO2
 extern view_list_screen_t g_fido_list;
 extern view_list_item_t g_fido_items[FIDO2_MAX_CREDENTIALS];
+extern uint8_t g_fido_sort_map[FIDO2_MAX_CREDENTIALS];  // Maps display index -> store index
 extern uint8_t g_fido_selected_index;
 extern char g_fido_detail_text[256];
 extern view_context_menu_t g_context_menu;
@@ -389,7 +433,7 @@ extern view_list_item_t g_broadcast_settings_items[SETTINGS_SUB_IDX_COUNT];
 
 // vCard list and context menu
 extern view_list_screen_t g_vcard_list;
-extern view_list_item_t g_vcard_list_items[100];
+extern view_list_item_t g_vcard_list_items[VCARD_MAX_CARDS + 1];
 extern view_context_menu_t g_vcard_context_menu;
 extern view_context_item_t g_vcard_context_items[3];
 extern view_list_screen_t g_vcard_field_menu;

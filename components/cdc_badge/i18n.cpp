@@ -28,6 +28,7 @@ static const char* strings_en[] = {
 
     // Main menu items
     "Authenticator",    // STR_TOTP_CODES
+    "Passwords",        // STR_PASSWORDS
     "WebAuthn",       // STR_FIDO2_KEYS
     "System Test",      // STR_SYSTEM_TEST
     "Deep Sleep",       // STR_SLEEP
@@ -71,6 +72,7 @@ static const char* strings_en[] = {
     "Delete failed",    // STR_DELETE_FAILED
     "USB not ready",    // STR_USB_NOT_READY
     "Code typed!",      // STR_CODE_TYPED
+    "Password typed!",  // STR_PASSWORD_TYPED
     "No accounts",      // STR_NO_ACCOUNTS
     "No keys",          // STR_NO_KEYS
     "Unplug USB first", // STR_UNPLUG_USB
@@ -93,6 +95,7 @@ static const char* strings_en[] = {
 
     // FIDO2/TOTP specific
     "TOTP Code",        // STR_TOTP_CODE
+    "Password Entry",   // STR_PASSWORD_DETAIL
     "WebAuthn",    // STR_FIDO2_REQUEST
     "Sign in to",       // STR_FIDO2_DETAIL
     "Register Key",     // STR_REGISTER_KEY
@@ -109,6 +112,7 @@ static const char* strings_en[] = {
     // UI Hints
     "[Y] Type  [N] Back",           // STR_HINT_TYPE_BACK
     "[3] Menu  [Y] Type  [N] Back", // STR_HINT_TOTP_CODE
+    "[3] Menu  [Y] Send  [N] Back", // STR_HINT_PASS_DETAIL
     "[3] Delete  [N] Back",         // STR_HINT_DELETE_BACK
     "[Y] Approve  [N] Deny",        // STR_HINT_APPROVE_DENY
     "[4] -  [6] +  [Y] Save",       // STR_HINT_BRIGHTNESS
@@ -269,6 +273,7 @@ static const char* strings_de[] = {
 
     // Main menu items
     "Authentikator",    // STR_TOTP_CODES
+    "Passwoerter",       // STR_PASSWORDS
     "WebAuthn",       // STR_FIDO2_KEYS
     "Systemtest",       // STR_SYSTEM_TEST
     "Standby",          // STR_SLEEP
@@ -312,6 +317,7 @@ static const char* strings_de[] = {
     "Loeschen fehlg.",  // STR_DELETE_FAILED
     "USB nicht bereit", // STR_USB_NOT_READY
     "Code getippt!",    // STR_CODE_TYPED
+    "Passwort getippt!",// STR_PASSWORD_TYPED
     "Keine Konten",     // STR_NO_ACCOUNTS
     "Keine Keys",       // STR_NO_KEYS
     "USB trennen",      // STR_UNPLUG_USB
@@ -334,6 +340,7 @@ static const char* strings_de[] = {
 
     // FIDO2/TOTP specific
     "TOTP Code",        // STR_TOTP_CODE
+    "Passwort",         // STR_PASSWORD_DETAIL
     "WebAuthn",    // STR_FIDO2_REQUEST
     "Anmelden bei",     // STR_FIDO2_DETAIL
     "Key registrieren", // STR_REGISTER_KEY
@@ -350,6 +357,7 @@ static const char* strings_de[] = {
     // UI Hints
     "[Y] Tippen  [N] Zurueck",      // STR_HINT_TYPE_BACK
     "[3] Menu [Y] Tippen [N] Zur.", // STR_HINT_TOTP_CODE
+    "[3] Menu [Y] Senden [N] Zur.", // STR_HINT_PASS_DETAIL
     "[3] Loeschen  [N] Zurueck",    // STR_HINT_DELETE_BACK
     "[Y] OK  [N] Abbruch",          // STR_HINT_APPROVE_DENY
     "[4] -  [6] +  [Y] Speichern",  // STR_HINT_BRIGHTNESS

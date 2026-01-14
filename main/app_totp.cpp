@@ -7,14 +7,28 @@
 #include "base32.h"
 #include "i18n.h"
 
+#include <esp_attr.h>
 #include <cstring>
+#include <algorithm>
 
-// Static buffers for list item labels (must persist)
-static char g_totp_labels[TOTP_MAX_ACCOUNTS][72];
+// Static buffers for list item labels (must persist) - in PSRAM to save DRAM
+EXT_RAM_BSS_ATTR static char g_totp_labels[TOTP_MAX_ACCOUNTS][72];
+
+// Comparison helper for sorting - compares sort keys (name+issuer)
+static int strcasecmp_safe(const char *a, const char *b) {
+    if (!a && !b) return 0;
+    if (!a) return -1;
+    if (!b) return 1;
+    return strcasecmp(a, b);
+}
 
 static void populate_totp_list(void) {
     uint8_t count = totp_store_count();
+    if (count == 0) return;
+
+    // Build labels and initialize sort map
     for (uint8_t i = 0; i < count && i < TOTP_MAX_ACCOUNTS; i++) {
+        g_totp_sort_map[i] = i;  // Initialize: display index = store index
         totp_account_info_t info;
         if (totp_store_get_info(i, &info)) {
             // Format: "Name (Issuer)" or just "Name" - truncate safely
@@ -25,12 +39,21 @@ static void populate_totp_list(void) {
                 snprintf(g_totp_labels[i], sizeof(g_totp_labels[i]),
                          "%.30s", info.name);
             }
-            g_totp_items[i].label = g_totp_labels[i];
         }
     }
-    if (count > 0) {
-        view_list_screen_init(&g_totp_list, i18n_str(STR_TOTP_CODES), g_totp_items, count);
+
+    // Sort the sort map by label (case-insensitive)
+    std::sort(g_totp_sort_map, g_totp_sort_map + count, [](uint8_t a, uint8_t b) {
+        return strcasecmp_safe(g_totp_labels[a], g_totp_labels[b]) < 0;
+    });
+
+    // Reorder items according to sorted map
+    for (uint8_t display_idx = 0; display_idx < count; display_idx++) {
+        uint8_t store_idx = g_totp_sort_map[display_idx];
+        g_totp_items[display_idx].label = g_totp_labels[store_idx];
     }
+
+    view_list_screen_init(&g_totp_list, i18n_str(STR_TOTP_CODES), g_totp_items, count);
 }
 
 void go_to_totp_list(void) {
@@ -43,13 +66,16 @@ void go_to_totp_list(void) {
     render_current_state(false);
 }
 
-void show_totp_code(uint8_t index) {
-    g_totp_selected_index = index;
+void show_totp_code(uint8_t display_index) {
+    g_totp_selected_index = display_index;
+    // Convert display index to store index via sort map
+    uint8_t store_index = g_totp_sort_map[display_index];
+
     char code[12];
-    int8_t remaining = totp_store_generate_code(index, code);
+    int8_t remaining = totp_store_generate_code(store_index, code);
 
     totp_account_info_t info;
-    totp_store_get_info(index, &info);
+    totp_store_get_info(store_index, &info);
 
     // Initialize TOTP code view
     view_totp_code_init(&g_totp_code,
@@ -80,10 +106,13 @@ void totp_wizard_start(void) {
     render_current_state(false);
 }
 
-void totp_wizard_edit(uint8_t index) {
+void totp_wizard_edit(uint8_t display_index) {
+    // Convert display index to store index via sort map
+    uint8_t store_index = g_totp_sort_map[display_index];
+
     // Pre-fill wizard with existing data (including secret from TROPIC01)
     totp_account_t account;
-    if (!totp_store_get(index, &account)) {
+    if (!totp_store_get(store_index, &account)) {
         view_toast_error("Load failed", 1500);
         return;
     }
@@ -97,7 +126,7 @@ void totp_wizard_edit(uint8_t index) {
     g_totp_wizard.algorithm = account.algorithm;
     g_totp_wizard.period = account.period;
     g_totp_wizard.edit_mode = true;
-    g_totp_wizard.edit_index = index;
+    g_totp_wizard.edit_index = store_index;  // Store the actual store index for later update
 
     // Clear secret from RAM after encoding
     memset(account.secret, 0, sizeof(account.secret));

@@ -20,6 +20,7 @@ view_qr_code_t g_qr_view;
 #if FEATURE_TOTP
 view_list_screen_t g_totp_list;
 view_list_item_t g_totp_items[TOTP_MAX_ACCOUNTS];
+uint8_t g_totp_sort_map[TOTP_MAX_ACCOUNTS];  // Maps display index -> store index
 view_totp_code_t g_totp_code;
 uint8_t g_totp_selected_index = 0;
 
@@ -57,9 +58,31 @@ view_list_item_t g_totp_algo_items[] = {
 };
 #endif
 
+#if FEATURE_PASSWORD
+view_list_screen_t g_password_list;
+EXT_RAM_BSS_ATTR view_list_item_t g_password_items[PASSWORD_MAX_ENTRIES];
+EXT_RAM_BSS_ATTR uint16_t g_password_slots[PASSWORD_MAX_ENTRIES];
+uint16_t g_password_count = 0;
+uint16_t g_password_selected_slot = 0;
+char g_password_detail_text[512];
+
+view_context_menu_t g_password_context_menu;
+const view_context_item_t g_password_context_items[] = {
+    {"View", 1},
+    {"Send", 2},
+    {"Edit", 3},
+    {"Delete", 4},
+    {"Add New", 5},
+    {"Cancel", 0}
+};
+
+password_wizard_t g_password_wizard;
+#endif
+
 #if FEATURE_FIDO2
 view_list_screen_t g_fido_list;
 view_list_item_t g_fido_items[FIDO2_MAX_CREDENTIALS];
+uint8_t g_fido_sort_map[FIDO2_MAX_CREDENTIALS];  // Maps display index -> store index
 uint8_t g_fido_selected_index = 0;
 char g_fido_detail_text[256];
 
@@ -130,7 +153,7 @@ view_list_screen_t g_broadcast_settings_menu;
 view_list_item_t g_broadcast_settings_items[SETTINGS_SUB_IDX_COUNT];
 // vCard list and state
 view_list_screen_t g_vcard_list;
-view_list_item_t g_vcard_list_items[100];
+EXT_RAM_BSS_ATTR view_list_item_t g_vcard_list_items[VCARD_MAX_CARDS + 1];
 view_context_menu_t g_vcard_context_menu;
 view_context_item_t g_vcard_context_items[3];
 view_list_screen_t g_vcard_field_menu;
