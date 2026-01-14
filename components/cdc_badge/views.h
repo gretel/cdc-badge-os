@@ -345,8 +345,8 @@ void view_toast_success(const char *message, uint16_t duration_ms);
 
 // Show error toast (X icon + message)
 void view_toast_error(const char *message, uint16_t duration_ms);
-// Show success toast and wait for any keypress
-void view_toast_hold_success(const char *message);
+// Render success toast without waiting (caller handles input)
+void view_toast_render_success(const char *message);
 
 // ============================================================================
 // T9 Character Mapping (exposed for external use)

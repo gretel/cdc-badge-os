@@ -200,6 +200,10 @@ void render_current_state(bool partial) {
             view_info_screen_render(&g_info_view, partial);
             break;
 
+        case APP_STATE_PASSWORD_PREVIEW:
+            view_toast_render_success(g_password_preview_msg);
+            break;
+
         case APP_STATE_PASSWORD_ADD_NAME:
         case APP_STATE_PASSWORD_ADD_USERNAME:
         case APP_STATE_PASSWORD_ADD_URL:

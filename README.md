@@ -14,11 +14,12 @@ Hardware security key firmware for the CDC Badge v1.0 featuring TROPIC01 secure 
 |---------|-------------|
 | **FIDO2/WebAuthn** | FIDO 2.1 compliant passwordless authentication (USB HID) - Chrome, Firefox, Edge |
 | **SSH Hardware Keys** | Native SSH via ed25519-sk (OpenSSH 8.2+, no driver needed) |
+| **Password Vault** | Secure password storage in TROPIC01 (up to 362 entries with auto-type) |
 | **Certificate Authority** | On-device CA with CSR signing, root import/export (v0.5, untested) |
 | **GPG Key Management** | GPG key storage via TROPIC01, USB CCID SmartCard (v0.5, untested) |
 | **U2F** | Legacy two-factor authentication |
 | **TOTP Authenticator** | Time-based one-time passwords (100 accounts, Google Authenticator compatible) |
-| **USB Keyboard** | Auto-type TOTP codes via HID |
+| **USB Keyboard** | Auto-type TOTP codes and passwords via HID |
 | **BLE UART** | Wireless serial console via Bluetooth (Nordic UART Service) |
 | **BLE vCard (Badge2Badge)** | Broadcast mini-card + vCard exchange + QR export |
 | **Secure Serial** | PIN authentication for sensitive serial commands with anti-bruteforce |
@@ -74,6 +75,31 @@ Enable in `feature_flags.h`:
 #define FEATURE_GPG 1       // GPG key storage
 #define FEATURE_GPG_CCID 0  // USB CCID (disabled by default)
 ```
+
+### Password Vault
+
+Hardware-secured password storage using the TROPIC01 secure element.
+
+**Features:**
+- Up to 362 password entries (R-Memory slots 150-511)
+- Passwords stored encrypted in TROPIC01 (never leave the chip in plaintext)
+- Metadata (name, username, URL) stored in NVS for quick listing
+- Auto-type passwords via USB HID keyboard
+- Notes field for additional information (up to 256 chars)
+
+**Storage:**
+- Password: max 96 characters
+- Notes: max 256 characters
+- Name/Username: max 32 characters each
+- URL: max 64 characters
+
+**On-device UI:**
+- Browse passwords alphabetically sorted
+- View entry details (name, username, URL)
+- Auto-type password with optional Enter key
+- Add/Edit/Delete via T9 input
+
+**Serial commands** are easier for bulk management - see Serial Commands section.
 
 ### Certificate Authority (v0.5 - Untested)
 
@@ -295,6 +321,16 @@ Connect at 115200 baud via USB CDC.
 | `FIDO_LIST` | List all credentials |
 | `FIDO_DEL <index>` | Delete credential |
 | `FIDO_RESET` | Factory reset (requires CONFIRM) |
+
+### Password Vault
+| Command | Description |
+|---------|-------------|
+| `PASS_LIST` | List all entries (sorted by name) |
+| `PASS_ADD name user url password [notes]` | Add new entry |
+| `PASS_EDIT index name user url password [notes]` | Edit existing entry |
+| `PASS_DEL <index>` | Delete entry |
+| `PASS_GET <index>` | Show entry details (including password) |
+| `PASS_SEND <index> [enter]` | Type password via USB keyboard |
 
 ### vCard
 | Command | Description |
