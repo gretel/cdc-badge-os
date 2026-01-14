@@ -200,15 +200,17 @@ bool fido2_storage_get_cred_id(uint8_t slot, uint8_t *out_cred_id);
 // ============================================================================
 
 /**
- * Sign authentication data with credential key.
+ * Sign raw message with credential key, returns DER-encoded signature.
+ * TROPIC01 computes SHA256(msg) internally before signing.
  *
  * @param slot ECC slot index
- * @param hash SHA-256 hash to sign (32 bytes)
+ * @param msg Raw message to sign (NOT a pre-computed hash!)
+ * @param msg_len Length of message
  * @param signature Output DER-encoded signature
  * @param sig_len Output signature length
  * @return true on success
  */
-bool fido2_storage_sign(uint8_t slot, const uint8_t *hash,
+bool fido2_storage_sign(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
                         uint8_t *signature, uint8_t *sig_len);
 
 /**

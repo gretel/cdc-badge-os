@@ -27,7 +27,7 @@
 // ============================================================================
 
 // Debug flags
-#define CTAP2_DEBUG                 0   // Verbose CBOR/response dumps
+#define CTAP2_DEBUG                 1   // Verbose CBOR/response dumps (TEMP DEBUG)
 #define CTAP2_DEBUG_COMMANDS        0   // Command logging
 
 // AAGUID - Authenticator Attestation GUID (unique per device model)
@@ -198,22 +198,48 @@ static bool ctap2_build_attested_cred(const uint8_t *cred_id,
     return !cbor_writer_error(&cose_w);
 }
 
+// Build credProtect extension CBOR: {"credProtect": level}
+static uint16_t ctap2_build_cred_protect_extension(uint8_t level, uint8_t *out, size_t out_size) {
+    if (level == 0 || !out || out_size < 20) return 0;
+    cbor_writer_t w;
+    cbor_writer_init(&w, out, out_size);
+    cbor_encode_map(&w, 1);
+    cbor_encode_text(&w, "credProtect");
+    cbor_encode_uint(&w, level);
+    if (cbor_writer_error(&w)) {
+        return 0;
+    }
+    return (uint16_t)cbor_writer_length(&w);
+}
+
 static bool ctap2_build_auth_data_for_cred(const uint8_t *rp_id_hash,
                                            const uint8_t *attested_cred,
                                            uint16_t attested_len,
+                                           uint8_t cred_protect,
                                            uint8_t *auth_data,
                                            uint16_t *auth_data_len) {
-    // Flags: UP=0x01, UV=0x04, AT=0x40
+    // Flags: UP=0x01, UV=0x04, AT=0x40, ED=0x80
     uint8_t flags = 0x01 | 0x40;  // UP=1, AT=1
     bool pin_verified = fido2_is_pin_verified();
-    LOG_I("CTAP2", "Building authData: pin_verified=%d", pin_verified);
+    LOG_I("CTAP2", "Building authData: pin_verified=%d, cred_protect=%u", pin_verified, cred_protect);
     if (pin_verified) {
         flags |= 0x04;  // UV=1 when PIN was verified
         LOG_I("CTAP2", "UV flag SET -> flags=0x%02X", flags);
     }
+
+    // Build credProtect extension if requested
+    uint8_t ext_data[32];
+    uint16_t ext_len = 0;
+    if (cred_protect > 0) {
+        ext_len = ctap2_build_cred_protect_extension(cred_protect, ext_data, sizeof(ext_data));
+        if (ext_len > 0) {
+            LOG_I("CTAP2", "Including credProtect extension (level=%u, %u bytes)", cred_protect, ext_len);
+        }
+    }
+
     return build_authenticator_data(rp_id_hash, flags, 0,
                                     attested_cred, attested_len,
-                                    NULL, 0,
+                                    ext_len > 0 ? ext_data : NULL, ext_len,
                                     auth_data, auth_data_len) == CTAP2_OK;
 }
 
@@ -703,6 +729,13 @@ uint8_t ctap2_make_credential(const uint8_t *params, uint16_t params_len,
                             if (cbor_read_text(&r, appid_exclude, sizeof(appid_exclude), &len)) {
                                 has_appid_exclude = (len > 0);
                             }
+                        } else if (strcmp(ext_key, "credProtect") == 0) {
+                            // Parse credProtect level (1-3)
+                            uint64_t level;
+                            if (cbor_read_uint(&r, &level) && level >= 1 && level <= 3) {
+                                cred_protect = (uint8_t)level;
+                                LOG_I("CTAP2", "credProtect requested: level=%u", cred_protect);
+                            }
                         } else {
                             cbor_skip_item(&r);
                         }
@@ -848,6 +881,7 @@ uint8_t ctap2_make_credential(const uint8_t *params, uint16_t params_len,
             return CTAP2_ERR_OTHER;
         }
         if (!ctap2_build_auth_data_for_cred(rp_id_hash, attested_cred, attested_len,
+                                            0,  // No credProtect for probe requests
                                             auth_data, &auth_data_len)) {
             mbedtls_ecp_keypair_free(&ephemeral_key);
             response[0] = CTAP2_ERR_OTHER;
@@ -913,6 +947,10 @@ uint8_t ctap2_make_credential(const uint8_t *params, uint16_t params_len,
 
     LOG_I("CTAP2", "User presence OK, creating credential (curve=%d)...", curve);
 
+    // Send KEEPALIVE before long operation (key generation takes ~200-500ms)
+    // This prevents libfido2 timeout on non-blocking read
+    ctap2_send_keepalive(CTAPHID_STATUS_PROCESSING);
+
     // Create credential
     uint8_t slot;
     uint8_t cred_id[FIDO2_CRED_ID_LEN];
@@ -934,6 +972,7 @@ uint8_t ctap2_make_credential(const uint8_t *params, uint16_t params_len,
 
     if (!ctap2_build_attested_cred(cred_id, FIDO2_CRED_ID_LEN, pubkey, curve, attested_cred, &attested_len) ||
         !ctap2_build_auth_data_for_cred(rp_id_hash, attested_cred, attested_len,
+                                        cred_protect,  // Include credProtect extension if requested
                                         auth_data, &auth_data_len)) {
         response[0] = CTAP2_ERR_OTHER;
         *response_len = 1;
@@ -959,13 +998,77 @@ uint8_t ctap2_make_credential(const uint8_t *params, uint16_t params_len,
     LOG_I("CTAP2", "PIN state: pinToken_valid=%d, is_pin_verified=%d",
           g_client_pin.pin_token_valid, fido2_is_pin_verified());
 
-    // Use "none" attestation until packed attestation is fixed
-    bool use_none_attestation = true;
+    // Use packed attestation with FIDO2-compliant certificate
+    // TEMP: Use self-attestation to debug
+    bool use_none_attestation = false;
+    bool use_self_attestation = true;  // TEMP DEBUG: skip certificate, test self-attestation
 
-    if (!use_none_attestation && u2f_get_attestation_cert(&att_cert, &att_cert_len) &&
+    if (use_self_attestation) {
+        // Self attestation: sign with credential key, no certificate
+        LOG_I("CTAP2", "Using SELF attestation (debug) with slot %d", slot);
+        LOG_I("CTAP2", "authData_len=%u, to_sign_len=%u", auth_data_len, to_sign_len);
+
+        // DEBUG: Log public key X and Y separately (fits in log line)
+        {
+            char hex[66];
+            for (int i = 0; i < 32; i++) sprintf(hex + i*2, "%02X", pubkey[i]);
+            LOG_I("CTAP2", "PK_X: %s", hex);
+            for (int i = 0; i < 32; i++) sprintf(hex + i*2, "%02X", pubkey[32+i]);
+            LOG_I("CTAP2", "PK_Y: %s", hex);
+        }
+
+        // DEBUG: Log clientDataHash
+        {
+            char hex[66];
+            for (int i = 0; i < 32; i++) sprintf(hex + i*2, "%02X", client_data_hash[i]);
+            LOG_I("CTAP2", "CDH: %s", hex);
+        }
+
+        // DEBUG: Compute and log SHA256(to_sign)
+        {
+            uint8_t hash[32];
+            mbedtls_sha256(to_sign, to_sign_len, hash, 0);
+            char hex[66];
+            for (int i = 0; i < 32; i++) sprintf(hex + i*2, "%02X", hash[i]);
+            LOG_I("CTAP2", "HASH: %s", hex);
+        }
+
+        att_cert = NULL;
+        att_cert_len = 0;
+
+        // Send KEEPALIVE before signing (TROPIC01 ECDSA takes ~100ms)
+        ctap2_send_keepalive(CTAPHID_STATUS_PROCESSING);
+
+        if (!fido2_storage_sign_der(slot, to_sign, to_sign_len, signature, &sig_len)) {
+            LOG_E("CTAP2", "Self attestation signing failed");
+            response[0] = CTAP2_ERR_OTHER;
+            *response_len = 1;
+            return CTAP2_ERR_OTHER;
+        }
+        LOG_I("CTAP2", "sig_len=%u", sig_len);
+
+        // DEBUG: Log signature in two parts (DER can be up to 72 bytes)
+        {
+            char hex[80];
+            int half = sig_len / 2;
+            for (int i = 0; i < half; i++) sprintf(hex + i*2, "%02X", signature[i]);
+            hex[half*2] = 0;
+            LOG_I("CTAP2", "SIG1: %s", hex);
+            for (int i = 0; i < sig_len - half; i++) sprintf(hex + i*2, "%02X", signature[half+i]);
+            hex[(sig_len-half)*2] = 0;
+            LOG_I("CTAP2", "SIG2: %s", hex);
+        }
+
+        // DEBUG: Verify pubkey matches
+        uint8_t verify_pubkey[64];
+        if (fido2_storage_get_pubkey(slot, verify_pubkey)) {
+            LOG_I("CTAP2", "PK match: %s", memcmp(pubkey, verify_pubkey, 64) == 0 ? "OK" : "FAIL!");
+        }
+    } else if (!use_none_attestation && u2f_get_attestation_cert(&att_cert, &att_cert_len) &&
         u2f_attestation_sign(to_sign, to_sign_len, signature, &sig_len)) {
         // Basic attestation with certificate
-        LOG_I("CTAP2", "Using basic attestation with certificate");
+        LOG_I("CTAP2", "Using basic attestation with certificate (cert=%u, sig=%u)", att_cert_len, sig_len);
+        LOG_I("CTAP2", "authData_len=%u, to_sign_len=%u", auth_data_len, to_sign_len);
     } else if (use_none_attestation) {
         // None attestation - simplest format for debugging
         LOG_I("CTAP2", "Using NONE attestation (debug)");
@@ -994,7 +1097,7 @@ uint8_t ctap2_make_credential(const uint8_t *params, uint16_t params_len,
 
 #if CTAP2_DEBUG
     LOG_I("CTAP2", "makeCredential status=0x%02X resp_len=%u", status, *response_len);
-    for (uint16_t offset = 0; offset < 256 && offset < *response_len; offset += 16) {
+    for (uint16_t offset = 0; offset < *response_len; offset += 16) {
         char hex[50] = {0};
         int dump_len = ((*response_len - offset) < 16) ? (*response_len - offset) : 16;
         for (int i = 0; i < dump_len; i++) {

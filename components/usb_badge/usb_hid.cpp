@@ -79,6 +79,10 @@ static QueueHandle_t g_fido_queue = nullptr;
 typedef struct {
     uint8_t data[64];
 } fido_packet_t;
+
+// Semaphore for TX completion synchronization
+// Released by tud_hid_report_complete_cb when host has received the report
+static SemaphoreHandle_t g_fido_tx_sem = nullptr;
 #endif
 
 // ============================================================================
@@ -328,6 +332,23 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
     (void)bufsize;
 }
 
+// Called when a HID report was successfully sent to the host
+void tud_hid_report_complete_cb(uint8_t instance, uint8_t const* report, uint16_t len) {
+    (void)report;
+    (void)len;
+
+#if !CONFIG_ESP_CONSOLE_USB_CDC && FEATURE_FIDO2_USB
+    // Signal FIDO TX completion so next packet can be sent
+    if (instance == USB_HID_INSTANCE_FIDO && g_fido_tx_sem) {
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        xSemaphoreGiveFromISR(g_fido_tx_sem, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+#else
+    (void)instance;
+#endif
+}
+
 } // extern "C"
 
 // ============================================================================
@@ -363,6 +384,14 @@ bool usb_hid_init(void) {
         LOG_E("USB", "Failed to create FIDO queue");
         return false;
     }
+
+    // Create FIDO TX completion semaphore (binary semaphore, starts available)
+    g_fido_tx_sem = xSemaphoreCreateBinary();
+    if (!g_fido_tx_sem) {
+        LOG_E("USB", "Failed to create FIDO TX semaphore");
+        return false;
+    }
+    xSemaphoreGive(g_fido_tx_sem);  // Start with semaphore available
 #endif
 
     // Initialize TinyUSB (DWC2 driver handles PHY init internally)
@@ -469,7 +498,22 @@ uint16_t read_timeout(uint8_t* buffer, uint32_t timeout_ms) {
 bool write(const uint8_t* buffer) {
 #if FEATURE_FIDO2_USB
     if (!buffer || !ready()) return false;
-    return tud_hid_n_report(USB_HID_INSTANCE_FIDO, 0, buffer, 64);
+
+    // Wait for previous TX to complete (with timeout)
+    // This ensures the host has received the previous packet
+    if (g_fido_tx_sem) {
+        if (xSemaphoreTake(g_fido_tx_sem, pdMS_TO_TICKS(100)) != pdTRUE) {
+            LOG_W("USB", "FIDO TX semaphore timeout - previous packet not acknowledged");
+            // Continue anyway, but may cause issues
+        }
+    }
+
+    bool result = tud_hid_n_report(USB_HID_INSTANCE_FIDO, 0, buffer, 64);
+    if (!result && g_fido_tx_sem) {
+        // Report failed, give back the semaphore
+        xSemaphoreGive(g_fido_tx_sem);
+    }
+    return result;
 #else
     (void)buffer;
     return false;  // Stub: FIDO2 disabled
