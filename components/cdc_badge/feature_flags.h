@@ -44,6 +44,10 @@
 #define FEATURE_TOTP 1  // TOTP enabled
 #endif
 
+#ifndef FEATURE_PASSWORD
+#define FEATURE_PASSWORD 1  // Password vault enabled
+#endif
+
 // FIDO2 over USB HID
 #ifndef FEATURE_FIDO2_USB
 #define FEATURE_FIDO2_USB 1  // FIDO2 over USB HID (requires FEATURE_USB)

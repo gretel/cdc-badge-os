@@ -191,6 +191,24 @@ void render_current_state(bool partial) {
             break;
 #endif
 
+#if FEATURE_PASSWORD
+        case APP_STATE_PASSWORD_LIST:
+            view_list_screen_render(&g_password_list, partial);
+            break;
+
+        case APP_STATE_PASSWORD_DETAIL:
+            view_info_screen_render(&g_info_view, partial);
+            break;
+
+        case APP_STATE_PASSWORD_ADD_NAME:
+        case APP_STATE_PASSWORD_ADD_USERNAME:
+        case APP_STATE_PASSWORD_ADD_URL:
+        case APP_STATE_PASSWORD_ADD_PASSWORD:
+        case APP_STATE_PASSWORD_ADD_NOTES:
+            view_t9_input_render(&g_t9_input, partial);
+            break;
+#endif
+
 #if FEATURE_FIDO2
         case APP_STATE_FIDO_LIST:
             view_list_screen_render(&g_fido_list, partial);

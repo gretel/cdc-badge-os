@@ -16,6 +16,9 @@
 #if FEATURE_TOTP
 #include "totp_store.h"
 #endif
+#if FEATURE_PASSWORD
+#include "password_store.h"
+#endif
 #if FEATURE_FIDO2
 #include "fido2.h"
 #endif
@@ -131,6 +134,11 @@ void system_init(void) {
 #if FEATURE_TOTP
     uint8_t totp_count = totp_store_init();
     LOG_I("INIT", "TOTP: %d accounts", totp_count);
+#endif
+
+#if FEATURE_PASSWORD
+    uint16_t pass_count = password_store_init();
+    LOG_I("INIT", "Passwords: %d entries", pass_count);
 #endif
 
     // Initialize FIDO2 module

@@ -17,8 +17,9 @@ extern "C" {
 #define TR01_RMEM_SLOT_TOTP_START 33   // TOTP accounts: 33-132
 #define TR01_RMEM_SLOT_TOTP_END   132
 #define TR01_RMEM_SLOT_GPG       29    // GPG metadata (User-ID, fingerprint, etc.)
-#define TR01_RMEM_SLOT_GPG_RECV_START 140  // Received public keys: 140-149
-#define TR01_RMEM_SLOT_GPG_RECV_END   149
+// Password vault slots (store password + notes)
+#define TR01_RMEM_SLOT_PASS_START 150  // Password entries: 150-511
+#define TR01_RMEM_SLOT_PASS_END   511
 
 // ECC slot definitions
 #define TR01_ECC_SLOT_FIDO_START  0    // FIDO2/SSH keys: 0-28 (P-256 or Ed25519)

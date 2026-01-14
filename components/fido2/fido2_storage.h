@@ -148,6 +148,19 @@ uint8_t fido2_storage_find_by_rp_resident(const uint8_t *rp_id_hash,
                                           uint8_t *out_slots, uint8_t max_slots);
 
 /**
+ * Find existing credential for same RP ID + User ID combination.
+ * Used to detect credentials that should be replaced (per FIDO2 spec).
+ *
+ * @param rp_id_hash SHA-256 of RP ID
+ * @param user_id User handle
+ * @param user_id_len Length of user handle
+ * @return Slot index if found, -1 if not found
+ */
+int8_t fido2_storage_find_by_rp_user(const uint8_t *rp_id_hash,
+                                      const uint8_t *user_id,
+                                      uint8_t user_id_len);
+
+/**
  * Check if slot contains a resident (discoverable) credential.
  */
 bool fido2_storage_is_resident(uint8_t slot);

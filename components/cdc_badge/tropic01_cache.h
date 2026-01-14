@@ -8,7 +8,7 @@ extern "C" {
 #endif
 
 #define TR01_CACHE_ECC_SLOTS    32
-#define TR01_CACHE_RMEM_SLOTS   512   // TROPIC01 has 512 R-Memory slots
+#define TR01_CACHE_RMEM_SLOTS   133   // Only cache FIDO2 (0-28) + TOTP (33-132), not passwords (150+)
 #define TR01_CACHE_DATA_SIZE    444   // TROPIC01 R-Memory slot size (min 444, max 475 bytes)
 
 // Initialize cache by loading all data from TROPIC01 (call once at boot)

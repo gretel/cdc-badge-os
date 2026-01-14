@@ -16,6 +16,9 @@ void build_main_menu(void) {
 #if FEATURE_TOTP
     g_menu_items[g_menu_item_count++] = {i18n_str(STR_TOTP_CODES), VIEW_LIST_ICON_NONE, false};
 #endif
+#if FEATURE_PASSWORD
+    g_menu_items[g_menu_item_count++] = {i18n_str(STR_PASSWORDS), VIEW_LIST_ICON_NONE, false};
+#endif
 #if FEATURE_FIDO2
     g_menu_items[g_menu_item_count++] = {i18n_str(STR_FIDO2_KEYS), VIEW_LIST_ICON_NONE, false};
 #endif

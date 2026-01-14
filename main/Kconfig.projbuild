@@ -8,6 +8,10 @@ menu "CDC Badge Features"
         bool "Enable TOTP"
         default y
 
+    config CDC_FEATURE_PASSWORD
+        bool "Enable Password Vault"
+        default y
+
     config CDC_FEATURE_FIDO2
         bool "Enable FIDO2 (includes SSH via ed25519-sk)"
         default y

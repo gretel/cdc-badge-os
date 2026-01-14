@@ -8,11 +8,13 @@
 #include "app_state.h"
 #include "app_status.h"
 #include "app_totp.h"
+#include "app_password.h"
 
 #include "badge_settings.h"
 #include "cdc_log.h"
 #include "cdc_rtc.h"
 #include "cdc_time.h"
+#include "esp_heap_caps.h"
 #include "gui.h"
 #include "i18n.h"
 #include "ntp_sync.h"
@@ -21,6 +23,9 @@
 
 #if FEATURE_TOTP
 #include "totp_store.h"
+#endif
+#if FEATURE_PASSWORD
+#include "password_store.h"
 #endif
 #if FEATURE_FIDO2
 #include "fido2.h"
@@ -99,15 +104,16 @@ enum {
 static uint8_t g_vcard_field_category = 0;
 static uint8_t g_vcard_field_subtype = 0;
 
-static uint16_t g_vcard_list_slots[VCARD_MAX_CARDS + 1];
+EXT_RAM_BSS_ATTR static uint16_t g_vcard_list_slots[VCARD_MAX_CARDS + 1];
 static uint16_t g_vcard_list_count = 0;
 static uint16_t g_vcard_selected_slot = 0xFFFF;
 static bool g_vcard_selected_is_own = false;
-static char g_vcard_list_labels[VCARD_MAX_CARDS + 1][VIEW_MAX_TEXT_LEN];
+// Store large vCard buffers in PSRAM to save internal DRAM
+EXT_RAM_BSS_ATTR static char g_vcard_list_labels[VCARD_MAX_CARDS + 1][VIEW_MAX_TEXT_LEN];
 static char g_broadcast_menu_labels[BROADCAST_SUB_IDX_COUNT][VIEW_MAX_TEXT_LEN];
 static char g_broadcast_settings_labels[SETTINGS_SUB_IDX_COUNT][VIEW_MAX_TEXT_LEN];
-static char g_vcard_view_buf[VCARD_MAX_LEN + 1];
-static char g_vcard_qr_buf[VCARD_MAX_LEN + 1];
+EXT_RAM_BSS_ATTR static char g_vcard_view_buf[VCARD_MAX_LEN + 1];
+EXT_RAM_BSS_ATTR static char g_vcard_qr_buf[VCARD_MAX_LEN + 1];
 static char g_vcard_qr_name[64];
 
 static void vcard_editor_reset(void) {
@@ -854,6 +860,11 @@ void handle_key(char key) {
                     go_to_totp_list();
                 } else
 #endif
+#if FEATURE_PASSWORD
+                if (sel == MENU_IDX_PASSWORD) {
+                    go_to_password_list();
+                } else
+#endif
 #if FEATURE_FIDO2
                 if (sel == MENU_IDX_FIDO2) {
                     go_to_fido_list();
@@ -1056,7 +1067,7 @@ void handle_key(char key) {
             } else if (key == '8') {
                 view_list_screen_navigate(&g_badge_texts_menu, true);
                 render_current_state(true);
-            } else if (key == 'Y') {
+            } else if (key == 'Y' || key == '5') {
                 uint8_t sel = view_list_screen_get_selection(&g_badge_texts_menu);
                 switch (sel) {
                     case BADGE_IDX_NAME:
@@ -1408,8 +1419,9 @@ void handle_key(char key) {
                         // Edit
                         totp_wizard_edit(g_totp_selected_index);
                     } else if (action == 3) {
-                        // Delete
-                        if (totp_store_delete(g_totp_selected_index)) {
+                        // Delete - convert display index to store index
+                        uint8_t store_idx = g_totp_sort_map[g_totp_selected_index];
+                        if (totp_store_delete(store_idx)) {
                             view_toast_success(i18n_str(STR_DELETED), 1000);
                             go_to_totp_list();
                         } else {
@@ -1446,8 +1458,10 @@ void handle_key(char key) {
             } else if (key == '3') {
                 // Show context menu
                 g_totp_selected_index = view_list_screen_get_selection(&g_totp_list);
+                // Convert display index to store index for getting info
+                uint8_t store_idx = g_totp_sort_map[g_totp_selected_index];
                 totp_account_info_t info;
-                if (totp_store_count() > 0 && totp_store_get_info(g_totp_selected_index, &info)) {
+                if (totp_store_count() > 0 && totp_store_get_info(store_idx, &info)) {
                     // Full context menu with all options
                     view_context_menu_init(&g_totp_context_menu, info.name, g_totp_context_items, 5);
                 } else {
@@ -1463,10 +1477,12 @@ void handle_key(char key) {
             }
             break;
 
-        case APP_STATE_TOTP_CODE:
+        case APP_STATE_TOTP_CODE: {
+            // g_totp_selected_index is display index, convert to store index
+            uint8_t totp_store_idx = g_totp_sort_map[g_totp_selected_index];
             if (key == 'Y') {
                 // Type code via USB keyboard
-                if (totp_store_type_code(g_totp_selected_index, true)) {
+                if (totp_store_type_code(totp_store_idx, true)) {
                     view_toast_success(i18n_str(STR_CODE_TYPED), 1000);
                 } else {
                     view_toast_error(i18n_str(STR_USB_NOT_READY), 1000);
@@ -1475,7 +1491,7 @@ void handle_key(char key) {
             } else if (key == '3') {
                 // Show context menu for current code
                 totp_account_info_t info;
-                if (totp_store_get_info(g_totp_selected_index, &info)) {
+                if (totp_store_get_info(totp_store_idx, &info)) {
                     view_context_menu_init(&g_totp_context_menu, info.name, g_totp_context_items, 5);
                     view_context_menu_show(&g_totp_context_menu);
                     g_app_state = APP_STATE_TOTP_LIST;  // Context menu uses list state
@@ -1484,6 +1500,7 @@ void handle_key(char key) {
                 go_to_totp_list();
             }
             break;
+        }
 
         // TOTP Add Wizard - Name input
         case APP_STATE_TOTP_ADD_NAME:
@@ -1556,7 +1573,7 @@ void handle_key(char key) {
             } else if (key == '8') {
                 view_list_screen_navigate(&g_totp_digits_menu, true);
                 render_current_state(true);
-            } else if (key == 'Y') {
+            } else if (key == 'Y' || key == '5') {
                 totp_wizard_next_from_digits(view_list_screen_get_selection(&g_totp_digits_menu));
             } else if (key == 'N') {
                 // Go back to issuer
@@ -1574,7 +1591,7 @@ void handle_key(char key) {
             } else if (key == '8') {
                 view_list_screen_navigate(&g_totp_period_menu, true);
                 render_current_state(true);
-            } else if (key == 'Y') {
+            } else if (key == 'Y' || key == '5') {
                 totp_wizard_finish(view_list_screen_get_selection(&g_totp_period_menu));
             } else if (key == 'N') {
                 // Go back to digits
@@ -1592,13 +1609,235 @@ void handle_key(char key) {
             } else if (key == '8') {
                 view_list_screen_navigate(&g_totp_algo_menu, true);
                 render_current_state(true);
-            } else if (key == 'Y') {
+            } else if (key == 'Y' || key == '5') {
                 totp_wizard_next_from_algo(view_list_screen_get_selection(&g_totp_algo_menu));
             } else if (key == 'N') {
                 // Go back to period
                 view_list_screen_init(&g_totp_period_menu, "Period", g_totp_period_items, 2);
                 g_app_state = APP_STATE_TOTP_ADD_PERIOD;
                 render_current_state(false);
+            }
+            break;
+#endif
+
+#if FEATURE_PASSWORD
+        case APP_STATE_PASSWORD_LIST:
+            // Handle context menu if visible
+            if (view_context_menu_is_visible(&g_password_context_menu)) {
+                if (key == '2') {
+                    view_context_menu_navigate(&g_password_context_menu, false);
+                    view_context_menu_render(&g_password_context_menu);
+                } else if (key == '8') {
+                    view_context_menu_navigate(&g_password_context_menu, true);
+                    view_context_menu_render(&g_password_context_menu);
+                } else if (key == 'Y') {
+                    uint8_t action = view_context_menu_get_action(&g_password_context_menu);
+                    view_context_menu_hide(&g_password_context_menu);
+                    if (action == 1) {
+                        // View
+                        password_show_detail(g_password_selected_slot);
+                    } else if (action == 2) {
+                        // Send
+                        if (password_store_type(g_password_selected_slot, true)) {
+                            view_toast_success(i18n_str(STR_PASSWORD_TYPED), 1000);
+                        } else {
+                            view_toast_error(i18n_str(STR_USB_NOT_READY), 1000);
+                        }
+                        go_to_password_list();
+                    } else if (action == 3) {
+                        // Edit
+                        password_wizard_edit(g_password_selected_slot);
+                    } else if (action == 4) {
+                        // Delete
+                        if (password_store_delete(g_password_selected_slot)) {
+                            view_toast_success(i18n_str(STR_DELETED), 1000);
+                            go_to_password_list();
+                        } else {
+                            view_toast_error(i18n_str(STR_DELETE_FAILED), 1000);
+                            render_current_state(false);
+                        }
+                    } else if (action == 5) {
+                        // Add New
+                        password_wizard_start();
+                    } else {
+                        render_current_state(false);
+                    }
+                } else if (key == 'N') {
+                    view_context_menu_hide(&g_password_context_menu);
+                    render_current_state(false);
+                }
+                break;
+            }
+
+            // Normal list handling
+            if (key == '2') {
+                view_list_screen_navigate(&g_password_list, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_password_list, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                if (g_password_count > 0) {
+                    uint16_t sel = view_list_screen_get_selection(&g_password_list);
+                    g_password_selected_slot = g_password_slots[sel];
+
+                    char password[PASSWORD_MAX_LEN + 1];
+                    char notes[PASSWORD_NOTES_LEN + 1];
+                    notes[0] = '\0';
+                    if (password_store_get_secret(g_password_selected_slot, password, sizeof(password), notes, sizeof(notes))) {
+                        char msg[32];
+                        if (strlen(password) > 24) {
+                            snprintf(msg, sizeof(msg), "%.21s...", password);
+                        } else {
+                            snprintf(msg, sizeof(msg), "%.31s", password);
+                        }
+                        view_toast_hold_success(msg);
+                    } else {
+                        view_toast_error("Load failed", 1200);
+                    }
+                    memset(password, 0, sizeof(password));
+                    memset(notes, 0, sizeof(notes));
+                    go_to_password_list();
+                }
+            } else if (key == '3') {
+                // Show context menu
+                uint16_t sel = view_list_screen_get_selection(&g_password_list);
+                if (g_password_count > 0) {
+                    g_password_selected_slot = g_password_slots[sel];
+                    password_meta_t meta;
+                    if (password_store_get_meta(g_password_selected_slot, &meta)) {
+                        view_context_menu_init(&g_password_context_menu, meta.name,
+                                               g_password_context_items, 6);
+                    } else {
+                        view_context_menu_init(&g_password_context_menu, i18n_str(STR_PASSWORDS),
+                                               g_password_context_items, 6);
+                    }
+                } else {
+                    static const view_context_item_t add_only_items[] = {
+                        { "Add New", 5 },
+                    };
+                    view_context_menu_init(&g_password_context_menu, i18n_str(STR_PASSWORDS),
+                                           add_only_items, 1);
+                }
+                view_context_menu_show(&g_password_context_menu);
+            } else if (key == 'N') {
+                go_to_main_menu();
+            }
+            break;
+
+        case APP_STATE_PASSWORD_DETAIL:
+            if (key == 'Y') {
+                if (password_store_type(g_password_selected_slot, true)) {
+                    view_toast_success(i18n_str(STR_PASSWORD_TYPED), 1000);
+                } else {
+                    view_toast_error(i18n_str(STR_USB_NOT_READY), 1000);
+                }
+                go_to_password_list();
+            } else if (key == '2' || key == '8') {
+                view_info_screen_scroll(&g_info_view, key == '8');
+                render_current_state(true);
+            } else if (key == '3') {
+                password_meta_t meta;
+                if (password_store_get_meta(g_password_selected_slot, &meta)) {
+                    view_context_menu_init(&g_password_context_menu, meta.name,
+                                           g_password_context_items, 6);
+                    view_context_menu_show(&g_password_context_menu);
+                    g_app_state = APP_STATE_PASSWORD_LIST;
+                }
+            } else if (key == 'N') {
+                go_to_password_list();
+            }
+            break;
+
+        case APP_STATE_PASSWORD_ADD_NAME:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (strlen(g_t9_input.buffer) > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    go_to_password_list();
+                }
+            } else if (key == 'Y') {
+                if (strlen(g_t9_input.buffer) > 0) {
+                    password_wizard_next_from_name();
+                }
+            }
+            break;
+
+        case APP_STATE_PASSWORD_ADD_USERNAME:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (strlen(g_t9_input.buffer) > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    view_t9_input_init(&g_t9_input, "Entry Name", g_password_wizard.name);
+                    g_app_state = APP_STATE_PASSWORD_ADD_NAME;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                password_wizard_next_from_username();
+            }
+            break;
+
+        case APP_STATE_PASSWORD_ADD_URL:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (strlen(g_t9_input.buffer) > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    view_t9_input_init(&g_t9_input, "Username", g_password_wizard.username);
+                    g_app_state = APP_STATE_PASSWORD_ADD_USERNAME;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                password_wizard_next_from_url();
+            }
+            break;
+
+        case APP_STATE_PASSWORD_ADD_PASSWORD:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (strlen(g_t9_input.buffer) > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    view_t9_input_init(&g_t9_input, "URL", g_password_wizard.url);
+                    g_app_state = APP_STATE_PASSWORD_ADD_URL;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                if (strlen(g_t9_input.buffer) > 0) {
+                    password_wizard_next_from_password();
+                }
+            }
+            break;
+
+        case APP_STATE_PASSWORD_ADD_NOTES:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (strlen(g_t9_input.buffer) > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    view_t9_input_init(&g_t9_input, "Password", g_password_wizard.password);
+                    g_app_state = APP_STATE_PASSWORD_ADD_PASSWORD;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                password_wizard_finish();
             }
             break;
 #endif
@@ -1616,13 +1855,15 @@ void handle_key(char key) {
                 } else if (key == 'Y') {
                     uint8_t action = view_context_menu_get_action(&g_context_menu);
                     view_context_menu_hide(&g_context_menu);
+                    // Convert display index to store index
+                    uint8_t fido_store_idx = g_fido_sort_map[g_fido_selected_index];
                     if (action == 1) {
                         // Details
                         show_fido_detail(g_fido_selected_index);
                     } else if (action == 2) {
                         // Delete
                         fido2_credential_info_t info;
-                        if (fido2_get_credential_info(g_fido_selected_index, &info)) {
+                        if (fido2_get_credential_info(fido_store_idx, &info)) {
                             if (fido2_delete_credential(info.slot)) {
                                 view_toast_success(i18n_str(STR_DELETED), 1000);
                                 go_to_fido_list();
@@ -1655,8 +1896,10 @@ void handle_key(char key) {
             } else if (key == '3') {
                 // Show context menu for selected item
                 g_fido_selected_index = view_list_screen_get_selection(&g_fido_list);
+                // Convert display index to store index for getting info
+                uint8_t fido_store_idx = g_fido_sort_map[g_fido_selected_index];
                 fido2_credential_info_t info;
-                if (fido2_get_credential_info(g_fido_selected_index, &info)) {
+                if (fido2_get_credential_info(fido_store_idx, &info)) {
                     build_fido_context_menu();
                     view_context_menu_init(&g_context_menu, info.rp_id, g_fido_context_items_buf, g_fido_context_items_count);
                     view_context_menu_show(&g_context_menu);
@@ -1852,7 +2095,7 @@ void handle_key(char key) {
             } else if (key == '8') {
                 view_list_screen_navigate(&g_wifi_auth_menu, true);
                 render_current_state(true);
-            } else if (key == 'Y') {
+            } else if (key == 'Y' || key == '5') {
                 uint8_t sel = view_list_screen_get_selection(&g_wifi_auth_menu);
                 // Map selection to auth mode
                 switch (sel) {
@@ -1916,7 +2159,7 @@ void handle_key(char key) {
             } else if (key == '8') {
                 view_list_screen_navigate(&g_wifi_ip_menu, true);
                 render_current_state(true);
-            } else if (key == 'Y') {
+            } else if (key == 'Y' || key == '5') {
                 uint8_t sel = view_list_screen_get_selection(&g_wifi_ip_menu);
                 g_wifi_wizard.use_dhcp = (sel == 0);
                 if (g_wifi_wizard.use_dhcp) {
@@ -2701,7 +2944,7 @@ void handle_key(char key) {
                     g_app_state = APP_STATE_VCARD_CONTEXT_MENU;
                     render_current_state(false);
                 }
-            } else if (key == 'Y') {
+            } else if (key == 'Y' || key == '5') {
                 uint16_t sel = view_list_screen_get_selection(&g_vcard_list);
                 if (sel < g_vcard_list_count) {
                     g_vcard_selected_slot = g_vcard_list_slots[sel];
@@ -2793,7 +3036,7 @@ void handle_key(char key) {
             } else if (key == '8') {
                 view_list_screen_navigate(&g_vcard_nearby_list, true);
                 render_current_state(true);
-            } else if (key == 'Y') {
+            } else if (key == 'Y' || key == '5') {
                 uint16_t sel = view_list_screen_get_selection(&g_vcard_nearby_list);
                 if (sel < g_vcard_nearby_count) {
                     if (!ble_badge_exchange_with(g_vcard_nearby_peers[sel].addr)) {

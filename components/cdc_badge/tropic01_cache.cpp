@@ -207,7 +207,9 @@ uint16_t tropic01_cache_rmem_count_range(uint16_t start, uint16_t end) {
 }
 
 void tropic01_cache_rmem_update(uint16_t slot, const uint8_t *data, uint16_t size) {
+    // Password slots (150+) are not cached - they exceed TR01_CACHE_RMEM_SLOTS
     if (!g_rmem_cache || slot >= TR01_CACHE_RMEM_SLOTS) return;
+
     g_rmem_cache->slot_used[slot] = true;
 
     uint16_t copy_size = (size > TR01_CACHE_DATA_SIZE) ? TR01_CACHE_DATA_SIZE : size;

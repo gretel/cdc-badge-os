@@ -157,7 +157,7 @@ Payload follows immediately after the opcode (START has an extra 2‑byte length
 
 ### 4.3 Storage
 - Own vCard in NVS (e.g., key `vcard/own`)
-- Received vCards in slots (max 100)
+- Received vCards in slots (max 500)
 - Sort by last name
 - Discard duplicates
 

@@ -10,6 +10,7 @@
 #include "app_state.h"
 #include "app_system.h"
 #include "app_totp.h"
+#include "app_password.h"
 
 #include "badge_settings.h"
 #include "cdc_log.h"
@@ -109,6 +110,13 @@ static bool app_state_uses_t9(app_state_t state) {
         case APP_STATE_TOTP_ADD_NAME:
         case APP_STATE_TOTP_ADD_SECRET:
         case APP_STATE_TOTP_ADD_ISSUER:
+#if FEATURE_PASSWORD
+        case APP_STATE_PASSWORD_ADD_NAME:
+        case APP_STATE_PASSWORD_ADD_USERNAME:
+        case APP_STATE_PASSWORD_ADD_URL:
+        case APP_STATE_PASSWORD_ADD_PASSWORD:
+        case APP_STATE_PASSWORD_ADD_NOTES:
+#endif
         case APP_STATE_WIFI_ADD_SSID:
         case APP_STATE_WIFI_ADD_PASSWORD:
 #if FEATURE_BLE_BADGE
@@ -616,6 +624,14 @@ extern "C" void app_main(void) {
                                g_app_state == APP_STATE_TOTP_ADD_SECRET ||
                                g_app_state == APP_STATE_TOTP_ADD_ISSUER) {
                         go_to_totp_list();
+#endif
+#if FEATURE_PASSWORD
+                    } else if (g_app_state == APP_STATE_PASSWORD_ADD_NAME ||
+                               g_app_state == APP_STATE_PASSWORD_ADD_USERNAME ||
+                               g_app_state == APP_STATE_PASSWORD_ADD_URL ||
+                               g_app_state == APP_STATE_PASSWORD_ADD_PASSWORD ||
+                               g_app_state == APP_STATE_PASSWORD_ADD_NOTES) {
+                        go_to_password_list();
 #endif
 #if FEATURE_BLE_BADGE
                     } else if (g_app_state == APP_STATE_VCARD_ADD_FIRST ||
