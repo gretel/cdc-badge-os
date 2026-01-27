@@ -14,7 +14,7 @@
 //          -D TUSB_HID_COUNT=0 for no HID (CDC only)
 
 #ifndef TUSB_HID_COUNT
-#define TUSB_HID_COUNT 2    // Default: FIDO2 + Keyboard (both enabled by default)
+#define TUSB_HID_COUNT 1    // FIDO2 only (Keyboard disabled for CCID testing)
 #endif
 
 #define TUSB_FEATURE_HID (TUSB_HID_COUNT > 0)
@@ -74,6 +74,13 @@ extern "C" {
 #define CFG_TUD_ENDPOINT0_SIZE      64
 #endif
 
+// Maximum number of endpoints (excluding EP0)
+// CDC needs 3 (notif, out, in), FIDO needs 2, Keyboard needs 1, CCID needs 2
+// Total: 8 endpoints (ESP32-S3 supports up to 6 IN + 6 OUT)
+#ifndef CFG_TUD_ENDPOINT_MAX
+#define CFG_TUD_ENDPOINT_MAX        8
+#endif
+
 #define CFG_TUD_CDC_RX_BUFSIZE      CONFIG_TINYUSB_CDC_RX_BUFSIZE
 #define CFG_TUD_CDC_TX_BUFSIZE      CONFIG_TINYUSB_CDC_TX_BUFSIZE
 #define CFG_TUD_MSC_BUFSIZE         CONFIG_TINYUSB_MSC_BUFSIZE
@@ -87,11 +94,10 @@ extern "C" {
 #define CFG_TUD_CUSTOM_CLASS        0   // Custom class not used
 
 // ============================================================================
-// CCID SmartCard via Vendor Class
+// CCID SmartCard via Custom Class Driver
 // ============================================================================
-// CCID uses TinyUSB Vendor class with custom driver since TinyUSB doesn't
-// have native CCID support. The CCID class descriptor is provided in the
-// configuration descriptor and a custom driver handles the protocol.
+// CCID uses a custom TinyUSB class driver since TinyUSB doesn't have native
+// CCID support. The driver is registered via usbd_app_driver_get_cb().
 //
 // TUSB_CCID_ENABLED is set via platformio.ini build_flags:
 // -D TUSB_CCID_ENABLED=1 when FEATURE_GPG_CCID is enabled
@@ -100,13 +106,8 @@ extern "C" {
 #define TUSB_CCID_ENABLED 0  // Default: disabled (sync with feature_flags.h FEATURE_GPG_CCID)
 #endif
 
-#if TUSB_CCID_ENABLED
-#define CFG_TUD_VENDOR              1   // Vendor class for CCID
-#define CFG_TUD_VENDOR_RX_BUFSIZE   512  // Reduced from 2048 to save RAM
-#define CFG_TUD_VENDOR_TX_BUFSIZE   512  // Reduced from 2048 to save RAM
-#else
+// No CFG_TUD_VENDOR needed - we use a custom class driver for CCID
 #define CFG_TUD_VENDOR              0
-#endif
 
 #ifdef __cplusplus
 }

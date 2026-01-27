@@ -35,6 +35,7 @@ typedef enum {
     ICON_USB         = (1 << 4),  // USB connected
     ICON_BLE         = (1 << 5),  // Bluetooth
     ICON_WIFI        = (1 << 6),  // WiFi connected
+    ICON_SAO         = (1 << 7),  // SAO detected (puzzle piece)
 } status_icon_t;
 
 // Render status bar icons at specified position
@@ -475,13 +476,74 @@ typedef struct {
     const char *subtitle;       // Optional subtitle (e.g. name)
     const char *data;           // Data to encode in QR code
     uint8_t scale;              // Pixels per QR module (1-3, auto-calculated if 0)
+    bool backlight_was_on;      // Backlight state before entering QR view
 } view_qr_code_t;
 
-// Initialize QR code view
+// Initialize QR code view (saves current backlight state)
 void view_qr_code_init(view_qr_code_t *view, const char *title, const char *subtitle, const char *data);
 
 // Render QR code (always full refresh due to complexity)
 void view_qr_code_render(const view_qr_code_t *view, bool partial);
+
+// Cleanup QR code view (restores backlight state)
+void view_qr_code_cleanup(view_qr_code_t *view);
+
+// ============================================================================
+// Input Handler Results (for common wizard patterns)
+// ============================================================================
+
+typedef enum {
+    VIEW_INPUT_NONE = 0,        // No action needed
+    VIEW_INPUT_CHANGED,         // Input changed, need re-render
+    VIEW_INPUT_CONFIRM,         // User confirmed (Y key)
+    VIEW_INPUT_BACK_EMPTY,      // User pressed back with empty input
+    VIEW_INPUT_BACK_PREV        // User wants to go back (N with content clears)
+} view_input_result_t;
+
+// ============================================================================
+// Common Input Handlers (DRY helpers for wizard patterns)
+// ============================================================================
+
+/**
+ * Handle T9 input key in wizard-style flow.
+ * Handles: 0-9 (T9 input), N (backspace/back), Y (confirm)
+ *
+ * @param view T9 input view to handle
+ * @param key Key pressed ('0'-'9', 'N', 'Y')
+ * @param require_input If true, Y only confirms when buffer not empty
+ * @return Result indicating what action caller should take
+ */
+view_input_result_t view_handle_t9_wizard_key(view_t9_input_t *view, char key, bool require_input);
+
+/**
+ * Handle list selection key in wizard-style flow.
+ * Handles: 2 (up), 8 (down), Y/5 (select), N (back)
+ *
+ * @param view List screen view to handle
+ * @param key Key pressed ('2', '5', '8', 'Y', 'N')
+ * @return Result indicating what action caller should take
+ */
+view_input_result_t view_handle_list_wizard_key(view_list_screen_t *view, char key);
+
+/**
+ * Handle info screen scrolling.
+ * Handles: 2 (up), 8 (down), N/Y (back)
+ *
+ * @param view Info screen view to handle
+ * @param key Key pressed ('2', '8', 'N', 'Y')
+ * @return Result indicating what action caller should take
+ */
+view_input_result_t view_handle_info_key(view_info_screen_t *view, char key);
+
+// ============================================================================
+// String Utilities (commonly needed in views)
+// ============================================================================
+
+/**
+ * Case-insensitive string comparison with NULL safety.
+ * @return <0 if a<b, 0 if equal, >0 if a>b
+ */
+int view_strcasecmp_safe(const char *a, const char *b);
 
 #ifdef __cplusplus
 }

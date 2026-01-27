@@ -43,3 +43,14 @@
 
 // TROPIC01 Secure Element
 #define TR01_CS_PIN GPIO_NUM_10
+
+// SAO Port GPIO Pins (accent pins, I2C via I2C1)
+#define SAO_GPIO1_PIN GPIO_NUM_15
+#define SAO_GPIO2_PIN GPIO_NUM_16
+
+// SAO EEPROM I2C Address (Binary Descriptor Standard)
+#define SAO_EEPROM_ADDR 0x50
+
+// Grove Port GPIO Pins (directly exposed, no fixed protocol)
+#define GROVE_0_PIN GPIO_NUM_2
+#define GROVE_1_PIN GPIO_NUM_3

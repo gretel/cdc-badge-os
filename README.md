@@ -26,6 +26,7 @@ Hardware security key firmware for the CDC Badge v1.0 featuring TROPIC01 secure 
 | **WiFi + NTP** | Time synchronization over WiFi |
 | **E-Paper Display** | 2.9" low-power display with backlight |
 | **12-Button Keypad** | Phone-style T9 input |
+| **SAO Port** | badge.team SAO detection and info display (no drivers) |
 | **Multi-Language** | English and German UI (expandable, translaters welcome) |
 
 > **Note:** WiFi and Bluetooth are currently **mutually exclusive** (enable one at a time).
@@ -70,11 +71,25 @@ Serial commands require PIN authentication when `FEATURE_SECURE_SERIAL` is enabl
 
 GPG key storage using TROPIC01 secure element with USB CCID SmartCard interface.
 
+**Features:**
+- Ed25519 and P-256 key generation on TROPIC01
+- USB CCID SmartCard interface (optional, for GnuPG)
+- Cross-signing with other badges via BLE
+- QR code export of public key
+
+**On-device UI:**
+- Generate key (name, email, curve selection via T9 input)
+- View status (fingerprint, user ID, sign count)
+- Export public key as QR code
+- Browse and sign received keys from other badges
+
 Enable in `feature_flags.h`:
 ```c
 #define FEATURE_GPG 1       // GPG key storage
 #define FEATURE_GPG_CCID 0  // USB CCID (disabled by default)
 ```
+
+See [docs/GPG.md](docs/GPG.md) for detailed documentation.
 
 ### Password Vault
 
@@ -100,6 +115,28 @@ Hardware-secured password storage using the TROPIC01 secure element.
 - Add/Edit/Delete via T9 input
 
 **Serial commands** are easier for bulk management - see Serial Commands section.
+
+### SAO Port (Basic Detection Only)
+
+Basic SAO (Standardized Add-On) support following the [badge.team Binary Descriptor](https://badge.team/docs/standards/sao/binary_descriptor/) standard.
+
+**What it does:**
+- Detects SAO modules via I2C EEPROM at address 0x50
+- Parses Binary Descriptor (name, driver info)
+- Shows SAO icon on lock screen when detected
+- Displays SAO info in Tools menu
+
+**What it doesn't do:**
+- Just detection and info display as i dont have any compatible hardware to test it with to write a driver for
+
+**Hardware:**
+- SAO Port (J5): I2C1 (GPIO47/48), GPIO15, GPIO16
+- EEPROM standard: badge.team Binary Descriptor ("LIFE" magic)
+
+Enable in `feature_flags.h`:
+```c
+#define FEATURE_SAO 1
+```
 
 ### Certificate Authority (v0.5 - Untested)
 
@@ -350,6 +387,18 @@ Connect at 115200 baud via USB CDC.
 | `TR01_ECC_DEL <slot>` | Delete ECC key |
 | `TR01_RMEM_DEL <slot>` | Delete R-memory slot |
 | `TR01_WIPE` | Factory reset all user data (requires CONFIRM) |
+
+### GPG - v0.5, untested
+| Command | Description |
+|---------|-------------|
+| `GPG_STATUS` | Show key status (user ID, fingerprint, sign count) |
+| `GPG_GENERATE <curve> <user_id>` | Generate key (1=Ed25519, 2=P-256) |
+| `GPG_EXPORT` | Export public key (PEM format) |
+| `GPG_RESET` | Delete key (requires CONFIRM) |
+| `GPG_RECV_LIST` | List received public keys |
+| `GPG_RECV_INFO <index>` | Show received key details |
+| `GPG_CROSS_SIGN <index>` | Cross-sign received key |
+| `GPG_RECV_DELETE <index>` | Delete received key |
 
 ### CA (Certificate Authority) - v0.5, untested
 | Command | Description |

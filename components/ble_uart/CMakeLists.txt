@@ -18,6 +18,7 @@ if(FEATURE_BLE_UART)
         REQUIRES
             cdc_badge
             cdc_utils
+            ble_core
             bt
             nvs_flash
             freertos

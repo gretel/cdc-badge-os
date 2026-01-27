@@ -6,7 +6,7 @@
 #include "cdc_log.h"
 #include "tropic01.h"
 #include "tropic01_cache.h"  // For TR01_CACHE_DATA_SIZE
-#include "usb_hid.h"
+#include "keyboard_typing.h"
 
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -355,16 +355,13 @@ bool password_store_type(uint16_t slot, bool press_enter) {
         return false;
     }
 
-    bool success = usb_keyboard::type(password);
+    bool success = keyboard_type(password, press_enter);
     memset(password, 0, sizeof(password));
     memset(notes, 0, sizeof(notes));
     if (!success) {
-        LOG_W("PASS", "USB Keyboard not available");
+        LOG_W("PASS", "No keyboard available (USB/BLE)");
         return false;
     }
 
-    if (press_enter) {
-        usb_keyboard::type_enter();
-    }
     return true;
 }

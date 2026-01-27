@@ -12,8 +12,8 @@ extern "C" {
 #define TR01_RMEM_SLOT_PIN       30    // PIN hash storage
 #define TR01_RMEM_SLOT_CONFIG    31    // Device config
 #define TR01_RMEM_SLOT_CA        32    // CA metadata
-#define TR01_RMEM_SLOT_FIDO_START 0    // FIDO2/SSH credentials: 0-28
-#define TR01_RMEM_SLOT_FIDO_END   28   // Reduced from 29 to free slot 29 for GPG
+#define TR01_RMEM_SLOT_FIDO_START 0    // FIDO2/SSH credentials: 0-26
+#define TR01_RMEM_SLOT_FIDO_END   26   // Reduced to free slots 27-29 for GPG
 #define TR01_RMEM_SLOT_TOTP_START 33   // TOTP accounts: 33-132
 #define TR01_RMEM_SLOT_TOTP_END   132
 #define TR01_RMEM_SLOT_GPG       29    // GPG metadata (User-ID, fingerprint, etc.)
@@ -22,9 +22,16 @@ extern "C" {
 #define TR01_RMEM_SLOT_PASS_END   511
 
 // ECC slot definitions
-#define TR01_ECC_SLOT_FIDO_START  0    // FIDO2/SSH keys: 0-28 (P-256 or Ed25519)
-#define TR01_ECC_SLOT_FIDO_END    28   // Reduced from 29 to free slot 29 for GPG
-#define TR01_ECC_SLOT_GPG         29   // GPG master key
+#define TR01_ECC_SLOT_FIDO_START  0    // FIDO2/SSH keys: 0-26 (P-256 or Ed25519)
+#define TR01_ECC_SLOT_FIDO_END    26   // Reduced to free slots 27-29 for GPG
+// GPG uses 3 slots for OpenPGP SmartCard compliance:
+// - Signature key (SIG): used for digital signatures
+// - Decryption key (DEC): used for decryption (ECDH key agreement)
+// - Authentication key (AUT): used for SSH/TLS authentication
+#define TR01_ECC_SLOT_GPG_SIG     27   // GPG Signature key (key ref 0xB6)
+#define TR01_ECC_SLOT_GPG_DEC     28   // GPG Decryption key (key ref 0xB8)
+#define TR01_ECC_SLOT_GPG_AUT     29   // GPG Authentication key (key ref 0xA4)
+#define TR01_ECC_SLOT_GPG         TR01_ECC_SLOT_GPG_SIG  // Legacy alias
 #define TR01_ECC_SLOT_ATTEST      30   // FIDO2 attestation key
 #define TR01_ECC_SLOT_CA          31   // CA root key
 #define TR01_ECC_SLOT_COUNT       32

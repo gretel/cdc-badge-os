@@ -61,6 +61,10 @@ void error_log_clear(void);
 // Dump error log to console
 void error_log_dump(void);
 
+// Direct error log write (USB-safe, no console_print)
+// Use this from USB callbacks to avoid deadlock
+void error_log_add_direct(const char* fmt, ...);
+
 // Initialize logging system
 void log_init(void);
 

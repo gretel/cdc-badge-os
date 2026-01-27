@@ -66,18 +66,27 @@
 #define FEATURE_BLE_BADGE 1
 #endif
 
-// Compile-time check: BLE UART requires Bluetooth to be enabled in sdkconfig
-#if FEATURE_BLE_UART
+// BLE HID Keyboard for wireless password/TOTP typing
+// Uses BLE HID-over-GATT Profile (HOGP)
+#ifndef FEATURE_BLE_HID
+#define FEATURE_BLE_HID 1   // BLE HID Keyboard (alternative to USB keyboard)
+#endif
+
+// Compile-time check: BLE features require Bluetooth to be enabled in sdkconfig
+#if FEATURE_BLE_UART || FEATURE_BLE_BADGE || FEATURE_BLE_HID
   #if !defined(CONFIG_BT_ENABLED) || !CONFIG_BT_ENABLED
-    #error "FEATURE_BLE_UART requires CONFIG_BT_ENABLED=y in sdkconfig!"
+    #error "BLE features require CONFIG_BT_ENABLED=y in sdkconfig!"
   #endif
   #if !defined(CONFIG_BT_BLUEDROID_ENABLED) || !CONFIG_BT_BLUEDROID_ENABLED
-    #error "FEATURE_BLE_UART requires CONFIG_BT_BLUEDROID_ENABLED=y in sdkconfig!"
+    #error "BLE features require CONFIG_BT_BLUEDROID_ENABLED=y in sdkconfig!"
   #endif
 #endif
 
+// USB Keyboard for TOTP typing
+// NOTE: ESP32-S3 has only 5 IN endpoints. With CCID enabled, we exceed limit.
+// Temporarily disabled to test CCID. TODO: Find permanent solution.
 #ifndef FEATURE_USB_KEYBOARD
-#define FEATURE_USB_KEYBOARD 1  // USB keyboard for TOTP typing
+#define FEATURE_USB_KEYBOARD 0  // Disabled for CCID testing (EP limit)
 #endif
 
 #ifndef FEATURE_SECURE_SERIAL
@@ -106,7 +115,7 @@
 // GPG over USB CCID (SmartCard interface)
 // Requires FEATURE_GPG and FEATURE_USB
 #ifndef FEATURE_GPG_CCID
-#define FEATURE_GPG_CCID 0  // USB CCID SmartCard interface, not yet implemented
+#define FEATURE_GPG_CCID 1  // USB CCID SmartCard interface for GnuPG
 #endif
 
 #if FEATURE_GPG_CCID && !FEATURE_GPG
@@ -114,6 +123,13 @@
 #endif
 #if FEATURE_GPG_CCID && !FEATURE_USB
   #error "FEATURE_GPG_CCID requires FEATURE_USB to be enabled!"
+#endif
+
+// ============================================================================
+// SAO Port (Shitty Add-On) Detection
+// ============================================================================
+#ifndef FEATURE_SAO
+#define FEATURE_SAO 1  // SAO detection and info display (no drivers)
 #endif
 
 #endif

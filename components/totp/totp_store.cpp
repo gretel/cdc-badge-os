@@ -8,7 +8,7 @@
 #include "base32.h"
 #include "tropic01.h"
 #include "tropic01_cache.h"  // Used for cache queries during init (not for updates - tropic01.cpp handles that)
-#include "usb_hid.h"
+#include "keyboard_typing.h"
 #include "cdc_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -400,17 +400,11 @@ bool totp_store_type_code(uint8_t index, bool press_enter) {
     // Small delay for host to be ready
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    // Type the code via USB keyboard (returns false if USB keyboard disabled)
-    bool success = usb_keyboard::type(code);
+    // Type the code via available keyboard (USB or BLE HID)
+    bool success = keyboard_type(code, press_enter);
     if (!success) {
-        LOG_W("TOTP", "USB Keyboard not available");
+        LOG_W("TOTP", "No keyboard available (USB/BLE)");
         return false;
-    }
-
-    // Optional Enter press
-    if (press_enter) {
-        vTaskDelay(pdMS_TO_TICKS(50));
-        usb_keyboard::type_enter();
     }
 
     return true;

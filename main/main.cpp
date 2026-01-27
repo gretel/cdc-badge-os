@@ -45,6 +45,10 @@
 #include "ble_uart.h"
 #endif
 
+#if FEATURE_SAO
+#include "sao.h"
+#endif
+
 // App version (fallback if not defined via build flags)
 #ifndef APP_VERSION
 #define APP_VERSION "v0.3"
@@ -58,6 +62,9 @@
 
 // T9 abort: track N key hold time for 2s abort
 #define T9_ABORT_HOLD_MS 2000
+
+// SAO periodic scan interval (1 minute)
+#define SAO_SCAN_INTERVAL_MS (60 * 1000)
 #define T9_DIGIT_HOLD_MS 800
 
 // Light sleep: wait on lock screen before sleeping
@@ -245,6 +252,13 @@ extern "C" void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(3000));  // E-Paper full refresh takes ~2-3s
 
     LOG_I("MAIN", "Ready. Press [Y] to unlock");
+
+#if FEATURE_SAO
+    // Initial SAO scan at startup (subsequent scans only via menu)
+    LOG_I("MAIN", "Initial SAO scan...");
+    sao_scan();
+    g_sao_last_scan_ms = millis();
+#endif
 
     while (true) {
         // Handle power button and charger IRQs
@@ -688,6 +702,9 @@ extern "C" void app_main(void) {
         if (key != 'x') {
             handle_key(key);
         }
+
+// SAO scan removed from main loop - only scan manually via menu
+// (Periodic scan was causing too many I2C probe messages)
 
         vTaskDelay(pdMS_TO_TICKS(20));  // 50Hz loop
     }

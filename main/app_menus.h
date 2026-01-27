@@ -19,3 +19,7 @@ void build_broadcast_settings_menu(void);
 #if FEATURE_CA
 void build_ca_menu(void);
 #endif
+
+#if FEATURE_GPG
+void build_gpg_menu(void);
+#endif

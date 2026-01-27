@@ -397,5 +397,47 @@ void render_current_state(bool partial) {
             break;
 #endif
 
+#if FEATURE_SAO
+        case APP_STATE_SAO_INFO:
+            view_info_screen_render(&g_info_view, partial);
+            break;
+#endif
+
+#if FEATURE_GPG
+        case APP_STATE_GPG_MENU:
+            view_list_screen_render(&g_gpg_menu, partial);
+            break;
+
+        case APP_STATE_GPG_DETAILS:
+        case APP_STATE_GPG_GENERATING:
+        case APP_STATE_GPG_RESET_CONFIRM:
+            view_info_screen_render(&g_info_view, partial);
+            break;
+
+        case APP_STATE_GPG_QR_CODE:
+            view_qr_code_render(&g_qr_view, partial);
+            break;
+
+        // GPG Wizard: T9 input states
+        case APP_STATE_GPG_WIZARD_NAME:
+        case APP_STATE_GPG_WIZARD_EMAIL:
+            view_t9_input_render(&g_t9_input, partial);
+            break;
+
+        // GPG Wizard: Curve selection
+        case APP_STATE_GPG_WIZARD_CURVE:
+            view_list_screen_render(&g_gpg_curve_menu, partial);
+            break;
+
+        // GPG Received keys
+        case APP_STATE_GPG_RECV_LIST:
+            view_list_screen_render(&g_gpg_recv_list, partial);
+            break;
+
+        case APP_STATE_GPG_RECV_DETAIL:
+            view_info_screen_render(&g_info_view, partial);
+            break;
+#endif
+
     }
 }

@@ -247,6 +247,20 @@ static void draw_wifi_icon(Gdey029T94 &display, int x, int y) {
     draw_wifi_icon_color(display, x, y, EPD_BLACK);
 }
 
+// Draw SAO icon (puzzle piece symbol)
+static void draw_sao_icon(Gdey029T94 &display, int x, int y) {
+    // Simple puzzle piece: square with tab on right, notch on bottom
+    // Main body (8x8)
+    display.drawRect(x, y + 2, 8, 8, EPD_BLACK);
+    // Tab on right (sticks out)
+    display.fillRect(x + 8, y + 4, 3, 4, EPD_BLACK);
+    // Notch on bottom (cut into body)
+    display.fillRect(x + 2, y + 10, 4, 2, EPD_WHITE);
+    display.drawLine(x + 2, y + 10, x + 2, y + 11, EPD_BLACK);
+    display.drawLine(x + 5, y + 10, x + 5, y + 11, EPD_BLACK);
+    display.drawLine(x + 2, y + 11, x + 5, y + 11, EPD_BLACK);
+}
+
 static void draw_list_icon(Gdey029T94 &display, view_list_icon_t icon, bool disabled,
                            int x, int y, bool inverted) {
     if (icon == VIEW_LIST_ICON_NONE) return;
@@ -327,6 +341,13 @@ int view_render_status_icons(uint16_t icons, int x, int y) {
     if (icons & ICON_LOCK) {
         cur_x -= 12;
         draw_lock_icon(display, cur_x, y);
+        cur_x -= ICON_SPACING;
+        total_width += 12 + ICON_SPACING;
+    }
+
+    if (icons & ICON_SAO) {
+        cur_x -= 12;
+        draw_sao_icon(display, cur_x, y);
         cur_x -= ICON_SPACING;
         total_width += 12 + ICON_SPACING;
     }
@@ -1978,13 +1999,26 @@ void view_qr_code_init(view_qr_code_t *view, const char *title, const char *subt
     view->subtitle = subtitle;
     view->data = data;
     view->scale = 0;  // Auto-calculate
+    // Save backlight state before turning it on for QR scanning
+    view->backlight_was_on = gui_is_backlight_on();
+    gui_backlight_on();
+}
+
+// External: Backlight forced-on flag (defined in app_globals.cpp)
+extern bool g_backlight_forced_on;
+
+void view_qr_code_cleanup(view_qr_code_t *view) {
+    if (!view) return;
+    // Restore previous backlight state (unless forced on by user)
+    if (!view->backlight_was_on && !g_backlight_forced_on) {
+        gui_backlight_off();
+    }
 }
 
 void view_qr_code_render(const view_qr_code_t *view, bool partial) {
     if (!view || !view->data) return;
 
-    // Enable backlight for better QR scanning
-    gui_backlight_on();
+    // Note: Backlight is turned on in view_qr_code_init() and restored in view_qr_code_cleanup()
 
     Gdey029T94 &display = gui_get_display();
     display.fillScreen(EPD_WHITE);
@@ -2108,4 +2142,66 @@ void view_qr_code_render(const view_qr_code_t *view, bool partial) {
     display.print(hint);
 
     gui_flush_sync(false);
+}
+
+// ============================================================================
+// Common Input Handlers (DRY helpers for wizard patterns)
+// ============================================================================
+
+view_input_result_t view_handle_t9_wizard_key(view_t9_input_t *view, char key, bool require_input) {
+    if (key >= '0' && key <= '9') {
+        view_t9_input_key(view, key);
+        return VIEW_INPUT_CHANGED;
+    } else if (key == 'N') {
+        if (strlen(view->buffer) > 0) {
+            view_t9_input_backspace(view);
+            return VIEW_INPUT_CHANGED;
+        } else {
+            return VIEW_INPUT_BACK_EMPTY;
+        }
+    } else if (key == 'Y') {
+        if (!require_input || strlen(view->buffer) > 0) {
+            return VIEW_INPUT_CONFIRM;
+        }
+    }
+    return VIEW_INPUT_NONE;
+}
+
+view_input_result_t view_handle_list_wizard_key(view_list_screen_t *view, char key) {
+    if (key == '2') {
+        view_list_screen_navigate(view, false);
+        return VIEW_INPUT_CHANGED;
+    } else if (key == '8') {
+        view_list_screen_navigate(view, true);
+        return VIEW_INPUT_CHANGED;
+    } else if (key == 'Y' || key == '5') {
+        return VIEW_INPUT_CONFIRM;
+    } else if (key == 'N') {
+        return VIEW_INPUT_BACK_EMPTY;
+    }
+    return VIEW_INPUT_NONE;
+}
+
+view_input_result_t view_handle_info_key(view_info_screen_t *view, char key) {
+    if (key == '2') {
+        view_info_screen_scroll(view, false);
+        return VIEW_INPUT_CHANGED;
+    } else if (key == '8') {
+        view_info_screen_scroll(view, true);
+        return VIEW_INPUT_CHANGED;
+    } else if (key == 'N' || key == 'Y') {
+        return VIEW_INPUT_BACK_EMPTY;
+    }
+    return VIEW_INPUT_NONE;
+}
+
+// ============================================================================
+// String Utilities
+// ============================================================================
+
+int view_strcasecmp_safe(const char *a, const char *b) {
+    if (!a && !b) return 0;
+    if (!a) return -1;
+    if (!b) return 1;
+    return strcasecmp(a, b);
 }

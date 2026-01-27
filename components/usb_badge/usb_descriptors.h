@@ -9,9 +9,16 @@
 #include "feature_flags.h"
 
 // USB Device IDs
-// Using Espressif's official VID with custom PID
+// When CCID is enabled, use Gemalto VID/PID for libccid whitelist compatibility
+// (Same approach as pico-openpgp, Rugart, and other DIY OpenPGP cards)
+#include "feature_flags.h"
+#if FEATURE_GPG_CCID
+#define USB_VID   0x08E6  // Gemalto
+#define USB_PID   0x4433  // GemPC433 (libccid whitelisted)
+#else
 #define USB_VID   0x303A  // Espressif Systems
 #define USB_PID   0xBADE  // CDC Badge custom PID
+#endif
 #define USB_BCD   0x0200
 
 // String Descriptor Indices
@@ -84,7 +91,7 @@ enum {
 #define EP_CDC_SIZE         64
 #define EP_FIDO_SIZE        64    // CTAPHID packets are 64 bytes
 #define EP_KEYBOARD_SIZE    8     // Keyboard reports are 8 bytes
-#define EP_CCID_SIZE        64    // CCID SmartCard packets
+#define EP_CCID_SIZE        64    // CCID SmartCard packets (standard CCID size)
 
 // HID Report ID
 #define REPORT_ID_KEYBOARD  1     // Keyboard uses Report ID 1

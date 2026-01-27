@@ -14,13 +14,7 @@
 // Static buffers for list item labels (must persist) - in PSRAM to save DRAM
 EXT_RAM_BSS_ATTR static char g_totp_labels[TOTP_MAX_ACCOUNTS][72];
 
-// Comparison helper for sorting - compares sort keys (name+issuer)
-static int strcasecmp_safe(const char *a, const char *b) {
-    if (!a && !b) return 0;
-    if (!a) return -1;
-    if (!b) return 1;
-    return strcasecmp(a, b);
-}
+// Use view_strcasecmp_safe from views.h for sorting
 
 static void populate_totp_list(void) {
     uint8_t count = totp_store_count();
@@ -44,7 +38,7 @@ static void populate_totp_list(void) {
 
     // Sort the sort map by label (case-insensitive)
     std::sort(g_totp_sort_map, g_totp_sort_map + count, [](uint8_t a, uint8_t b) {
-        return strcasecmp_safe(g_totp_labels[a], g_totp_labels[b]) < 0;
+        return view_strcasecmp_safe(g_totp_labels[a], g_totp_labels[b]) < 0;
     });
 
     // Reorder items according to sorted map

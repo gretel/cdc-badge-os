@@ -1,10 +1,11 @@
 // BLE UART Service Implementation (Nordic UART Service compatible)
-// Uses Bluedroid stack (ESP-IDF)
+// Uses shared BLE Core for stack management
 
 #include "ble_uart.h"
 
 #if FEATURE_BLE_UART
 
+#include "ble_core.h"
 #include "cdc_log.h"
 #include "cdc_time.h"
 
@@ -34,8 +35,8 @@
 // GATT handles
 #define NUS_NUM_HANDLE          6       // Service + 2 chars * 2 + 1 CCCD
 
-// GATT App ID
-#define NUS_APP_ID              0
+// GATT App ID (from ble_core.h - each service needs unique ID)
+#define NUS_APP_ID              BLE_APP_UART
 
 // Buffer sizes
 #define RX_BUFFER_SIZE          2048    // Incoming data from client (increased for bulk transfers)
@@ -137,43 +138,12 @@ static esp_ble_adv_params_t adv_params_idle = {
 };
 
 // Advertising data
-static esp_ble_adv_data_t adv_data = {
-    .set_scan_rsp        = false,
-    .include_name        = true,
-    .include_txpower     = true,
-    .min_interval        = 0x0006,
-    .max_interval        = 0x0010,
-    .appearance          = 0x00,
-    .manufacturer_len    = 0,
-    .p_manufacturer_data = NULL,
-    .service_data_len    = 0,
-    .p_service_data      = NULL,
-    .service_uuid_len    = 0,
-    .p_service_uuid      = NULL,
-    .flag                = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
-};
-
-static esp_ble_adv_data_t scan_rsp_data = {
-    .set_scan_rsp        = true,
-    .include_name        = true,
-    .include_txpower     = false,
-    .min_interval        = 0x0006,
-    .max_interval        = 0x0010,
-    .appearance          = 0x00,
-    .manufacturer_len    = 0,
-    .p_manufacturer_data = NULL,
-    .service_data_len    = 0,
-    .p_service_data      = NULL,
-    .service_uuid_len    = 0,
-    .p_service_uuid      = NULL,
-    .flag                = 0,
-};
+// NOTE: Advertising data is now managed by ble_core
 
 // ============================================================================
 // Forward Declarations
 // ============================================================================
 
-static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
 static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
                                  esp_ble_gatts_cb_param_t *param);
 
@@ -185,122 +155,12 @@ static void reconnect_timer_callback(TimerHandle_t timer) {
     (void)timer;
     if (!g_connected && g_initialized) {
         LOG_D(BLE_TAG, "Restarting advertising after disconnect");
-        esp_ble_gap_start_advertising(&adv_params);
+        ble_core_start_advertising();
     }
 }
 
-// ============================================================================
-// GAP Event Handler
-// ============================================================================
-
-static bool g_adv_data_set = false;
-static bool g_scan_rsp_set = false;
-
-static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
-    switch (event) {
-        case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
-            g_adv_data_set = true;
-            if (g_scan_rsp_set) {
-                esp_ble_gap_start_advertising(&adv_params);
-            }
-            break;
-
-        case ESP_GAP_BLE_SCAN_RSP_DATA_SET_COMPLETE_EVT:
-            g_scan_rsp_set = true;
-            if (g_adv_data_set) {
-                esp_ble_gap_start_advertising(&adv_params);
-            }
-            break;
-
-        case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
-            if (param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS) {
-                const uint8_t *addr = esp_bt_dev_get_address();
-                if (addr) {
-                    LOG_I(BLE_TAG, "Advertising [%02X:%02X:%02X:%02X:%02X:%02X]",
-                          addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
-                }
-            }
-            break;
-
-        case ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT:
-            LOG_D(BLE_TAG, "Advertising stopped");
-            break;
-
-        case ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT:
-            LOG_D(BLE_TAG, "Conn params updated");
-            break;
-
-        // =====================================================================
-        // Security/Pairing Events
-        // =====================================================================
-
-        case ESP_GAP_BLE_SEC_REQ_EVT:
-            // Client requests security - accept it
-            LOG_I(BLE_TAG, "Security request from client");
-            esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
-            break;
-
-        case ESP_GAP_BLE_PASSKEY_NOTIF_EVT:
-            // Display passkey for user to enter on phone
-            g_passkey = param->ble_security.key_notif.passkey;
-            LOG_I(BLE_TAG, "Passkey: %06lu", (unsigned long)g_passkey);
-            if (g_passkey_display_cb) {
-                g_passkey_display_cb(g_passkey);
-            }
-            break;
-
-        case ESP_GAP_BLE_NC_REQ_EVT:
-            // Numeric comparison - confirm the number matches
-            LOG_I(BLE_TAG, "Numeric comparison: %06lu", (unsigned long)param->ble_security.key_notif.passkey);
-            g_passkey = param->ble_security.key_notif.passkey;
-            if (g_passkey_display_cb) {
-                g_passkey_display_cb(g_passkey);
-            }
-            // Auto-accept numeric comparison (user sees same number on both devices)
-            esp_ble_confirm_reply(param->ble_security.ble_req.bd_addr, true);
-            break;
-
-        case ESP_GAP_BLE_PASSKEY_REQ_EVT:
-            // Peer is requesting us to enter passkey - not used in display mode
-            LOG_W(BLE_TAG, "Passkey request (unexpected)");
-            break;
-
-        case ESP_GAP_BLE_KEY_EVT:
-            // Key exchange event
-            LOG_D(BLE_TAG, "Key type: %d", param->ble_security.ble_key.key_type);
-            break;
-
-        case ESP_GAP_BLE_AUTH_CMPL_EVT: {
-            // Authentication complete
-            esp_bd_addr_t bd_addr;
-            memcpy(bd_addr, param->ble_security.auth_cmpl.bd_addr, sizeof(esp_bd_addr_t));
-            bool success = param->ble_security.auth_cmpl.success;
-            LOG_I(BLE_TAG, "Auth complete: %s, bonded=%d",
-                  success ? "success" : "fail",
-                  param->ble_security.auth_cmpl.auth_mode);
-            if (success) {
-                g_bonded = true;
-                LOG_I(BLE_TAG, "Paired with [%02X:%02X:%02X:%02X:%02X:%02X]",
-                      bd_addr[0], bd_addr[1], bd_addr[2], bd_addr[3], bd_addr[4], bd_addr[5]);
-            } else {
-                g_bonded = false;
-                LOG_E(BLE_TAG, "Pairing failed: reason=0x%x", param->ble_security.auth_cmpl.fail_reason);
-            }
-            // Notify app to dismiss passkey toast
-            if (g_auth_complete_cb) {
-                g_auth_complete_cb(success);
-            }
-            break;
-        }
-
-        case ESP_GAP_BLE_REMOVE_BOND_DEV_COMPLETE_EVT:
-            LOG_I(BLE_TAG, "Bond removed");
-            break;
-
-        default:
-            break;
-    }
-}
+// NOTE: GAP events are now handled by ble_core
+// Security callbacks are routed through ble_core_set_passkey_callback() etc.
 
 // ============================================================================
 // GATTS Event Handler
@@ -312,14 +172,10 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         case ESP_GATTS_REG_EVT:
             if (param->reg.status == ESP_GATT_OK && param->reg.app_id == NUS_APP_ID) {
                 g_gatts_if = gatts_if;
-                LOG_I(BLE_TAG, "GATT server registered");
+                LOG_I(BLE_TAG, "GATT server registered (app_id=%d)", NUS_APP_ID);
 
-                // Set device name
-                esp_ble_gap_set_device_name(DEVICE_NAME);
-
-                // Configure advertising
-                esp_ble_gap_config_adv_data(&adv_data);
-                esp_ble_gap_config_adv_data(&scan_rsp_data);
+                // Set device name via ble_core
+                ble_core_set_device_name(DEVICE_NAME);
 
                 // Create NUS service
                 esp_gatt_srvc_id_t service_id;
@@ -507,78 +363,33 @@ bool ble_uart_init(void) {
     }
     xSemaphoreGive(g_tx_sem);  // Start with semaphore available
 
-    // Release classic BT memory
-    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
-
-    // Initialize BT controller
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    esp_err_t ret = esp_bt_controller_init(&bt_cfg);
-    if (ret != ESP_OK) {
-        LOG_E(BLE_TAG, "BT controller init failed: %s", esp_err_to_name(ret));
+    // Initialize shared BLE core (handles BT stack, GAP, security)
+    if (!ble_core_init()) {
+        LOG_E(BLE_TAG, "BLE core init failed");
         return false;
     }
 
-    ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);
-    if (ret != ESP_OK) {
-        LOG_E(BLE_TAG, "BT controller enable failed: %s", esp_err_to_name(ret));
-        return false;
-    }
+    // Register passkey callback to route through ble_core
+    ble_core_set_passkey_callback([](uint32_t passkey) {
+        g_passkey = passkey;
+        if (g_passkey_display_cb) {
+            g_passkey_display_cb(passkey);
+        }
+    });
 
-    // Initialize Bluedroid
-    ret = esp_bluedroid_init();
-    if (ret != ESP_OK) {
-        LOG_E(BLE_TAG, "Bluedroid init failed: %s", esp_err_to_name(ret));
-        return false;
-    }
+    ble_core_set_auth_callback([](bool success) {
+        g_bonded = success;
+        if (g_auth_complete_cb) {
+            g_auth_complete_cb(success);
+        }
+    });
 
-    ret = esp_bluedroid_enable();
-    if (ret != ESP_OK) {
-        LOG_E(BLE_TAG, "Bluedroid enable failed: %s", esp_err_to_name(ret));
-        return false;
-    }
-
-    // Register callbacks
-    ret = esp_ble_gap_register_callback(gap_event_handler);
-    if (ret != ESP_OK) {
-        LOG_E(BLE_TAG, "GAP callback register failed: %s", esp_err_to_name(ret));
-        return false;
-    }
-
-    ret = esp_ble_gatts_register_callback(gatts_event_handler);
+    // Register GATTS callback for NUS service events
+    esp_err_t ret = esp_ble_gatts_register_callback(gatts_event_handler);
     if (ret != ESP_OK) {
         LOG_E(BLE_TAG, "GATTS callback register failed: %s", esp_err_to_name(ret));
         return false;
     }
-
-    // =========================================================================
-    // Configure BLE Security BEFORE registering GATT app
-    // This ensures the service is created with proper security settings
-    // =========================================================================
-
-    // Set security IO capability: Display Only (badge shows passkey, phone enters it)
-    esp_ble_io_cap_t iocap = ESP_IO_CAP_OUT;
-    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, sizeof(iocap));
-
-    // Set authentication requirements: Secure Connections + MITM protection + Bonding
-    esp_ble_auth_req_t auth_req = ESP_LE_AUTH_REQ_SC_MITM_BOND;
-    esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &auth_req, sizeof(auth_req));
-
-    // Set max encryption key size (16 bytes = 128 bit)
-    uint8_t key_size = 16;
-    esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE, &key_size, sizeof(key_size));
-
-    // Enable bonding - store and use keys for reconnection
-    uint8_t init_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
-    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &init_key, sizeof(init_key));
-
-    uint8_t rsp_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
-    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(rsp_key));
-
-    // Only allow authenticated (MITM protected) links
-    uint8_t auth_option = ESP_BLE_ONLY_ACCEPT_SPECIFIED_AUTH_ENABLE;
-    esp_ble_gap_set_security_param(ESP_BLE_SM_ONLY_ACCEPT_SPECIFIED_SEC_AUTH, &auth_option, sizeof(auth_option));
-
-    LOG_I(BLE_TAG, "Security configured: Passkey + MITM + Bonding");
 
     // Register GATT app (this triggers service creation)
     ret = esp_ble_gatts_app_register(NUS_APP_ID);
@@ -586,9 +397,6 @@ bool ble_uart_init(void) {
         LOG_E(BLE_TAG, "GATTS app register failed: %s", esp_err_to_name(ret));
         return false;
     }
-
-    // Set MTU
-    esp_ble_gatt_set_local_mtu(517);
 
     g_initialized = true;
     g_power_mode = BLE_POWER_ACTIVE;
@@ -757,13 +565,13 @@ int ble_uart_getchar(void) {
 
 void ble_uart_start_advertising(void) {
     if (g_initialized && !g_connected) {
-        esp_ble_gap_start_advertising(&adv_params);
+        ble_core_start_advertising();
     }
 }
 
 void ble_uart_stop_advertising(void) {
     if (g_initialized) {
-        esp_ble_gap_stop_advertising();
+        ble_core_stop_advertising();
     }
 }
 
@@ -793,21 +601,22 @@ void ble_uart_deinit(void) {
     g_tx_notify_enabled = false;
     g_initialized = false;
 
-    // Stop advertising
-    esp_ble_gap_stop_advertising();
+    // Stop advertising (shared with ble_core)
+    ble_core_stop_advertising();
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    // Unregister GATT app
+    // Unregister GATT app (keep BT stack running for other services)
     if (g_gatts_if != ESP_GATT_IF_NONE) {
         esp_ble_gatts_app_unregister(g_gatts_if);
         g_gatts_if = ESP_GATT_IF_NONE;
     }
 
-    // Disable and deinit Bluedroid
-    esp_bluedroid_disable();
-    esp_bluedroid_deinit();
-    esp_bt_controller_disable();
-    esp_bt_controller_deinit();
+    // Remove callbacks from ble_core
+    ble_core_set_passkey_callback(NULL);
+    ble_core_set_auth_callback(NULL);
+
+    // NOTE: Do NOT deinit BT stack here - other services may still use it
+    // ble_core_deinit() should only be called when all services are done
 
     // Clean up TX semaphore
     if (g_tx_sem) {
@@ -831,8 +640,6 @@ void ble_uart_deinit(void) {
     g_bonded = false;
     g_tx_congested = false;
     g_tx_in_progress = false;
-    g_adv_data_set = false;
-    g_scan_rsp_set = false;
     g_power_mode = BLE_POWER_OFF;
     LOG_I(BLE_TAG, "BLE UART deinitialized");
 }

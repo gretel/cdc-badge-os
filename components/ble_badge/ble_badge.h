@@ -64,6 +64,14 @@ bool ble_badge_poll_nearby(ble_badge_peer_t *out);
 bool ble_badge_poll_pairing_event(ble_badge_pair_event_t *type, uint32_t *passkey);
 void ble_badge_confirm_pairing(bool accept);
 void ble_badge_reply_passkey(bool accept, uint32_t passkey);
+
+#if FEATURE_GPG
+// GPG Key Exchange over BLE
+// Reuses the vCard exchange infrastructure with GPG-specific data
+bool ble_badge_gpg_exchange_with(const uint8_t addr[6]);
+bool ble_badge_poll_gpg_exchange_result(bool *success);
+bool ble_badge_gpg_exchange_in_progress(void);
+#endif
 #else
 static inline bool ble_badge_init(void) { return false; }
 static inline void ble_badge_deinit(void) {}
