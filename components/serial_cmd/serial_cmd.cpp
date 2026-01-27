@@ -289,6 +289,11 @@ static void show_help(void) {
     console_printf("  GPG_RESET            - Delete GPG key\r\n");
 #endif
     console_printf("  GPG_EXPORT_PUB       - Export public key (PEM)\r\n");
+    console_printf("  GPG_RECV_LIST        - List received GPG keys\r\n");
+    console_printf("  GPG_RECV_INFO <idx>  - Show received key details\r\n");
+    console_printf("  GPG_CROSS_SIGN <idx> - Cross-sign received key\r\n");
+    console_printf("  GPG_EXPORT_SIGNED <idx> - Export signed key (RFC 4880)\r\n");
+    console_printf("  GPG_RECV_DELETE <idx>- Delete received key\r\n");
     console_printf("  Note: Supported curves: Ed25519, P-256 (NO RSA!)\r\n");
     console_printf("\r\n");
 #endif
@@ -1382,7 +1387,7 @@ static void cmd_gpg_generate(char *args) {
 }
 
 // GPG PEM import input mode
-static char g_gpg_pem_buffer[2048];
+EXT_RAM_BSS_ATTR static char g_gpg_pem_buffer[2048];
 static int g_gpg_pem_buffer_pos = 0;
 static bool g_gpg_input_mode = false;
 
@@ -1523,6 +1528,175 @@ static void cmd_gpg_reset(void) {
     }
 }
 
+// ============================================================================
+// GPG Received Keys Commands (Cross-Signing)
+// ============================================================================
+
+static void cmd_gpg_recv_list(void) {
+    uint8_t count = gpg_received_count();
+    if (count == 0) {
+        console_printf("No received GPG keys\r\n");
+        return;
+    }
+
+    console_printf("Received GPG keys: %u\r\n", count);
+    console_printf("----------------------------------------\r\n");
+
+    for (uint8_t i = 0; i < count; i++) {
+        gpg_received_key_info_t info;
+        if (!gpg_received_get_info(i, &info)) {
+            continue;
+        }
+
+        console_printf("[%u] %s\r\n", i, info.user_id);
+        console_printf("    Curve: %s\r\n",
+                       info.curve == CDC_CURVE_ED25519 ? "Ed25519" : "P-256");
+        console_printf("    FP: ");
+        for (int j = 0; j < GPG_FINGERPRINT_LEN; j++) {
+            console_printf("%02X", info.fingerprint[j]);
+        }
+        console_printf("\r\n");
+        console_printf("    Signed: %s\r\n", info.signed_by_me ? "Yes" : "No");
+    }
+}
+
+static void cmd_gpg_recv_info(char *args) {
+    char *idx_str = trim(args);
+    if (strlen(idx_str) == 0) {
+        console_printf("ERROR: Usage: GPG_RECV_INFO <index>\r\n");
+        return;
+    }
+
+    int idx = atoi(idx_str);
+    if (idx < 0 || idx >= gpg_received_count()) {
+        console_printf("ERROR: Invalid index (0-%u)\r\n", gpg_received_count() - 1);
+        return;
+    }
+
+    gpg_received_key_info_t info;
+    if (!gpg_received_get_info((uint8_t)idx, &info)) {
+        console_printf("ERROR: Failed to get key info\r\n");
+        return;
+    }
+
+    console_printf("User ID: %s\r\n", info.user_id);
+    console_printf("Curve: %s\r\n",
+                   info.curve == CDC_CURVE_ED25519 ? "Ed25519" : "P-256");
+    console_printf("Fingerprint:\r\n  ");
+    for (int i = 0; i < GPG_FINGERPRINT_LEN; i++) {
+        console_printf("%02X", info.fingerprint[i]);
+        if (i == 9) console_printf("\r\n  ");
+    }
+    console_printf("\r\n");
+    console_printf("Received at: %lu\r\n", (unsigned long)info.received_at);
+    console_printf("Cross-signed: %s\r\n", info.signed_by_me ? "Yes" : "No");
+
+    if (info.signed_by_me) {
+        uint8_t sig[64];
+        size_t sig_len;
+        if (gpg_received_get_signature((uint8_t)idx, sig, &sig_len)) {
+            console_printf("Signature: ");
+            for (size_t i = 0; i < sig_len; i++) {
+                console_printf("%02X", sig[i]);
+            }
+            console_printf("\r\n");
+        }
+    }
+}
+
+static void cmd_gpg_cross_sign(char *args) {
+    char *idx_str = trim(args);
+    if (strlen(idx_str) == 0) {
+        console_printf("ERROR: Usage: GPG_CROSS_SIGN <index>\r\n");
+        return;
+    }
+
+    int idx = atoi(idx_str);
+    if (idx < 0 || idx >= gpg_received_count()) {
+        console_printf("ERROR: Invalid index (0-%u)\r\n", gpg_received_count() - 1);
+        return;
+    }
+
+    if (!gpg_is_initialized()) {
+        console_printf("ERROR: No GPG key configured - cannot sign\r\n");
+        return;
+    }
+
+    gpg_received_key_info_t info;
+    if (!gpg_received_get_info((uint8_t)idx, &info)) {
+        console_printf("ERROR: Failed to get key info\r\n");
+        return;
+    }
+
+    console_printf("Cross-signing key: %s\r\n", info.user_id);
+    console_flush();
+
+    if (gpg_cross_sign((uint8_t)idx)) {
+        console_printf("OK: Key cross-signed\r\n");
+    } else {
+        console_printf("ERROR: Failed to cross-sign\r\n");
+    }
+}
+
+static void cmd_gpg_recv_delete(char *args) {
+    char *idx_str = trim(args);
+    if (strlen(idx_str) == 0) {
+        console_printf("ERROR: Usage: GPG_RECV_DELETE <index>\r\n");
+        return;
+    }
+
+    int idx = atoi(idx_str);
+    if (idx < 0 || idx >= gpg_received_count()) {
+        console_printf("ERROR: Invalid index (0-%u)\r\n", gpg_received_count() - 1);
+        return;
+    }
+
+    if (gpg_received_delete((uint8_t)idx)) {
+        console_printf("OK: Key deleted\r\n");
+    } else {
+        console_printf("ERROR: Failed to delete key\r\n");
+    }
+}
+
+static void cmd_gpg_export_signed(char *args) {
+    char *idx_str = trim(args);
+    if (strlen(idx_str) == 0) {
+        console_printf("ERROR: Usage: GPG_EXPORT_SIGNED <index>\r\n");
+        return;
+    }
+
+    int idx = atoi(idx_str);
+    if (idx < 0 || idx >= gpg_received_count()) {
+        console_printf("ERROR: Invalid index (0-%u)\r\n", gpg_received_count() - 1);
+        return;
+    }
+
+    // Check if key is signed
+    gpg_received_key_info_t info;
+    if (!gpg_received_get_info((uint8_t)idx, &info)) {
+        console_printf("ERROR: Failed to get key info\r\n");
+        return;
+    }
+
+    if (!info.signed_by_me) {
+        console_printf("ERROR: Key not signed - use GPG_CROSS_SIGN %d first\r\n", idx);
+        return;
+    }
+
+    // Export as armored OpenPGP
+    static char armored_buf[1536];
+    size_t out_len;
+    if (!gpg_export_signed_key_armored((uint8_t)idx, armored_buf, sizeof(armored_buf), &out_len)) {
+        console_printf("ERROR: Export failed\r\n");
+        return;
+    }
+
+    console_printf("OK: RFC 4880 OpenPGP format (%zu bytes)\r\n", out_len);
+    console_printf("Import with: gpg --import\r\n\r\n");
+    console_printf("%s", armored_buf);
+    console_flush();
+}
+
 #endif // FEATURE_GPG
 
 // ============================================================================
@@ -1631,7 +1805,7 @@ static void cmd_ca_export_root(void) {
 }
 
 // Multi-line input buffer (for CSR, cert import, etc.)
-static char g_pem_buffer[4096];
+EXT_RAM_BSS_ATTR static char g_pem_buffer[4096];
 static int g_pem_buffer_pos = 0;
 
 // Input modes
@@ -1646,7 +1820,7 @@ typedef enum {
 static pem_input_mode_t g_pem_input_mode = PEM_INPUT_NONE;
 
 // For CA_IMPORT: store key while waiting for cert
-static char g_import_key_buffer[2048];
+EXT_RAM_BSS_ATTR static char g_import_key_buffer[2048];
 static size_t g_import_key_len = 0;
 
 // Legacy compatibility
@@ -2165,6 +2339,12 @@ static void execute_command(char *cmd) {
     if (strncasecmp(cmd, "GPG_SIGN ", 9) == 0) { cmd_gpg_sign(cmd + 9); return; }
     if (strcasecmp(cmd, "GPG_EXPORT_PUB") == 0) { cmd_gpg_export_pub(); return; }
     if (strcasecmp(cmd, "GPG_RESET") == 0) { cmd_gpg_reset(); return; }
+    // GPG Received Keys (Cross-Signing)
+    if (strcasecmp(cmd, "GPG_RECV_LIST") == 0) { cmd_gpg_recv_list(); return; }
+    if (strncasecmp(cmd, "GPG_RECV_INFO ", 14) == 0) { cmd_gpg_recv_info(cmd + 14); return; }
+    if (strncasecmp(cmd, "GPG_CROSS_SIGN ", 15) == 0) { cmd_gpg_cross_sign(cmd + 15); return; }
+    if (strncasecmp(cmd, "GPG_EXPORT_SIGNED ", 18) == 0) { cmd_gpg_export_signed(cmd + 18); return; }
+    if (strncasecmp(cmd, "GPG_RECV_DELETE ", 16) == 0) { cmd_gpg_recv_delete(cmd + 16); return; }
 #endif
 
     console_printf("ERROR: Unknown command. Type HELP for available commands.\r\n");

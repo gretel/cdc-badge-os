@@ -24,7 +24,7 @@ if(EXISTS "${FEATURE_FLAGS_PATH}")
                 "ccid.cpp"
                 "apdu.cpp"
             INCLUDE_DIRS "."
-            REQUIRES cdc_badge gpg
+            REQUIRES cdc_badge gpg cdc_utils
             PRIV_REQUIRES esp_system nvs_flash mbedtls tinyusb
         )
     else()

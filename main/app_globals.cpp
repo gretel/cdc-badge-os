@@ -85,7 +85,7 @@ view_list_screen_t g_fido_list;
 view_list_item_t g_fido_items[FIDO2_MAX_CREDENTIALS];
 uint8_t g_fido_sort_map[FIDO2_MAX_CREDENTIALS];  // Maps display index -> store index
 uint8_t g_fido_selected_index = 0;
-char g_fido_detail_text[256];
+char g_fido_detail_text[384];
 
 // Context menu for FIDO2 list
 view_context_menu_t g_context_menu;
@@ -262,4 +262,24 @@ view_list_item_t g_ca_validity_items[] = {
     {"20 Years", VIEW_LIST_ICON_NONE, false},
     {"25 Years", VIEW_LIST_ICON_NONE, false}
 };
+#endif
+
+#if FEATURE_SAO
+char g_sao_info_text[256];
+uint32_t g_sao_last_scan_ms = 0;
+#endif
+
+#if FEATURE_GPG
+view_list_screen_t g_gpg_menu;
+view_list_item_t g_gpg_items[GPG_IDX_COUNT];
+char g_gpg_detail_text[512];
+gpg_wizard_t g_gpg_wizard;
+view_list_screen_t g_gpg_curve_menu;
+view_list_item_t g_gpg_curve_items[] = {
+    {"Ed25519", VIEW_LIST_ICON_NONE, false},
+    {"P-256 (NIST)", VIEW_LIST_ICON_NONE, false}
+};
+view_list_screen_t g_gpg_recv_list;
+view_list_item_t g_gpg_recv_items[16];  // GPG_RECV_MAX_KEYS
+uint8_t g_gpg_recv_selected = 0;
 #endif

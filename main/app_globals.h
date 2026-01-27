@@ -153,6 +153,25 @@ typedef enum {
     APP_STATE_CA_WIZARD_STATE,
     APP_STATE_CA_WIZARD_VALIDITY,
 #endif
+#if FEATURE_SAO
+    // SAO state (direct info view, no submenu)
+    APP_STATE_SAO_INFO,
+#endif
+#if FEATURE_GPG
+    // GPG states
+    APP_STATE_GPG_MENU,
+    APP_STATE_GPG_DETAILS,
+    APP_STATE_GPG_GENERATING,
+    APP_STATE_GPG_QR_CODE,
+    APP_STATE_GPG_RESET_CONFIRM,
+    // GPG Key Generation Wizard
+    APP_STATE_GPG_WIZARD_NAME,
+    APP_STATE_GPG_WIZARD_EMAIL,
+    APP_STATE_GPG_WIZARD_CURVE,
+    // GPG Received Keys
+    APP_STATE_GPG_RECV_LIST,
+    APP_STATE_GPG_RECV_DETAIL,
+#endif
 } app_state_t;
 
 // Menu item indices (adjusted for feature flags)
@@ -165,6 +184,9 @@ enum {
 #endif
 #if FEATURE_FIDO2
     MENU_IDX_FIDO2,
+#endif
+#if FEATURE_GPG
+    MENU_IDX_GPG,
 #endif
 #if FEATURE_CA
     MENU_IDX_CA,
@@ -183,10 +205,14 @@ enum {
 #if FEATURE_BLE_UART
     TOOLS_IDX_BLE_SERIAL,
 #endif
+#if FEATURE_SAO
+    TOOLS_IDX_SAO,
+#endif
     TOOLS_IDX_NTP,
     TOOLS_IDX_SELFTEST,
     TOOLS_IDX_COUNT
 };
+
 
 // Settings Menu indices (WiFi moved to Tools > WiFi > Setup)
 enum {
@@ -215,6 +241,18 @@ enum {
     CA_IDX_QR_CODE,
     CA_IDX_GENERATE,  // Generate/Reset as last item
     CA_IDX_COUNT
+};
+#endif
+
+#if FEATURE_GPG
+// GPG Menu indices
+enum {
+    GPG_IDX_STATUS,
+    GPG_IDX_EXPORT,
+    GPG_IDX_QR_CODE,
+    GPG_IDX_RECV_KEYS,    // Received keys list
+    GPG_IDX_GENERATE,     // Generate/Reset as last item
+    GPG_IDX_COUNT
 };
 #endif
 
@@ -255,6 +293,16 @@ typedef struct {
     char state[CA_FIELD_MAX_LEN];    // State/Province (optional)
     uint8_t validity_years;          // 1-25 years
 } ca_wizard_t;
+#endif
+
+#if FEATURE_GPG
+// GPG Wizard data (Key generation)
+#define GPG_FIELD_MAX_LEN 48
+typedef struct {
+    char name[GPG_FIELD_MAX_LEN];    // User name (e.g., "Max Mustermann")
+    char email[GPG_FIELD_MAX_LEN];   // Email address
+    uint8_t curve;                   // CDC_CURVE_ED25519 or CDC_CURVE_P256
+} gpg_wizard_t;
 #endif
 
 typedef struct {
@@ -318,7 +366,7 @@ extern view_list_screen_t g_fido_list;
 extern view_list_item_t g_fido_items[FIDO2_MAX_CREDENTIALS];
 extern uint8_t g_fido_sort_map[FIDO2_MAX_CREDENTIALS];  // Maps display index -> store index
 extern uint8_t g_fido_selected_index;
-extern char g_fido_detail_text[256];
+extern char g_fido_detail_text[384];
 extern view_context_menu_t g_context_menu;
 extern view_context_item_t g_fido_context_items_buf[5];
 extern uint8_t g_fido_context_items_count;
@@ -536,4 +584,21 @@ extern char g_ca_detail_text[512];
 extern ca_wizard_t g_ca_wizard;
 extern view_list_screen_t g_ca_validity_menu;
 extern view_list_item_t g_ca_validity_items[6];  // 1, 5, 10, 15, 20, 25 years
+#endif
+
+#if FEATURE_SAO
+extern char g_sao_info_text[256];
+extern uint32_t g_sao_last_scan_ms;
+#endif
+
+#if FEATURE_GPG
+extern view_list_screen_t g_gpg_menu;
+extern view_list_item_t g_gpg_items[GPG_IDX_COUNT];
+extern char g_gpg_detail_text[512];
+extern gpg_wizard_t g_gpg_wizard;
+extern view_list_screen_t g_gpg_curve_menu;
+extern view_list_item_t g_gpg_curve_items[2];  // Ed25519, P-256
+extern view_list_screen_t g_gpg_recv_list;
+extern view_list_item_t g_gpg_recv_items[16];  // GPG_RECV_MAX_KEYS
+extern uint8_t g_gpg_recv_selected;
 #endif

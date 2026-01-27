@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "tropic01.h"  // For CDC_CURVE_ED25519/P256
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,13 +18,14 @@ extern "C" {
 // ============================================================================
 
 #define GPG_USER_ID_MAX         64      // "Name <email@example.com>"
-#define GPG_FINGERPRINT_LEN     20      // SHA-1 fingerprint for GPG compatibility
+#define GPG_FINGERPRINT_LEN     20      // SHA-1 V4 fingerprint for GnuPG 2.x compatibility
+#define GPG_FINGERPRINT_V5_LEN  32      // SHA-256 V5 fingerprint (RFC 9580)
 #define GPG_PUBKEY_MAX_LEN      64      // 32 for Ed25519, 64 for P-256
 #define GPG_SIGNATURE_MAX_LEN   64      // R+S for ECDSA/EdDSA
 
 // Magic bytes for metadata validation
 #define GPG_METADATA_MAGIC      0x4750  // "GP"
-#define GPG_METADATA_VERSION    1
+#define GPG_METADATA_VERSION    2       // Version 2: adds V5 fingerprint
 
 // ============================================================================
 // Types
@@ -46,11 +48,11 @@ typedef struct __attribute__((packed)) {
     uint8_t curve;                          // CDC_CURVE_ED25519 or CDC_CURVE_P256
     char user_id[GPG_USER_ID_MAX];          // User ID
     uint32_t created_at;                    // Unix timestamp
-    uint8_t fingerprint[GPG_FINGERPRINT_LEN]; // GPG fingerprint
+    uint8_t fingerprint[GPG_FINGERPRINT_LEN]; // V4 fingerprint (SHA-1, 20 bytes)
     uint8_t pubkey[GPG_PUBKEY_MAX_LEN];     // Public key
     uint8_t pubkey_len;                     // Actual pubkey length
     uint32_t sign_count;                    // Signature counter
-    uint8_t reserved[32];                   // Future use
+    uint8_t fingerprint_v5[GPG_FINGERPRINT_V5_LEN]; // V5 fingerprint (SHA-256, 32 bytes)
 } gpg_metadata_t;
 
 // ============================================================================
@@ -158,12 +160,22 @@ bool gpg_export_pubkey_pem(char *buf, size_t size, size_t *out_len);
 bool gpg_export_pubkey_raw(uint8_t *pubkey, size_t *pubkey_len, uint8_t *curve);
 
 /**
- * Get GPG fingerprint.
+ * Get GPG V4 fingerprint (SHA-1, 20 bytes).
+ * Used by GnuPG 2.x for key identification.
  *
  * @param fp_out Output buffer (20 bytes)
  * @return true on success
  */
 bool gpg_get_fingerprint(uint8_t *fp_out);
+
+/**
+ * Get GPG V5 fingerprint (SHA-256, 32 bytes).
+ * RFC 9580 compliant fingerprint for future GnuPG versions.
+ *
+ * @param fp_out Output buffer (32 bytes)
+ * @return true on success
+ */
+bool gpg_get_fingerprint_v5(uint8_t *fp_out);
 
 // ============================================================================
 // Signing
@@ -185,13 +197,26 @@ bool gpg_sign_hash(const uint8_t *hash, size_t hash_len,
 // Cross-Signing (Phase 3)
 // ============================================================================
 
+#define GPG_RECV_MAX_KEYS       16      // Max received keys in NVS
+#define GPG_RECV_FLAG_VERIFIED  0x01    // Verified in person
+
+// Received key info (for listing)
+typedef struct {
+    uint8_t curve;
+    char user_id[GPG_USER_ID_MAX];
+    uint8_t fingerprint[GPG_FINGERPRINT_LEN];
+    uint32_t received_at;
+    bool signed_by_me;                  // Has my cross-signature
+    uint8_t flags;
+} gpg_received_key_info_t;
+
 /**
  * Receive a public key from another badge.
- * Stores in R-Memory slots 140-149.
+ * Stores in NVS (namespace: gpg_recv).
  *
  * @param pubkey Public key bytes
  * @param pubkey_len Public key length
- * @param curve Curve type
+ * @param curve Curve type (CDC_CURVE_ED25519 or CDC_CURVE_P256)
  * @param user_id User ID string
  * @param fingerprint GPG fingerprint (20 bytes)
  * @return true on success
@@ -205,12 +230,91 @@ bool gpg_receive_pubkey(const uint8_t *pubkey, size_t pubkey_len, uint8_t curve,
 uint8_t gpg_received_count(void);
 
 /**
- * Cross-sign a received public key.
+ * Get info about a received key.
  *
- * @param index Index of received key (0-9)
+ * @param index Index (0 to gpg_received_count()-1)
+ * @param info Output structure
+ * @return true on success
+ */
+bool gpg_received_get_info(uint8_t index, gpg_received_key_info_t *info);
+
+/**
+ * Get full received key data by fingerprint.
+ *
+ * @param fingerprint 20-byte fingerprint
+ * @param pubkey Output buffer for public key (64 bytes max)
+ * @param pubkey_len Output: actual length
+ * @param curve Output: curve type
+ * @return true on success
+ */
+bool gpg_received_get_key(const uint8_t *fingerprint, uint8_t *pubkey,
+                          size_t *pubkey_len, uint8_t *curve);
+
+/**
+ * Cross-sign a received public key.
+ * Creates a signature over the key binding (fingerprint + user_id).
+ *
+ * @param index Index of received key
  * @return true on success
  */
 bool gpg_cross_sign(uint8_t index);
+
+/**
+ * Delete a received key.
+ *
+ * @param index Index of key to delete
+ * @return true on success
+ */
+bool gpg_received_delete(uint8_t index);
+
+/**
+ * Get cross-signature for a received key (raw signature).
+ *
+ * @param index Index of received key
+ * @param sig_out Output buffer (64 bytes)
+ * @param sig_len Output: actual signature length
+ * @return true if key is signed, false otherwise
+ */
+bool gpg_received_get_signature(uint8_t index, uint8_t *sig_out, size_t *sig_len);
+
+/**
+ * Export a signed key as OpenPGP packet stream.
+ * Creates RFC 4880 compliant output that can be imported into GnuPG.
+ * Includes: Public Key Packet + User ID Packet + Signature Packet (Type 0x10)
+ *
+ * @param index Index of received key (must be signed)
+ * @param buf Output buffer
+ * @param buf_size Buffer size (recommended: 512+ bytes)
+ * @param out_len Output: actual length
+ * @return true on success
+ */
+bool gpg_export_signed_key(uint8_t index, uint8_t *buf, size_t buf_size, size_t *out_len);
+
+/**
+ * Export a signed key as ASCII-armored OpenPGP.
+ * Same as gpg_export_signed_key but with Base64 + headers.
+ *
+ * @param index Index of received key (must be signed)
+ * @param buf Output buffer (char*)
+ * @param buf_size Buffer size (recommended: 1024+ bytes)
+ * @param out_len Output: actual length
+ * @return true on success
+ */
+bool gpg_export_signed_key_armored(uint8_t index, char *buf, size_t buf_size, size_t *out_len);
+
+/**
+ * Export own public key for BLE broadcast.
+ * Returns data in format suitable for gpg_receive_pubkey().
+ *
+ * @param pubkey Output buffer (64 bytes)
+ * @param pubkey_len Output: actual length
+ * @param curve Output: curve type
+ * @param user_id Output: user ID string (64 bytes)
+ * @param fingerprint Output: fingerprint (20 bytes)
+ * @return true on success
+ */
+bool gpg_export_for_broadcast(uint8_t *pubkey, size_t *pubkey_len, uint8_t *curve,
+                              char *user_id, uint8_t *fingerprint);
 
 #ifdef __cplusplus
 }

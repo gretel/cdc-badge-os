@@ -20,13 +20,12 @@
 extern "C" {
 #endif
 
-// OpenPGP Application ID (AID)
-extern const uint8_t OPENPGP_AID[];
+// OpenPGP Application ID (AID) - initialized dynamically in openpgp_init()
+extern const uint8_t* OPENPGP_AID;
 extern const uint8_t OPENPGP_AID_LEN;
 
-// ATR (Answer To Reset) for OpenPGP card
-extern const uint8_t OPENPGP_ATR[];
-extern const uint8_t OPENPGP_ATR_LEN;
+// NOTE: ATR is defined in ccid.cpp and accessed via ccid_get_atr()
+// Do not use OPENPGP_ATR - use ccid_get_atr() instead!
 
 // Algorithm identifiers
 #define ALGO_RSA        0x01
@@ -40,11 +39,37 @@ extern const uint8_t OPENPGP_ATR_LEN;
 #define KEY_AUT         0xA4  // Authentication key
 
 // Data Object tags (selected)
-#define DO_FP_SIG       0x00C7  // Fingerprint Signature key
-#define DO_FP_DEC       0x00C8  // Fingerprint Decryption key
-#define DO_FP_AUT       0x00C9  // Fingerprint Authentication key
-#define DO_PW_STATUS    0x00C4  // PW Status Bytes
-#define DO_SIG_COUNT    0x0093  // Digital Signature Counter
+#define DO_AID              0x004F  // Application Identifier
+#define DO_HIST_BYTES       0x5F52  // Historical bytes
+#define DO_CARDHOLDER       0x0065  // Cardholder Related Data
+#define DO_APP_RELATED      0x006E  // Application Related Data
+#define DO_DISCRET_DO       0x0073  // Discretionary Data Objects
+#define DO_EXT_CAP          0x00C0  // Extended Capabilities
+#define DO_ALGO_SIG         0x00C1  // Algorithm Attributes: Signature
+#define DO_ALGO_DEC         0x00C2  // Algorithm Attributes: Decryption
+#define DO_ALGO_AUT         0x00C3  // Algorithm Attributes: Authentication
+#define DO_PW_STATUS        0x00C4  // PW Status Bytes
+#define DO_FP_SIG           0x00C7  // Fingerprint Signature key
+#define DO_FP_DEC           0x00C8  // Fingerprint Decryption key
+#define DO_FP_AUT           0x00C9  // Fingerprint Authentication key
+#define DO_CA_FP_1          0x00CA  // CA Fingerprint 1
+#define DO_CA_FP_2          0x00CB  // CA Fingerprint 2
+#define DO_CA_FP_3          0x00CC  // CA Fingerprint 3
+#define DO_GEN_TIME_SIG     0x00CD  // Generation time: Signature
+#define DO_GEN_TIME_DEC     0x00CE  // Generation time: Decryption
+#define DO_GEN_TIME_AUT     0x00CF  // Generation time: Authentication
+#define DO_SIG_COUNT        0x0093  // Digital Signature Counter
+#define DO_URL              0x5F50  // URL for public key retrieval
+#define DO_LOGIN            0x005E  // Login data
+#define DO_NAME             0x005B  // Name (Cardholder)
+#define DO_LANG_PREF        0x5F2D  // Language preference
+#define DO_SEX              0x5F35  // Sex
+#define DO_UIF_SIG          0x00D6  // User Interaction Flag: Signature
+#define DO_UIF_DEC          0x00D7  // User Interaction Flag: Decryption
+#define DO_UIF_AUT          0x00D8  // User Interaction Flag: Authentication
+#define DO_KEY_INFO         0x00DE  // Key Information
+#define DO_SEC_TPL          0x007A  // Security Support Template
+#define DO_KDF              0x00F9  // KDF (Key Derivation Function)
 
 // Status Words (SW1-SW2)
 #define SW_OK                           0x9000
@@ -73,6 +98,13 @@ bool openpgp_is_selected(void);
 
 // Get current signature count
 uint32_t openpgp_get_sig_count(void);
+
+// Update fingerprint for a key type (call after key generation via serial cmd)
+// key_type: KEY_SIG (0xB6), KEY_DEC (0xB8), KEY_AUT (0xA4)
+// fingerprint: 20-byte SHA-1 fingerprint (V4 format)
+// gen_time: Unix timestamp of key generation (big-endian)
+bool openpgp_set_key_fingerprint(uint8_t key_type, const uint8_t *fingerprint,
+                                  uint32_t gen_time);
 
 #ifdef __cplusplus
 }

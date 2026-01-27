@@ -262,6 +262,43 @@ static const char* strings_en[] = {
     "Enter code from other device", // STR_PAIRING_PIN_MSG
 
     "vCard too big",                // STR_VCARD_TOO_BIG
+
+    // SAO Port
+    "SAO",                          // STR_SAO
+    "Scan",                         // STR_SAO_SCAN
+    "Info",                         // STR_SAO_INFO
+    "No SAO found",                 // STR_SAO_NOT_FOUND
+    "Scanning SAO...",              // STR_SAO_SCANNING
+
+    // GPG Key Management
+    "GPG Keys",                     // STR_GPG_MENU
+    "Status",                       // STR_GPG_STATUS
+    "Generate Key",                 // STR_GPG_GENERATE
+    "Export Public Key",            // STR_GPG_EXPORT
+    "Reset Key",                    // STR_GPG_RESET
+    "No GPG key",                   // STR_GPG_NOT_INIT
+    "GPG key ready",                // STR_GPG_INITIALIZED
+    "Generating...",                // STR_GPG_GENERATING
+    "Key generated!",               // STR_GPG_GENERATED
+    "Generation failed",            // STR_GPG_FAILED
+    "Fingerprint",                  // STR_GPG_FINGERPRINT
+    "User ID",                      // STR_GPG_USER_ID
+    "Curve",                        // STR_GPG_CURVE
+    "Signatures",                   // STR_GPG_SIGN_COUNT
+    "Enter Name",                   // STR_GPG_ENTER_NAME
+    "Enter Email",                  // STR_GPG_ENTER_EMAIL
+    "Select Curve",                 // STR_GPG_SELECT_CURVE
+    "Show QR Code",                 // STR_GPG_SHOW_QR
+    "GPG Public Key",               // STR_GPG_QR_PUBKEY
+    "Delete key? Y=Yes N=No",       // STR_GPG_RESET_CONFIRM
+    "Key deleted",                  // STR_GPG_RESET_SUCCESS
+    "Received Keys",                // STR_GPG_RECV_LIST
+    "Received Keys",                // STR_GPG_RECV_KEYS
+    "No received keys",             // STR_GPG_RECV_EMPTY
+    "Key Details",                  // STR_GPG_RECV_DETAIL
+    "Cross-Sign",                   // STR_GPG_CROSS_SIGN
+    "Signed!",                      // STR_GPG_SIGNED
+    "Generation failed",            // STR_GPG_GENERATE_FAILED
 };
 
 // Translation strings - German
@@ -507,6 +544,43 @@ static const char* strings_de[] = {
     "Code vom anderen Geraet",      // STR_PAIRING_PIN_MSG
 
     "vCard zu gross",               // STR_VCARD_TOO_BIG
+
+    // SAO Port
+    "SAO",                          // STR_SAO
+    "Scannen",                      // STR_SAO_SCAN
+    "Info",                         // STR_SAO_INFO
+    "Kein SAO gefunden",            // STR_SAO_NOT_FOUND
+    "Scanne SAO...",                // STR_SAO_SCANNING
+
+    // GPG Key Management
+    "GPG-Keys",                     // STR_GPG_MENU
+    "Status",                       // STR_GPG_STATUS
+    "Key generieren",               // STR_GPG_GENERATE
+    "Public Key export",            // STR_GPG_EXPORT
+    "Key loeschen",                 // STR_GPG_RESET
+    "Kein GPG-Key",                 // STR_GPG_NOT_INIT
+    "GPG-Key bereit",               // STR_GPG_INITIALIZED
+    "Generiere...",                 // STR_GPG_GENERATING
+    "Key generiert!",               // STR_GPG_GENERATED
+    "Generierung fehlg.",           // STR_GPG_FAILED
+    "Fingerprint",                  // STR_GPG_FINGERPRINT
+    "User-ID",                      // STR_GPG_USER_ID
+    "Kurve",                        // STR_GPG_CURVE
+    "Signaturen",                   // STR_GPG_SIGN_COUNT
+    "Name eingeben",                // STR_GPG_ENTER_NAME
+    "E-Mail eingeben",              // STR_GPG_ENTER_EMAIL
+    "Kurve waehlen",                // STR_GPG_SELECT_CURVE
+    "QR-Code anzeigen",             // STR_GPG_SHOW_QR
+    "GPG Public Key",               // STR_GPG_QR_PUBKEY
+    "Key loeschen? Y=Ja N=Nein",    // STR_GPG_RESET_CONFIRM
+    "Key geloescht",                // STR_GPG_RESET_SUCCESS
+    "Empfangene Keys",              // STR_GPG_RECV_LIST
+    "Empfangene Keys",              // STR_GPG_RECV_KEYS
+    "Keine empf. Keys",             // STR_GPG_RECV_EMPTY
+    "Key-Details",                  // STR_GPG_RECV_DETAIL
+    "Cross-Signieren",              // STR_GPG_CROSS_SIGN
+    "Signiert!",                    // STR_GPG_SIGNED
+    "Generierung fehlg.",           // STR_GPG_GENERATE_FAILED
 };
 
 // All language string tables

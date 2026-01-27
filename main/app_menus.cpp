@@ -4,6 +4,9 @@
 #if FEATURE_CA
 #include "ca.h"
 #endif
+#if FEATURE_GPG
+#include "gpg.h"
+#endif
 #if FEATURE_BLE_UART
 #include "ble_uart.h"
 #endif
@@ -21,6 +24,9 @@ void build_main_menu(void) {
 #endif
 #if FEATURE_FIDO2
     g_menu_items[g_menu_item_count++] = {i18n_str(STR_FIDO2_KEYS), VIEW_LIST_ICON_NONE, false};
+#endif
+#if FEATURE_GPG
+    g_menu_items[g_menu_item_count++] = {i18n_str(STR_GPG_MENU), VIEW_LIST_ICON_NONE, false};
 #endif
 #if FEATURE_CA
     g_menu_items[g_menu_item_count++] = {i18n_str(STR_CA_MENU), VIEW_LIST_ICON_NONE, false};
@@ -42,6 +48,9 @@ void build_tools_menu(void) {
         ble_active = ble_uart_is_initialized();
     }
     g_tools_items[g_tools_item_count++] = {i18n_str(STR_BLUETOOTH), VIEW_LIST_ICON_BLE, !ble_active};
+#endif
+#if FEATURE_SAO
+    g_tools_items[g_tools_item_count++] = {i18n_str(STR_SAO), VIEW_LIST_ICON_NONE, false};
 #endif
     g_tools_items[g_tools_item_count++] = {i18n_str(STR_NTP_SYNC), VIEW_LIST_ICON_NONE, false};
     g_tools_items[g_tools_item_count++] = {i18n_str(STR_SYSTEM_TEST), VIEW_LIST_ICON_NONE, false};
@@ -122,3 +131,19 @@ void build_ca_menu(void) {
     }
 }
 #endif
+
+#if FEATURE_GPG
+void build_gpg_menu(void) {
+    g_gpg_items[GPG_IDX_STATUS] = {i18n_str(STR_GPG_STATUS), VIEW_LIST_ICON_NONE, false};
+    g_gpg_items[GPG_IDX_EXPORT] = {i18n_str(STR_GPG_EXPORT), VIEW_LIST_ICON_NONE, false};
+    g_gpg_items[GPG_IDX_QR_CODE] = {i18n_str(STR_GPG_SHOW_QR), VIEW_LIST_ICON_NONE, false};
+    g_gpg_items[GPG_IDX_RECV_KEYS] = {i18n_str(STR_GPG_RECV_LIST), VIEW_LIST_ICON_NONE, false};
+    // Dynamic: "Generate" if no key exists, "Reset" if key exists (last item)
+    if (gpg_is_initialized()) {
+        g_gpg_items[GPG_IDX_GENERATE] = {i18n_str(STR_GPG_RESET), VIEW_LIST_ICON_NONE, false};
+    } else {
+        g_gpg_items[GPG_IDX_GENERATE] = {i18n_str(STR_GPG_GENERATE), VIEW_LIST_ICON_NONE, false};
+    }
+}
+#endif
+

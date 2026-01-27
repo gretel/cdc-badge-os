@@ -2,10 +2,15 @@
 
 #if FEATURE_BLE_BADGE
 
+#include "ble_core.h"
 #include "badge_settings.h"
 #include "cdc_log.h"
 #include "cdc_time.h"
 #include "vcard_store.h"
+
+#if FEATURE_GPG
+#include "gpg.h"
+#endif
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/timers.h"
@@ -25,7 +30,7 @@
 #define MAX_PEERS 16
 #define BLACKLIST_MAX 32
 #define BLACKLIST_TTL_MS (60 * 60 * 1000)
-#define BLE_BADGE_APP_ID 0
+#define BLE_BADGE_APP_ID BLE_APP_BADGE  // From ble_core.h
 #define BLE_BADGE_TX_MTU_DEFAULT 23
 #define BLE_BADGE_TX_PAYLOAD_DEFAULT 20
 #define EXCHANGE_TIMEOUT_MS 30000
@@ -37,6 +42,27 @@
 #define VCARD_OP_DATA_START  0x81
 #define VCARD_OP_DATA_CONT   0x82
 #define VCARD_OP_DATA_END    0x83
+
+#if FEATURE_GPG
+// GPG Key Exchange Opcodes (separate namespace from vCard)
+#define GPG_OP_WRITE_START   0x11
+#define GPG_OP_WRITE_CONT    0x12
+#define GPG_OP_WRITE_END     0x13
+
+#define GPG_OP_DATA_START    0x91
+#define GPG_OP_DATA_CONT     0x92
+#define GPG_OP_DATA_END      0x93
+
+// GPG payload format:
+// [1]  curve
+// [1]  pubkey_len
+// [N]  pubkey (32 or 64 bytes)
+// [20] fingerprint
+// [1]  user_id_len
+// [N]  user_id (max 63 bytes)
+// Total max: 1+1+64+20+1+63 = 150 bytes
+#define GPG_PAYLOAD_MAX_LEN  150
+#endif
 
 static bool g_initialized = false;
 static bool g_adv_requested = false;
@@ -136,6 +162,19 @@ static size_t g_local_tx_len = 0;
 static size_t g_local_tx_offset = 0;
 static char g_local_tx_buf[VCARD_MAX_LEN + 1];
 
+#if FEATURE_GPG
+// GPG exchange state (reuses vCard exchange infrastructure)
+static bool g_gpg_exchange_mode = false;
+static bool g_gpg_exchange_result_pending = false;
+static bool g_gpg_exchange_result_success = false;
+static uint8_t g_gpg_rx_buf[GPG_PAYLOAD_MAX_LEN];
+static size_t g_gpg_rx_len = 0;
+static size_t g_gpg_rx_expected = 0;
+static uint8_t g_gpg_tx_buf[GPG_PAYLOAD_MAX_LEN];
+static size_t g_gpg_tx_len = 0;
+static size_t g_gpg_tx_offset = 0;
+#endif
+
 typedef struct {
     bool used;
     uint8_t addr[6];
@@ -210,6 +249,9 @@ static void server_send_next_chunk(void);
 static void client_send_next_chunk(void);
 static void update_adv_state(void);
 static void update_scan_state(void);
+#if FEATURE_GPG
+static bool gpg_deserialize_and_store(const uint8_t *buf, size_t len);
+#endif
 
 // UUIDs (128-bit, little-endian)
 static const uint8_t vcard_service_uuid[16] = {
@@ -293,6 +335,19 @@ static void exchange_finish(bool success) {
     g_exchange_result_success = success;
     g_exchange_force_receive = false;
 
+#if FEATURE_GPG
+    // Handle GPG exchange result
+    if (g_gpg_exchange_mode) {
+        g_gpg_exchange_result_pending = true;
+        g_gpg_exchange_result_success = success;
+        g_gpg_exchange_mode = false;
+        g_gpg_tx_len = 0;
+        g_gpg_tx_offset = 0;
+        g_gpg_rx_len = 0;
+        g_gpg_rx_expected = 0;
+    }
+#endif
+
     if (g_exchange_timer) {
         xTimerStop(g_exchange_timer, 0);
     }
@@ -362,6 +417,56 @@ static void server_send_next_chunk(void) {
 
 static void client_send_next_chunk(void) {
     if (g_exchange_state != EXCHANGE_SENDING_LOCAL) return;
+
+#if FEATURE_GPG
+    // GPG mode uses separate buffers and opcodes
+    if (g_gpg_exchange_mode) {
+        if (g_gpg_tx_offset >= g_gpg_tx_len) {
+            g_exchange_state = EXCHANGE_WAITING_ACK;
+            return;
+        }
+        if (g_remote_rx_handle == 0) {
+            exchange_finish(false);
+            return;
+        }
+
+        uint8_t buf[64];
+        size_t max_payload = g_exchange_mtu_payload > 0 ? g_exchange_mtu_payload : BLE_BADGE_TX_PAYLOAD_DEFAULT;
+        if (max_payload > sizeof(buf)) max_payload = sizeof(buf);
+
+        size_t remaining = g_gpg_tx_len - g_gpg_tx_offset;
+        size_t hdr_len = 1;
+        uint8_t opcode = GPG_OP_WRITE_CONT;
+        if (g_gpg_tx_offset == 0) {
+            opcode = GPG_OP_WRITE_START;
+            hdr_len = 3;
+        } else if (remaining <= (max_payload - 1)) {
+            opcode = GPG_OP_WRITE_END;
+            hdr_len = 1;
+        }
+
+        size_t copy_len = remaining;
+        if (copy_len > (max_payload - hdr_len)) {
+            copy_len = max_payload - hdr_len;
+        }
+
+        buf[0] = opcode;
+        size_t idx = 1;
+        if (opcode == GPG_OP_WRITE_START) {
+            buf[idx++] = (uint8_t)(g_gpg_tx_len & 0xFF);
+            buf[idx++] = (uint8_t)((g_gpg_tx_len >> 8) & 0xFF);
+        }
+        memcpy(&buf[idx], &g_gpg_tx_buf[g_gpg_tx_offset], copy_len);
+        g_gpg_tx_offset += copy_len;
+        size_t total_len = idx + copy_len;
+
+        esp_ble_gattc_write_char(g_gattc_if, g_exchange_conn_id, g_remote_rx_handle,
+                                 total_len, buf, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_MITM);
+        return;
+    }
+#endif
+
+    // vCard mode (original logic)
     if (g_local_tx_offset >= g_local_tx_len) {
         g_exchange_state = EXCHANGE_WAITING_ACK;
         return;
@@ -416,6 +521,16 @@ static void server_handle_rx_chunk(const uint8_t *data, size_t len) {
     uint8_t opcode = data[0];
     size_t idx = 1;
 
+#if FEATURE_GPG
+    // Route GPG opcodes to dedicated handler
+    if (opcode == GPG_OP_WRITE_START || opcode == GPG_OP_WRITE_CONT || opcode == GPG_OP_WRITE_END) {
+        // Forward declaration - defined in GPG section
+        extern void server_handle_gpg_rx_chunk(const uint8_t *data, size_t len);
+        server_handle_gpg_rx_chunk(data, len);
+        return;
+    }
+#endif
+
     if (opcode == VCARD_OP_WRITE_START) {
         if (len < 3) return;
         g_srv_rx_expected = (size_t)data[1] | ((size_t)data[2] << 8);
@@ -460,6 +575,50 @@ static void client_handle_data_chunk(const uint8_t *data, size_t len) {
     if (!data || len == 0) return;
     uint8_t opcode = data[0];
     size_t idx = 1;
+
+#if FEATURE_GPG
+    // Handle GPG data chunks (Server → Client response)
+    if (g_gpg_exchange_mode) {
+        if (opcode == GPG_OP_DATA_START) {
+            if (len < 3) return;
+            g_gpg_rx_expected = (size_t)data[1] | ((size_t)data[2] << 8);
+            g_gpg_rx_len = 0;
+            idx = 3;
+            if (g_gpg_rx_expected > GPG_PAYLOAD_MAX_LEN) {
+                exchange_finish(false);
+                return;
+            }
+        }
+
+        if (idx < len && g_gpg_rx_len < GPG_PAYLOAD_MAX_LEN) {
+            size_t copy_len = len - idx;
+            if (copy_len > (GPG_PAYLOAD_MAX_LEN - g_gpg_rx_len)) {
+                copy_len = GPG_PAYLOAD_MAX_LEN - g_gpg_rx_len;
+            }
+            memcpy(&g_gpg_rx_buf[g_gpg_rx_len], &data[idx], copy_len);
+            g_gpg_rx_len += copy_len;
+        }
+
+        bool done = (g_gpg_rx_expected > 0 && g_gpg_rx_len >= g_gpg_rx_expected) ||
+                    (opcode == GPG_OP_DATA_END);
+        if (done) {
+            // Store received GPG key
+            bool ok = gpg_deserialize_and_store(g_gpg_rx_buf, g_gpg_rx_len);
+            if (!ok) {
+                exchange_finish(false);
+                return;
+            }
+            g_gpg_rx_len = 0;
+            g_gpg_rx_expected = 0;
+            // Now send our GPG key (already serialized in g_gpg_tx_buf)
+            g_exchange_state = EXCHANGE_SENDING_LOCAL;
+            client_send_next_chunk();
+        }
+        return;
+    }
+#endif
+
+    // vCard mode (original logic)
     if (opcode == VCARD_OP_DATA_START) {
         if (len < 3) return;
         g_remote_rx_expected = (size_t)data[1] | ((size_t)data[2] << 8);
@@ -1033,67 +1192,38 @@ static void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_
     }
 }
 
+// Wrapper for gap_event_handler to match ble_core callback signature
+static void gap_event_listener(int event, void *param) {
+    gap_event_handler((esp_gap_ble_cb_event_t)event, (esp_ble_gap_cb_param_t *)param);
+}
+
 bool ble_badge_init(void) {
     if (g_initialized) return true;
 
-    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
-
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    esp_err_t ret = esp_bt_controller_init(&bt_cfg);
-    if (ret != ESP_OK) {
-        LOG_E(BLE_BADGE_TAG, "BT controller init failed: %s", esp_err_to_name(ret));
+    // Initialize shared BLE core (handles BT stack, GAP, security)
+    if (!ble_core_init()) {
+        LOG_E(BLE_BADGE_TAG, "BLE core init failed");
         return false;
     }
 
-    ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);
-    if (ret != ESP_OK) {
-        LOG_E(BLE_BADGE_TAG, "BT controller enable failed: %s", esp_err_to_name(ret));
-        return false;
-    }
+    // Register GAP listener for scan results and pairing events
+    ble_core_register_gap_listener(gap_event_listener, BLE_APP_BADGE);
 
-    ret = esp_bluedroid_init();
-    if (ret != ESP_OK) {
-        LOG_E(BLE_BADGE_TAG, "Bluedroid init failed: %s", esp_err_to_name(ret));
-        return false;
-    }
-
-    ret = esp_bluedroid_enable();
-    if (ret != ESP_OK) {
-        LOG_E(BLE_BADGE_TAG, "Bluedroid enable failed: %s", esp_err_to_name(ret));
-        return false;
-    }
-
-    ret = esp_ble_gap_register_callback(gap_event_handler);
-    if (ret != ESP_OK) {
-        LOG_E(BLE_BADGE_TAG, "GAP callback register failed: %s", esp_err_to_name(ret));
-        return false;
-    }
-
-    ret = esp_ble_gatts_register_callback(gatts_event_handler);
+    // Register GATTS callback for vCard service
+    esp_err_t ret = esp_ble_gatts_register_callback(gatts_event_handler);
     if (ret != ESP_OK) {
         LOG_E(BLE_BADGE_TAG, "GATTS callback register failed: %s", esp_err_to_name(ret));
         return false;
     }
 
+    // Register GATTC callback for exchange client
     ret = esp_ble_gattc_register_callback(gattc_event_handler);
     if (ret != ESP_OK) {
         LOG_E(BLE_BADGE_TAG, "GATTC callback register failed: %s", esp_err_to_name(ret));
         return false;
     }
 
-    // Security configuration (numeric comparison, MITM, bonding)
-    esp_ble_io_cap_t iocap = ESP_IO_CAP_IO;
-    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, sizeof(iocap));
-    esp_ble_auth_req_t auth_req = ESP_LE_AUTH_REQ_SC_MITM_BOND;
-    esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &auth_req, sizeof(auth_req));
-    uint8_t key_size = 16;
-    esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE, &key_size, sizeof(key_size));
-    uint8_t init_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
-    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &init_key, sizeof(init_key));
-    uint8_t rsp_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
-    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(rsp_key));
-    uint8_t auth_option = ESP_BLE_ONLY_ACCEPT_SPECIFIED_AUTH_ENABLE;
-    esp_ble_gap_set_security_param(ESP_BLE_SM_ONLY_ACCEPT_SPECIFIED_SEC_AUTH, &auth_option, sizeof(auth_option));
+    // NOTE: Security is now configured by ble_core
 
     ret = esp_ble_gatts_app_register(BLE_BADGE_APP_ID);
     if (ret != ESP_OK) {
@@ -1106,8 +1236,6 @@ bool ble_badge_init(void) {
         LOG_E(BLE_BADGE_TAG, "GATTC app register failed: %s", esp_err_to_name(ret));
         return false;
     }
-
-    esp_ble_gatt_set_local_mtu(185);
 
     // Get own BLE address to filter self from scan results
     const uint8_t *own_addr = esp_bt_dev_get_address();
@@ -1152,6 +1280,11 @@ void ble_badge_deinit(void) {
 
     esp_ble_gap_stop_advertising();
     esp_ble_gap_stop_scanning();
+
+    // Unregister GAP listener
+    ble_core_register_gap_listener(NULL, BLE_APP_BADGE);
+
+    // Unregister GATT apps (keep BT stack running for other services)
     if (g_gatts_if != ESP_GATT_IF_NONE) {
         esp_ble_gatts_app_unregister(g_gatts_if);
         g_gatts_if = ESP_GATT_IF_NONE;
@@ -1160,10 +1293,10 @@ void ble_badge_deinit(void) {
         esp_ble_gattc_app_unregister(g_gattc_if);
         g_gattc_if = ESP_GATT_IF_NONE;
     }
-    esp_bluedroid_disable();
-    esp_bluedroid_deinit();
-    esp_bt_controller_disable();
-    esp_bt_controller_deinit();
+
+    // NOTE: Do NOT deinit BT stack here - other services may still use it
+    // ble_core_deinit() should only be called when all services are done
+
     g_initialized = false;
 }
 
@@ -1343,5 +1476,189 @@ void ble_badge_confirm_pairing(bool accept) {
 void ble_badge_reply_passkey(bool accept, uint32_t passkey) {
     esp_ble_passkey_reply(g_pairing_addr, accept, passkey);
 }
+
+// ============================================================================
+// GPG Key Exchange over BLE
+// ============================================================================
+#if FEATURE_GPG
+
+// Serialize GPG key for BLE transfer
+static size_t gpg_serialize_key(uint8_t *buf, size_t buf_size) {
+    uint8_t pubkey[64];
+    size_t pubkey_len;
+    uint8_t curve;
+    char user_id[GPG_USER_ID_MAX];
+    uint8_t fingerprint[GPG_FINGERPRINT_LEN];
+
+    if (!gpg_export_for_broadcast(pubkey, &pubkey_len, &curve, user_id, fingerprint)) {
+        return 0;
+    }
+
+    size_t user_id_len = strnlen(user_id, GPG_USER_ID_MAX - 1);
+    size_t total = 1 + 1 + pubkey_len + GPG_FINGERPRINT_LEN + 1 + user_id_len;
+
+    if (total > buf_size) {
+        return 0;
+    }
+
+    size_t idx = 0;
+    buf[idx++] = curve;
+    buf[idx++] = (uint8_t)pubkey_len;
+    memcpy(&buf[idx], pubkey, pubkey_len);
+    idx += pubkey_len;
+    memcpy(&buf[idx], fingerprint, GPG_FINGERPRINT_LEN);
+    idx += GPG_FINGERPRINT_LEN;
+    buf[idx++] = (uint8_t)user_id_len;
+    memcpy(&buf[idx], user_id, user_id_len);
+    idx += user_id_len;
+
+    return idx;
+}
+
+// Deserialize and store received GPG key
+static bool gpg_deserialize_and_store(const uint8_t *buf, size_t len) {
+    if (len < 1 + 1 + 32 + GPG_FINGERPRINT_LEN + 1) {
+        LOG_E(BLE_BADGE_TAG, "GPG payload too short: %zu", len);
+        return false;
+    }
+
+    size_t idx = 0;
+    uint8_t curve = buf[idx++];
+    uint8_t pubkey_len = buf[idx++];
+
+    if (pubkey_len != 32 && pubkey_len != 64) {
+        LOG_E(BLE_BADGE_TAG, "Invalid pubkey length: %u", pubkey_len);
+        return false;
+    }
+
+    if (idx + pubkey_len + GPG_FINGERPRINT_LEN + 1 > len) {
+        LOG_E(BLE_BADGE_TAG, "GPG payload truncated");
+        return false;
+    }
+
+    const uint8_t *pubkey = &buf[idx];
+    idx += pubkey_len;
+    const uint8_t *fingerprint = &buf[idx];
+    idx += GPG_FINGERPRINT_LEN;
+    uint8_t user_id_len = buf[idx++];
+
+    if (idx + user_id_len > len) {
+        LOG_E(BLE_BADGE_TAG, "User ID truncated");
+        return false;
+    }
+
+    char user_id[GPG_USER_ID_MAX];
+    memset(user_id, 0, sizeof(user_id));
+    size_t copy_len = (user_id_len < GPG_USER_ID_MAX - 1) ? user_id_len : (GPG_USER_ID_MAX - 1);
+    memcpy(user_id, &buf[idx], copy_len);
+
+    // Store the received key
+    if (!gpg_receive_pubkey(pubkey, pubkey_len, curve, user_id, fingerprint)) {
+        LOG_E(BLE_BADGE_TAG, "Failed to store received GPG key");
+        return false;
+    }
+
+    LOG_I(BLE_BADGE_TAG, "Received GPG key: %s", user_id);
+    return true;
+}
+
+// Handle incoming GPG data chunk (server side)
+// Note: Not static because it's called from server_handle_rx_chunk
+void server_handle_gpg_rx_chunk(const uint8_t *data, size_t len) {
+    if (!data || len == 0) return;
+    uint8_t opcode = data[0];
+    size_t idx = 1;
+
+    if (opcode == GPG_OP_WRITE_START) {
+        if (len < 3) return;
+        g_gpg_rx_expected = (size_t)data[1] | ((size_t)data[2] << 8);
+        g_gpg_rx_len = 0;
+        idx = 3;
+        if (g_gpg_rx_expected > GPG_PAYLOAD_MAX_LEN) {
+            g_gpg_rx_expected = 0;
+            server_send_status(0x00);
+            return;
+        }
+    }
+
+    if (idx < len && g_gpg_rx_len < GPG_PAYLOAD_MAX_LEN) {
+        size_t copy_len = len - idx;
+        if (copy_len > (GPG_PAYLOAD_MAX_LEN - g_gpg_rx_len)) {
+            copy_len = GPG_PAYLOAD_MAX_LEN - g_gpg_rx_len;
+        }
+        memcpy(&g_gpg_rx_buf[g_gpg_rx_len], &data[idx], copy_len);
+        g_gpg_rx_len += copy_len;
+    }
+
+    bool done = (g_gpg_rx_expected > 0 && g_gpg_rx_len >= g_gpg_rx_expected) ||
+                (opcode == GPG_OP_WRITE_END);
+    if (done) {
+        bool ok = gpg_deserialize_and_store(g_gpg_rx_buf, g_gpg_rx_len);
+        server_send_status(ok ? 0x01 : 0x00);
+        g_gpg_rx_len = 0;
+        g_gpg_rx_expected = 0;
+    }
+}
+
+bool ble_badge_gpg_exchange_with(const uint8_t addr[6]) {
+    if (!addr || !g_initialized || g_gattc_if == ESP_GATT_IF_NONE) return false;
+    if (g_exchange_state != EXCHANGE_IDLE) return false;
+    if (!g_exchange_enabled) return false;
+
+    // Check if we have a GPG key to exchange
+    if (!gpg_is_initialized()) {
+        LOG_E(BLE_BADGE_TAG, "No GPG key configured");
+        return false;
+    }
+
+    // Serialize our GPG key
+    g_gpg_tx_len = gpg_serialize_key(g_gpg_tx_buf, sizeof(g_gpg_tx_buf));
+    if (g_gpg_tx_len == 0) {
+        LOG_E(BLE_BADGE_TAG, "Failed to serialize GPG key");
+        return false;
+    }
+    g_gpg_tx_offset = 0;
+
+    g_gpg_exchange_mode = true;
+    g_gpg_exchange_result_pending = false;
+    g_exchange_restore_adv = g_adv_requested;
+    g_exchange_restore_scan = g_scan_requested;
+    g_exchange_force_receive = true;
+    g_exchange_result_pending = false;
+    g_exchange_state = EXCHANGE_CONNECTING;
+    memcpy(g_exchange_addr, addr, sizeof(esp_bd_addr_t));
+
+    uint8_t addr_copy[6];
+    memcpy(addr_copy, addr, sizeof(addr_copy));
+    esp_err_t ret = esp_ble_gattc_open(g_gattc_if, addr_copy, BLE_ADDR_TYPE_PUBLIC, true);
+    if (ret != ESP_OK) {
+        g_gpg_exchange_mode = false;
+        exchange_finish(false);
+        return false;
+    }
+
+    if (g_exchange_timer) {
+        xTimerStop(g_exchange_timer, 0);
+        xTimerStart(g_exchange_timer, 0);
+    }
+
+    LOG_I(BLE_BADGE_TAG, "Starting GPG key exchange");
+    return true;
+}
+
+bool ble_badge_poll_gpg_exchange_result(bool *success) {
+    if (!g_gpg_exchange_result_pending) return false;
+    if (success) {
+        *success = g_gpg_exchange_result_success;
+    }
+    g_gpg_exchange_result_pending = false;
+    return true;
+}
+
+bool ble_badge_gpg_exchange_in_progress(void) {
+    return g_gpg_exchange_mode && g_exchange_state != EXCHANGE_IDLE;
+}
+
+#endif // FEATURE_GPG
 
 #endif // FEATURE_BLE_BADGE

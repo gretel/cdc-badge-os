@@ -127,6 +127,56 @@ static void error_log_add(log_level_t level, const char* message) {
 
 #endif // CDC_ERROR_LOG
 
+void error_log_add_direct(const char* fmt, ...) {
+#if CDC_ERROR_LOG
+    if (!fmt) return;
+
+    char buf[ERROR_LOG_LINE_LEN];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    // Also output to UART (printf is safe from USB context)
+    printf("%s\n", buf);
+
+    // Add to error log (reuse internal function logic)
+    error_log_node_t* node = (error_log_node_t*)heap_caps_malloc(
+        sizeof(error_log_node_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!node) {
+        node = (error_log_node_t*)malloc(sizeof(error_log_node_t));
+    }
+    if (!node) return;
+
+    node->entry.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    node->entry.level = LOG_LEVEL_INFO;  // Use INFO level for CCID debug
+    strncpy(node->entry.message, buf, ERROR_LOG_LINE_LEN - 1);
+    node->entry.message[ERROR_LOG_LINE_LEN - 1] = '\0';
+    node->next = nullptr;
+
+    if (s_error_log_tail) {
+        s_error_log_tail->next = node;
+        s_error_log_tail = node;
+    } else {
+        s_error_log_head = node;
+        s_error_log_tail = node;
+    }
+    s_error_log_count++;
+
+    while (s_error_log_count > ERROR_LOG_MAX_ENTRIES && s_error_log_head) {
+        error_log_node_t* old = s_error_log_head;
+        s_error_log_head = old->next;
+        if (!s_error_log_head) {
+            s_error_log_tail = nullptr;
+        }
+        heap_caps_free(old);
+        s_error_log_count--;
+    }
+#else
+    (void)fmt;
+#endif
+}
+
 size_t error_log_get_entries(error_log_entry_t* entries, size_t max_entries) {
 #if CDC_ERROR_LOG
     if (!entries || max_entries == 0) return 0;
@@ -407,8 +457,12 @@ void console_print(const char* str) {
         s_ble_uart_send((const uint8_t*)str, len);
     }
 
+    // Always output to UART for debugging (visible via serial adapter)
+    printf("%s", str);
+    fflush(stdout);
+
 #if CONFIG_TINYUSB_CDC_ENABLED
-    // Always try CDC first if connected (for logs and responses)
+    // Also send to USB CDC if connected (parallel output)
     if (s_console_initialized && tud_cdc_connected()) {
         size_t written = 0;
         while (written < len) {
@@ -422,13 +476,7 @@ void console_print(const char* str) {
             written += tud_cdc_write(str + written, to_write);
         }
         tud_cdc_write_flush();
-    } else {
-        // Fallback to JTAG/UART via printf
-        printf("%s", str);
-        fflush(stdout);
     }
-#else
-    printf("%s", str);
 #endif
 }
 
@@ -451,20 +499,20 @@ void console_printf(const char* fmt, ...) {
 }
 
 void console_putchar(char c) {
+    // Always output to UART for debugging
+    putchar(c);
+    if (c == '\n') {
+        fflush(stdout);
+    }
+
 #if CONFIG_TINYUSB_CDC_ENABLED
-    // Always try CDC first if connected
+    // Also send to USB CDC if connected (parallel output)
     if (s_console_initialized && tud_cdc_connected()) {
         tud_cdc_write_char(c);
         if (c == '\n') {
             tud_cdc_write_flush();
         }
-    } else {
-        putchar(c);
-        fflush(stdout);  // Ensure immediate output for JTAG/UART
     }
-#else
-    putchar(c);
-    fflush(stdout);  // Ensure immediate output
 #endif
 }
 

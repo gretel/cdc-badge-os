@@ -192,10 +192,15 @@ static bool save_nvs_state(void) {
         return false;
     }
 
-    nvs_set_u32(nvs, NVS_KEY_SERIAL, g_serial_counter);
-    nvs_set_u32(nvs, NVS_KEY_ISSUED_COUNT, g_issued_count);
-    nvs_commit(nvs);
+    esp_err_t err1 = nvs_set_u32(nvs, NVS_KEY_SERIAL, g_serial_counter);
+    esp_err_t err2 = nvs_set_u32(nvs, NVS_KEY_ISSUED_COUNT, g_issued_count);
+    esp_err_t err3 = nvs_commit(nvs);
     nvs_close(nvs);
+
+    if (err1 != ESP_OK || err2 != ESP_OK || err3 != ESP_OK) {
+        LOG_W(TAG, "NVS write error: %d/%d/%d", err1, err2, err3);
+        return false;
+    }
     return true;
 }
 
@@ -760,7 +765,9 @@ bool ca_sign_csr(const char *csr_pem, char *cert_pem, size_t cert_size,
     // Update counters
     serial = g_serial_counter++;
     g_issued_count++;
-    save_nvs_state();
+    if (!save_nvs_state()) {
+        LOG_W(TAG, "Failed to save NVS counters");
+    }
 
     // Save issued cert info to NVS
     issued.serial = serial;
@@ -1135,7 +1142,9 @@ bool ca_import_root(const uint8_t *privkey_der, size_t privkey_len,
     // Initialize NVS state
     g_serial_counter = 1;
     g_issued_count = 0;
-    save_nvs_state();
+    if (!save_nvs_state()) {
+        LOG_W(TAG, "Failed to save initial NVS state");
+    }
 
     LOG_I(TAG, "CA imported successfully: %s", cn);
     mbedtls_pk_free(&pk);
@@ -1272,7 +1281,9 @@ bool ca_import_root_pem(const char *privkey_pem, const char *cert_pem) {
 
     g_serial_counter = 1;
     g_issued_count = 0;
-    save_nvs_state();
+    if (!save_nvs_state()) {
+        LOG_W(TAG, "Failed to save initial NVS state");
+    }
 
     LOG_I(TAG, "CA imported (PEM): %s", cn);
     return true;
@@ -1351,7 +1362,9 @@ bool ca_sign_cert(const char *cert_pem, char *signed_cert_pem, size_t cert_size,
     // Update counters
     uint32_t serial = g_serial_counter++;
     g_issued_count++;
-    save_nvs_state();
+    if (!save_nvs_state()) {
+        LOG_W(TAG, "Failed to save NVS counters");
+    }
 
     // Save issued cert info
     ca_issued_cert_t issued;

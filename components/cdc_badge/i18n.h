@@ -229,6 +229,43 @@ typedef enum {
 
     STR_VCARD_TOO_BIG,      // "vCard too big"
 
+    // SAO Port
+    STR_SAO,                // "SAO"
+    STR_SAO_SCAN,           // "Scan"
+    STR_SAO_INFO,           // "Info"
+    STR_SAO_NOT_FOUND,      // "No SAO found"
+    STR_SAO_SCANNING,       // "Scanning SAO..."
+
+    // GPG Key Management
+    STR_GPG_MENU,           // "GPG Keys"
+    STR_GPG_STATUS,         // "Status"
+    STR_GPG_GENERATE,       // "Generate Key"
+    STR_GPG_EXPORT,         // "Export Public Key"
+    STR_GPG_RESET,          // "Reset Key"
+    STR_GPG_NOT_INIT,       // "No GPG key"
+    STR_GPG_INITIALIZED,    // "GPG key ready"
+    STR_GPG_GENERATING,     // "Generating..."
+    STR_GPG_GENERATED,      // "Key generated!"
+    STR_GPG_FAILED,         // "Generation failed"
+    STR_GPG_FINGERPRINT,    // "Fingerprint"
+    STR_GPG_USER_ID,        // "User ID"
+    STR_GPG_CURVE,          // "Curve"
+    STR_GPG_SIGN_COUNT,     // "Signatures"
+    STR_GPG_ENTER_NAME,     // "Enter Name"
+    STR_GPG_ENTER_EMAIL,    // "Enter Email"
+    STR_GPG_SELECT_CURVE,   // "Select Curve"
+    STR_GPG_SHOW_QR,        // "Show QR Code"
+    STR_GPG_QR_PUBKEY,      // "GPG Public Key"
+    STR_GPG_RESET_CONFIRM,  // "Delete key? Y=Yes N=No"
+    STR_GPG_RESET_SUCCESS,  // "Key deleted"
+    STR_GPG_RECV_LIST,      // "Received Keys"
+    STR_GPG_RECV_KEYS,      // "Received Keys" (menu item)
+    STR_GPG_RECV_EMPTY,     // "No received keys"
+    STR_GPG_RECV_DETAIL,    // "Key Details"
+    STR_GPG_CROSS_SIGN,     // "Cross-Sign"
+    STR_GPG_SIGNED,         // "Signed!"
+    STR_GPG_GENERATE_FAILED,// "Generation failed"
+
     STR_COUNT
 } string_id_t;
 

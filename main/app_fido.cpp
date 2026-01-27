@@ -9,6 +9,7 @@
 #include "gui.h"
 #include "i18n.h"
 #include "tropic01.h"
+#include "key_fingerprint.h"
 
 #include <esp_attr.h>
 #include <cstring>
@@ -17,13 +18,7 @@
 // Static buffers for list item labels (must persist) - in PSRAM to save DRAM
 EXT_RAM_BSS_ATTR static char g_fido_labels[FIDO2_MAX_CREDENTIALS][100];
 
-// Comparison helper for sorting - case-insensitive string compare
-static int strcasecmp_safe(const char *a, const char *b) {
-    if (!a && !b) return 0;
-    if (!a) return -1;
-    if (!b) return 1;
-    return strcasecmp(a, b);
-}
+// Use view_strcasecmp_safe from views.h for sorting
 
 void build_fido_context_menu(void) {
     g_fido_context_items_count = 0;
@@ -58,7 +53,7 @@ static void populate_fido_list(void) {
 
     // Sort the sort map by label (case-insensitive)
     std::sort(g_fido_sort_map, g_fido_sort_map + count, [](uint8_t a, uint8_t b) {
-        return strcasecmp_safe(g_fido_labels[a], g_fido_labels[b]) < 0;
+        return view_strcasecmp_safe(g_fido_labels[a], g_fido_labels[b]) < 0;
     });
 
     // Reorder items according to sorted map
@@ -91,6 +86,10 @@ void show_fido_detail(uint8_t display_index) {
         const char *key_type = (strncmp(info.rp_id, "ssh:", 4) == 0) ? "SSH" : "WebAuthn";
         const char *algo_name = (info.curve == CDC_CURVE_ED25519) ? "Ed25519" : "P-256";
 
+        // Generate alchemical key fingerprint
+        char fingerprint[KEY_FINGERPRINT_MAX_LEN];
+        key_fingerprint_generate(info.slot, fingerprint, sizeof(fingerprint));
+
         snprintf(g_fido_detail_text, sizeof(g_fido_detail_text),
                  "Relying Party:\n%s\n\n"
                  "Type: %s  Algo: %s\n"
@@ -98,6 +97,7 @@ void show_fido_detail(uint8_t display_index) {
                  "Slot: %d\n"
                  "Sign count: %lu\n"
                  "Resident: %s\n\n"
+                 "Fingerprint:\n%s\n\n"
                  "%s",
                  info.rp_id,
                  key_type, algo_name,
@@ -105,6 +105,7 @@ void show_fido_detail(uint8_t display_index) {
                  info.slot,
                  info.sign_count,
                  info.resident_key ? "Yes" : "No",
+                 fingerprint,
                  i18n_str(STR_HINT_BACK));
         view_info_screen_init(&g_info_view, "FIDO2 Key", g_fido_detail_text);
         g_app_state = APP_STATE_FIDO_DETAIL;

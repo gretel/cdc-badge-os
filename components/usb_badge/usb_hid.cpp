@@ -26,7 +26,6 @@ extern "C" {
 #include "class/hid/hid_device.h"
 #if FEATURE_GPG_CCID
 #include "device/usbd_pvt.h"
-#include "class/vendor/vendor_device.h"
 #endif
 }
 
@@ -150,7 +149,7 @@ static const uint8_t keyboard_report_desc[] = {
     0xFE, 0x00, 0x00, 0x00,  /* dwMaxIFSD: 254 */ \
     0x00, 0x00, 0x00, 0x00,  /* dwSynchProtocols: none */ \
     0x00, 0x00, 0x00, 0x00,  /* dwMechanical: none */ \
-    0xBA, 0x04, 0x01, 0x00,  /* dwFeatures: auto params, auto PPS, auto clock, auto baud, auto IFSD, short+extended APDU */ \
+    0xFE, 0x00, 0x04, 0x00,  /* dwFeatures: auto config/activation/voltage/clock/baud/negotiation/PPS, extended APDU */ \
     0x0F, 0x01, 0x00, 0x00,  /* dwMaxCCIDMessageLength: 271 */ \
     0xFF,                    /* bClassGetResponse */ \
     0xFF,                    /* bClassEnvelope */ \
@@ -414,7 +413,8 @@ bool usb_hid_init(void) {
         vTaskDelay(pdMS_TO_TICKS(10));
 
         // Create USB task only if we initialized TinyUSB ourselves
-        xTaskCreate(usb_device_task, "usbd", 4096, nullptr,
+        // Stack size 8192: CCID/OpenPGP needs ~1KB for DO 0x6E + TROPIC01 calls
+        xTaskCreate(usb_device_task, "usbd", 8192, nullptr,
                     configMAX_PRIORITIES - 1, &g_usb_task);
     } else {
         // ROM's TinyUSB is active (CONFIG_ESP_CONSOLE_USB_CDC mode)
@@ -621,112 +621,393 @@ bool type_enter(void) {
 } // namespace usb_keyboard
 
 // ============================================================================
-// CCID SmartCard Interface
+// CCID SmartCard Interface - Custom TinyUSB Driver
 // ============================================================================
+// TinyUSB doesn't have native CCID support, so we implement a custom class
+// driver that handles the CCID class (0x0B) interface and bulk endpoints.
 
 #if FEATURE_GPG_CCID
 
-namespace usb_ccid {
+// CCID logging - uses error_log_add_direct (USB-safe, viewable via ERRLOG command)
+// This writes to both UART and error_log without using console_print
+#include "cdc_log.h"
+#define CCID_LOG(tag, fmt, ...) error_log_add_direct("[I][%s] " fmt, tag, ##__VA_ARGS__)
+#define CCID_LOG_E(tag, fmt, ...) error_log_add_direct("[E][%s] " fmt, tag, ##__VA_ARGS__)
+#define CCID_LOG_W(tag, fmt, ...) error_log_add_direct("[W][%s] " fmt, tag, ##__VA_ARGS__)
+// To disable CCID logging completely:
+// #define CCID_LOG(tag, fmt, ...) do {} while(0)
+// #define CCID_LOG_E CCID_LOG
+// #define CCID_LOG_W CCID_LOG
 
-// CCID state
-static bool g_ccid_initialized = false;
-static uint8_t g_ccid_itf_num = 0;
+// CCID message type names for logging
+static const char* ccid_msg_name(uint8_t type) {
+    switch (type) {
+        case 0x62: return "ICC_POWER_ON";
+        case 0x63: return "ICC_POWER_OFF";
+        case 0x65: return "GET_SLOT_STATUS";
+        case 0x6F: return "XFR_BLOCK";
+        case 0x6C: return "GET_PARAMETERS";
+        case 0x6D: return "RESET_PARAMETERS";
+        case 0x61: return "SET_PARAMETERS";
+        case 0x69: return "SECURE";
+        case 0x80: return "DATA_BLOCK";
+        case 0x81: return "SLOT_STATUS";
+        case 0x82: return "PARAMETERS";
+        default:   return "UNKNOWN";
+    }
+}
 
-// RX/TX buffers for CCID messages
-// Keep small to save RAM - APDU commands are typically <256 bytes
-#define CCID_RX_BUFSIZE 384
-#define CCID_TX_BUFSIZE 384
-static uint8_t ccid_rx_buf[CCID_RX_BUFSIZE];
-static uint8_t ccid_tx_buf[CCID_TX_BUFSIZE];
-static uint16_t ccid_rx_len = 0;
+// Helper to dump hex data
+static void ccid_log_hex(const char* prefix, const uint8_t* data, size_t len) {
+    if (len == 0) return;
+    char hex[128];
+    size_t max_bytes = (len > 40) ? 40 : len;
+    for (size_t i = 0; i < max_bytes; i++) {
+        snprintf(hex + i*3, 4, "%02X ", data[i]);
+    }
+    if (len > 40) {
+        CCID_LOG("CCID", "%s [%zu bytes]: %s...", prefix, len, hex);
+    } else {
+        CCID_LOG("CCID", "%s [%zu bytes]: %s", prefix, len, hex);
+    }
+}
 
-bool init(void) {
-    if (g_ccid_initialized) return true;
+// CCID Driver State
+static struct {
+    bool initialized;
+    uint8_t itf_num;
+    uint8_t ep_in;
+    uint8_t ep_out;
+    uint8_t rhport;
 
-    // Initialize OpenPGP application
-    if (!openpgp_init()) {
-        LOG_E("CCID", "OpenPGP init failed");
-        return false;
+    // RX/TX buffers
+    uint8_t rx_buf[512];
+    uint8_t tx_buf[512];
+    uint16_t rx_len;
+    bool rx_pending;
+
+    // Stats for debugging
+    uint32_t rx_count;
+    uint32_t tx_count;
+    uint32_t error_count;
+} ccid_state;
+
+// Initialize CCID driver (called once at startup)
+static void ccid_driver_init(void) {
+    CCID_LOG("CCID", "========================================");
+    CCID_LOG("CCID", "CCID TinyUSB driver init called");
+    CCID_LOG("CCID", "========================================");
+    memset(&ccid_state, 0, sizeof(ccid_state));
+}
+
+// Reset on bus reset
+static void ccid_driver_reset(uint8_t rhport) {
+    CCID_LOG("CCID", ">>> RESET on rhport %d", rhport);
+    CCID_LOG("CCID", "    Stats before reset: rx=%lu tx=%lu err=%lu",
+          ccid_state.rx_count, ccid_state.tx_count, ccid_state.error_count);
+    ccid_state.rx_len = 0;
+    ccid_state.rx_pending = false;
+    ccid_state.initialized = false;
+    ccid_state.rx_count = 0;
+    ccid_state.tx_count = 0;
+    ccid_state.error_count = 0;
+}
+
+// Open interface - called when TinyUSB finds matching interface descriptor
+static uint16_t ccid_driver_open(uint8_t rhport, tusb_desc_interface_t const *desc_itf, uint16_t max_len) {
+    CCID_LOG("CCID", "========================================");
+    CCID_LOG("CCID", ">>> OPEN called");
+    CCID_LOG("CCID", "    rhport=%d itf=%d class=0x%02X subclass=0x%02X protocol=0x%02X",
+          rhport, desc_itf->bInterfaceNumber, desc_itf->bInterfaceClass,
+          desc_itf->bInterfaceSubClass, desc_itf->bInterfaceProtocol);
+    CCID_LOG("CCID", "    max_len=%d num_endpoints=%d", max_len, desc_itf->bNumEndpoints);
+
+    // Verify this is a CCID interface (class 0x0B)
+    if (desc_itf->bInterfaceClass != TUSB_CLASS_SMART_CARD) {
+        CCID_LOG("CCID", "    -> Not CCID (class 0x%02X != 0x0B), skipping", desc_itf->bInterfaceClass);
+        return 0;  // Not for us
     }
 
-    g_ccid_initialized = true;
-    LOG_I("CCID", "CCID SmartCard initialized");
+    CCID_LOG("CCID", "    -> CCID interface detected!");
+
+    ccid_state.itf_num = desc_itf->bInterfaceNumber;
+    ccid_state.rhport = rhport;
+
+    // Parse descriptors to find endpoints
+    uint16_t drv_len = sizeof(tusb_desc_interface_t);
+    uint8_t const *p_desc = (uint8_t const *)desc_itf + drv_len;
+
+    CCID_LOG("CCID", "    Parsing descriptors starting at offset %d...", drv_len);
+
+    // Skip CCID functional descriptor (54 bytes, type 0x21)
+    while (drv_len < max_len) {
+        uint8_t desc_len = p_desc[0];
+        uint8_t desc_type = p_desc[1];
+        CCID_LOG("CCID", "    Descriptor: len=%d type=0x%02X", desc_len, desc_type);
+
+        if (desc_type == 0x21) {  // CCID functional descriptor
+            CCID_LOG("CCID", "      -> CCID Functional Descriptor (%d bytes)", desc_len);
+            drv_len += desc_len;
+            p_desc += desc_len;
+        } else {
+            break;
+        }
+    }
+
+    // Find and open endpoints
+    uint8_t ep_count = 0;
+    while (drv_len < max_len && ep_count < desc_itf->bNumEndpoints) {
+        uint8_t desc_len = p_desc[0];
+        uint8_t desc_type = p_desc[1];
+
+        if (desc_type == TUSB_DESC_ENDPOINT) {
+            tusb_desc_endpoint_t const *ep_desc = (tusb_desc_endpoint_t const *)p_desc;
+            uint8_t ep_addr = ep_desc->bEndpointAddress;
+            uint8_t ep_attr = ep_desc->bmAttributes.xfer;
+            uint16_t ep_size = ep_desc->wMaxPacketSize;
+
+            CCID_LOG("CCID", "    Endpoint: addr=0x%02X attr=0x%02X size=%d",
+                  ep_addr, ep_attr, ep_size);
+
+            if (usbd_edpt_open(rhport, ep_desc)) {
+                if (tu_edpt_dir(ep_addr) == TUSB_DIR_IN) {
+                    ccid_state.ep_in = ep_addr;
+                    CCID_LOG("CCID", "      -> Opened as EP_IN");
+                } else {
+                    ccid_state.ep_out = ep_addr;
+                    CCID_LOG("CCID", "      -> Opened as EP_OUT");
+                }
+                ep_count++;
+            } else {
+                CCID_LOG_E("CCID", "      -> FAILED to open endpoint!");
+            }
+        }
+        drv_len += desc_len;
+        p_desc += desc_len;
+    }
+
+    CCID_LOG("CCID", "    Total endpoints opened: %d", ep_count);
+
+    // Prepare to receive first packet
+    if (ccid_state.ep_out) {
+        CCID_LOG("CCID", "    Preparing initial RX on EP 0x%02X...", ccid_state.ep_out);
+        bool ok = usbd_edpt_xfer(rhport, ccid_state.ep_out, ccid_state.rx_buf, sizeof(ccid_state.rx_buf));
+        CCID_LOG("CCID", "    Initial RX prepare: %s", ok ? "OK" : "FAILED");
+        ccid_state.rx_pending = ok;
+    } else {
+        CCID_LOG_E("CCID", "    ERROR: No EP_OUT found!");
+    }
+
+    ccid_state.initialized = true;
+    CCID_LOG("CCID", ">>> OPEN complete: ep_in=0x%02X ep_out=0x%02X drv_len=%d",
+          ccid_state.ep_in, ccid_state.ep_out, drv_len);
+    CCID_LOG("CCID", "========================================");
+
+    return drv_len;
+}
+
+// Handle control transfers (GET_DESCRIPTOR for CCID, etc.)
+static bool ccid_driver_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
+    CCID_LOG("CCID", ">>> CONTROL_XFER: stage=%d bmReqType=0x%02X bReq=0x%02X wVal=0x%04X wIdx=0x%04X wLen=%d",
+          stage, request->bmRequestType, request->bRequest,
+          request->wValue, request->wIndex, request->wLength);
+
+    // Only handle SETUP stage
+    if (stage != CONTROL_STAGE_SETUP) {
+        CCID_LOG("CCID", "    -> Not SETUP stage, returning true");
+        return true;
+    }
+
+    // Handle class-specific requests
+    if (request->bmRequestType_bit.type == TUSB_REQ_TYPE_CLASS &&
+        request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_INTERFACE &&
+        request->wIndex == ccid_state.itf_num) {
+
+        CCID_LOG("CCID", "    -> Class request for our interface");
+
+        switch (request->bRequest) {
+            case 0x01:  // CCID_ABORT
+                CCID_LOG("CCID", "    -> CCID_ABORT");
+                return tud_control_status(rhport, request);
+
+            case 0x02:  // CCID_GET_CLOCK_FREQUENCIES
+                CCID_LOG("CCID", "    -> CCID_GET_CLOCK_FREQUENCIES");
+                return tud_control_status(rhport, request);
+
+            case 0x03:  // CCID_GET_DATA_RATES
+                CCID_LOG("CCID", "    -> CCID_GET_DATA_RATES");
+                return tud_control_status(rhport, request);
+
+            default:
+                CCID_LOG_W("CCID", "    -> Unknown class request: 0x%02X", request->bRequest);
+                return false;
+        }
+    }
+
+    CCID_LOG("CCID", "    -> Not for us (type=%d rcpt=%d idx=%d vs our itf=%d)",
+          request->bmRequestType_bit.type, request->bmRequestType_bit.recipient,
+          request->wIndex, ccid_state.itf_num);
+    return false;
+}
+
+// Handle bulk transfers
+static bool ccid_driver_xfer_cb(uint8_t rhport, uint8_t ep_addr, xfer_result_t result, uint32_t xferred_bytes) {
+    CCID_LOG("CCID", "----------------------------------------");
+    CCID_LOG("CCID", ">>> XFER_CB: ep=0x%02X result=%d len=%lu", ep_addr, result, xferred_bytes);
+
+    if (result != XFER_RESULT_SUCCESS) {
+        ccid_state.error_count++;
+        CCID_LOG_E("CCID", "    Transfer FAILED! result=%d (0=success, 1=failed, 2=stalled)", result);
+        return true;
+    }
+
+    if (ep_addr == ccid_state.ep_out) {
+        // Received data from host
+        ccid_state.rx_count++;
+        ccid_state.rx_len = xferred_bytes;
+        ccid_state.rx_pending = false;
+
+        CCID_LOG("CCID", "=== RX #%lu from host ===", ccid_state.rx_count);
+
+        if (xferred_bytes == 0) {
+            CCID_LOG_W("CCID", "    Empty packet received!");
+        } else {
+            uint8_t msg_type = ccid_state.rx_buf[0];
+            CCID_LOG("CCID", "    msg_type=0x%02X (%s)", msg_type, ccid_msg_name(msg_type));
+
+            ccid_log_hex("    RX data", ccid_state.rx_buf, xferred_bytes);
+        }
+
+        // Check if we have a complete CCID message (minimum 10 byte header)
+        if (ccid_state.rx_len >= 10) {
+            uint32_t data_len = ccid_state.rx_buf[1] | (ccid_state.rx_buf[2] << 8) |
+                               (ccid_state.rx_buf[3] << 16) | (ccid_state.rx_buf[4] << 24);
+            uint8_t slot = ccid_state.rx_buf[5];
+            uint8_t seq = ccid_state.rx_buf[6];
+            uint32_t total_len = 10 + data_len;
+
+            CCID_LOG("CCID", "    CCID Header: data_len=%lu slot=%d seq=%d", data_len, slot, seq);
+            CCID_LOG("CCID", "    Expected total=%lu, received=%d", total_len, ccid_state.rx_len);
+
+            if (ccid_state.rx_len >= total_len) {
+                CCID_LOG("CCID", "    Complete message, processing...");
+
+                // Process complete CCID message
+                int resp_len = ccid_process_message(ccid_state.rx_buf, total_len,
+                                                    ccid_state.tx_buf, sizeof(ccid_state.tx_buf));
+
+                CCID_LOG("CCID", "    ccid_process_message returned: %d", resp_len);
+
+                if (resp_len > 0) {
+                    ccid_state.tx_count++;
+                    uint8_t resp_type = ccid_state.tx_buf[0];
+                    CCID_LOG("CCID", "=== TX #%lu to host ===", ccid_state.tx_count);
+                    CCID_LOG("CCID", "    resp_type=0x%02X (%s) len=%d",
+                          resp_type, ccid_msg_name(resp_type), resp_len);
+
+                    ccid_log_hex("    TX data", ccid_state.tx_buf, resp_len);
+
+                    // Send response
+                    CCID_LOG("CCID", "    Calling usbd_edpt_xfer(rhport=%d, ep=0x%02X, len=%d)...",
+                          rhport, ccid_state.ep_in, resp_len);
+
+                    bool ok = usbd_edpt_xfer(rhport, ccid_state.ep_in, ccid_state.tx_buf, resp_len);
+
+                    if (ok) {
+                        CCID_LOG("CCID", "    TX queued successfully");
+                    } else {
+                        ccid_state.error_count++;
+                        CCID_LOG_E("CCID", "    TX FAILED to queue!");
+                    }
+                } else if (resp_len == 0) {
+                    CCID_LOG_W("CCID", "    No response generated (resp_len=0)");
+                } else {
+                    ccid_state.error_count++;
+                    CCID_LOG_E("CCID", "    Error processing message (resp_len=%d)", resp_len);
+                }
+            } else {
+                CCID_LOG_W("CCID", "    Incomplete message: need %lu more bytes", total_len - ccid_state.rx_len);
+            }
+        } else {
+            CCID_LOG_W("CCID", "    Message too short for CCID header (need 10, got %d)", ccid_state.rx_len);
+        }
+
+        // Prepare for next packet
+        CCID_LOG("CCID", "    Preparing next RX...");
+        bool rx_ok = usbd_edpt_xfer(rhport, ccid_state.ep_out, ccid_state.rx_buf, sizeof(ccid_state.rx_buf));
+        if (rx_ok) {
+            CCID_LOG("CCID", "    Next RX prepared OK");
+        } else {
+            ccid_state.error_count++;
+            CCID_LOG_E("CCID", "    Next RX prepare FAILED!");
+        }
+        ccid_state.rx_pending = rx_ok;
+    }
+    else if (ep_addr == ccid_state.ep_in) {
+        CCID_LOG("CCID", "=== TX complete (ep_in) ===");
+        CCID_LOG("CCID", "    %lu bytes sent to host", xferred_bytes);
+    }
+    else {
+        CCID_LOG_W("CCID", "    Unknown endpoint 0x%02X (ep_in=0x%02X, ep_out=0x%02X)",
+              ep_addr, ccid_state.ep_in, ccid_state.ep_out);
+    }
+
+    CCID_LOG("CCID", "    Stats: rx=%lu tx=%lu err=%lu",
+          ccid_state.rx_count, ccid_state.tx_count, ccid_state.error_count);
+    CCID_LOG("CCID", "----------------------------------------");
+
+    return true;
+}
+
+// CCID driver descriptor - note: name field is always present in TinyUSB structure
+static usbd_class_driver_t const ccid_driver = {
+    .name             = "CCID",
+    .init             = ccid_driver_init,
+    .deinit           = NULL,
+    .reset            = ccid_driver_reset,
+    .open             = ccid_driver_open,
+    .control_xfer_cb  = ccid_driver_control_xfer_cb,
+    .xfer_cb          = ccid_driver_xfer_cb,
+    .xfer_isr         = NULL,
+    .sof              = NULL
+};
+
+namespace usb_ccid {
+
+bool init(void) {
+    CCID_LOG("CCID", "========================================");
+    CCID_LOG("CCID", "usb_ccid::init() called");
+    // Initialize OpenPGP application (driver init is called by TinyUSB)
+    if (!openpgp_init()) {
+        LOG_E("CCID", "OpenPGP init failed!");
+        return false;
+    }
+    CCID_LOG("CCID", "CCID SmartCard initialized successfully");
+    CCID_LOG("CCID", "========================================");
     return true;
 }
 
 bool ready(void) {
-    return g_ccid_initialized && g_usb_initialized && tud_vendor_mounted();
+    return ccid_state.initialized && g_usb_initialized && tud_ready();
 }
 
-// Process CCID message and generate response
-static int process_ccid_message(const uint8_t* msg, uint16_t msg_len,
-                                 uint8_t* resp, uint16_t resp_max) {
-    return ccid_process_message(msg, msg_len, resp, resp_max);
-}
-
-// Task function called from USB task to process CCID
 void task(void) {
-    if (!ready()) return;
-
-    // Check for incoming data
-    uint32_t available = tud_vendor_available();
-    if (available > 0) {
-        uint16_t read_len = tud_vendor_read(ccid_rx_buf + ccid_rx_len,
-                                            CCID_RX_BUFSIZE - ccid_rx_len);
-        ccid_rx_len += read_len;
-
-        // Check if we have a complete CCID message (minimum 10 byte header)
-        if (ccid_rx_len >= 10) {
-            // Extract message length from header (bytes 1-4, little endian)
-            uint32_t data_len = ccid_rx_buf[1] | (ccid_rx_buf[2] << 8) |
-                               (ccid_rx_buf[3] << 16) | (ccid_rx_buf[4] << 24);
-            uint32_t total_len = 10 + data_len;
-
-            if (ccid_rx_len >= total_len) {
-                // Process complete message
-                int resp_len = process_ccid_message(ccid_rx_buf, total_len,
-                                                    ccid_tx_buf, CCID_TX_BUFSIZE);
-
-                // Send response
-                if (resp_len > 0) {
-                    tud_vendor_write(ccid_tx_buf, resp_len);
-                    tud_vendor_flush();
-                }
-
-                // Remove processed message from buffer
-                if (ccid_rx_len > total_len) {
-                    memmove(ccid_rx_buf, ccid_rx_buf + total_len,
-                            ccid_rx_len - total_len);
-                }
-                ccid_rx_len -= total_len;
-            }
-        }
-    }
+    // All processing happens in xfer_cb, nothing to do here
 }
 
 } // namespace usb_ccid
 
-// TinyUSB Vendor callbacks for CCID
+// Register custom CCID driver with TinyUSB
 extern "C" {
 
-// Note: TinyUSB vendor_rx_cb signature includes buffer and size parameters
-void tud_vendor_rx_cb(uint8_t itf, uint8_t const* buffer, uint16_t bufsize) {
-    (void)itf;
-    (void)buffer;
-    (void)bufsize;
-    // Processing happens in usb_ccid::task() which reads via tud_vendor_read()
+usbd_class_driver_t const* usbd_app_driver_get_cb(uint8_t *driver_count) {
+    CCID_LOG("CCID", "****************************************");
+    CCID_LOG("CCID", "usbd_app_driver_get_cb called!");
+    CCID_LOG("CCID", "Registering CCID custom driver");
+    CCID_LOG("CCID", "****************************************");
+    *driver_count = 1;
+    return &ccid_driver;
 }
-
-void tud_vendor_tx_cb(uint8_t itf, uint32_t sent_bytes) {
-    (void)itf;
-    (void)sent_bytes;
-    tud_vendor_write_flush();
-}
-
-// Custom CCID driver registration
-// TinyUSB allows adding custom class drivers via usbd_app_driver_get_cb
-// However, since we're using the standard Vendor class with our own protocol,
-// we don't need a custom driver - just the vendor class callbacks above.
 
 } // extern "C"
 

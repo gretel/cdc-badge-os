@@ -43,6 +43,14 @@
 #include "ca.h"
 #endif
 
+#if FEATURE_GPG
+#include "gpg.h"
+#endif
+
+#if FEATURE_SAO
+#include "sao.h"
+#endif
+
 #include <cstdio>
 #include <cstdarg>
 #include <cstdlib>
@@ -870,6 +878,14 @@ void handle_key(char key) {
                     go_to_fido_list();
                 } else
 #endif
+#if FEATURE_GPG
+                if (sel == MENU_IDX_GPG) {
+                    build_gpg_menu();
+                    view_list_screen_init(&g_gpg_menu, i18n_str(STR_GPG_MENU), g_gpg_items, GPG_IDX_COUNT);
+                    g_app_state = APP_STATE_GPG_MENU;
+                    render_current_state(false);
+                } else
+#endif
 #if FEATURE_CA
                 if (sel == MENU_IDX_CA) {
                     build_ca_menu();
@@ -1503,121 +1519,92 @@ void handle_key(char key) {
         }
 
         // TOTP Add Wizard - Name input
-        case APP_STATE_TOTP_ADD_NAME:
-            if (key >= '0' && key <= '9') {
-                view_t9_input_key(&g_t9_input, key);
+        case APP_STATE_TOTP_ADD_NAME: {
+            view_input_result_t res = view_handle_t9_wizard_key(&g_t9_input, key, true);
+            if (res == VIEW_INPUT_CHANGED) {
                 render_current_state(true);
-            } else if (key == 'N') {
-                if (strlen(g_t9_input.buffer) > 0) {
-                    view_t9_input_backspace(&g_t9_input);
-                    render_current_state(true);
-                } else {
-                    // Cancel wizard
-                    go_to_totp_list();
-                }
-            } else if (key == 'Y') {
-                if (strlen(g_t9_input.buffer) > 0) {
-                    totp_wizard_next_from_name();
-                }
+            } else if (res == VIEW_INPUT_CONFIRM) {
+                totp_wizard_next_from_name();
+            } else if (res == VIEW_INPUT_BACK_EMPTY) {
+                go_to_totp_list();
             }
             break;
+        }
 
         // TOTP Add Wizard - Secret input
-        case APP_STATE_TOTP_ADD_SECRET:
-            if (key >= '0' && key <= '9') {
-                view_t9_input_key(&g_t9_input, key);
+        case APP_STATE_TOTP_ADD_SECRET: {
+            view_input_result_t res = view_handle_t9_wizard_key(&g_t9_input, key, true);
+            if (res == VIEW_INPUT_CHANGED) {
                 render_current_state(true);
-            } else if (key == 'N') {
-                if (strlen(g_t9_input.buffer) > 0) {
-                    view_t9_input_backspace(&g_t9_input);
-                    render_current_state(true);
-                } else {
-                    // Go back to name
-                    view_t9_input_init(&g_t9_input, "Account Name", g_totp_wizard.name);
-                    g_app_state = APP_STATE_TOTP_ADD_NAME;
-                    render_current_state(false);
-                }
-            } else if (key == 'Y') {
-                if (strlen(g_t9_input.buffer) > 0) {
-                    totp_wizard_next_from_secret();
-                }
+            } else if (res == VIEW_INPUT_CONFIRM) {
+                totp_wizard_next_from_secret();
+            } else if (res == VIEW_INPUT_BACK_EMPTY) {
+                view_t9_input_init(&g_t9_input, "Account Name", g_totp_wizard.name);
+                g_app_state = APP_STATE_TOTP_ADD_NAME;
+                render_current_state(false);
             }
             break;
+        }
 
         // TOTP Add Wizard - Issuer input (optional)
-        case APP_STATE_TOTP_ADD_ISSUER:
-            if (key >= '0' && key <= '9') {
-                view_t9_input_key(&g_t9_input, key);
+        case APP_STATE_TOTP_ADD_ISSUER: {
+            view_input_result_t res = view_handle_t9_wizard_key(&g_t9_input, key, false);
+            if (res == VIEW_INPUT_CHANGED) {
                 render_current_state(true);
-            } else if (key == 'N') {
-                if (strlen(g_t9_input.buffer) > 0) {
-                    view_t9_input_backspace(&g_t9_input);
-                    render_current_state(true);
-                } else {
-                    // Go back to secret
-                    view_t9_input_init(&g_t9_input, "Secret (Base32)", g_totp_wizard.secret);
-                    g_app_state = APP_STATE_TOTP_ADD_SECRET;
-                    render_current_state(false);
-                }
-            } else if (key == 'Y') {
-                // Issuer is optional, continue even if empty
+            } else if (res == VIEW_INPUT_CONFIRM) {
                 totp_wizard_next_from_issuer();
+            } else if (res == VIEW_INPUT_BACK_EMPTY) {
+                view_t9_input_init(&g_t9_input, "Secret (Base32)", g_totp_wizard.secret);
+                g_app_state = APP_STATE_TOTP_ADD_SECRET;
+                render_current_state(false);
             }
             break;
+        }
 
         // TOTP Add Wizard - Digits selection
-        case APP_STATE_TOTP_ADD_DIGITS:
-            if (key == '2') {
-                view_list_screen_navigate(&g_totp_digits_menu, false);
+        case APP_STATE_TOTP_ADD_DIGITS: {
+            view_input_result_t res = view_handle_list_wizard_key(&g_totp_digits_menu, key);
+            if (res == VIEW_INPUT_CHANGED) {
                 render_current_state(true);
-            } else if (key == '8') {
-                view_list_screen_navigate(&g_totp_digits_menu, true);
-                render_current_state(true);
-            } else if (key == 'Y' || key == '5') {
+            } else if (res == VIEW_INPUT_CONFIRM) {
                 totp_wizard_next_from_digits(view_list_screen_get_selection(&g_totp_digits_menu));
-            } else if (key == 'N') {
-                // Go back to issuer
+            } else if (res == VIEW_INPUT_BACK_EMPTY) {
                 view_t9_input_init(&g_t9_input, "Issuer (optional)", g_totp_wizard.issuer);
                 g_app_state = APP_STATE_TOTP_ADD_ISSUER;
                 render_current_state(false);
             }
             break;
+        }
 
         // TOTP Add Wizard - Period selection
-        case APP_STATE_TOTP_ADD_PERIOD:
-            if (key == '2') {
-                view_list_screen_navigate(&g_totp_period_menu, false);
+        case APP_STATE_TOTP_ADD_PERIOD: {
+            view_input_result_t res = view_handle_list_wizard_key(&g_totp_period_menu, key);
+            if (res == VIEW_INPUT_CHANGED) {
                 render_current_state(true);
-            } else if (key == '8') {
-                view_list_screen_navigate(&g_totp_period_menu, true);
-                render_current_state(true);
-            } else if (key == 'Y' || key == '5') {
+            } else if (res == VIEW_INPUT_CONFIRM) {
                 totp_wizard_finish(view_list_screen_get_selection(&g_totp_period_menu));
-            } else if (key == 'N') {
-                // Go back to digits
+            } else if (res == VIEW_INPUT_BACK_EMPTY) {
                 view_list_screen_init(&g_totp_digits_menu, "Digits", g_totp_digits_items, 3);
                 g_app_state = APP_STATE_TOTP_ADD_DIGITS;
                 render_current_state(false);
             }
             break;
+        }
 
         // TOTP Add Wizard - Algorithm selection
-        case APP_STATE_TOTP_ADD_ALGO:
-            if (key == '2') {
-                view_list_screen_navigate(&g_totp_algo_menu, false);
+        case APP_STATE_TOTP_ADD_ALGO: {
+            view_input_result_t res = view_handle_list_wizard_key(&g_totp_algo_menu, key);
+            if (res == VIEW_INPUT_CHANGED) {
                 render_current_state(true);
-            } else if (key == '8') {
-                view_list_screen_navigate(&g_totp_algo_menu, true);
-                render_current_state(true);
-            } else if (key == 'Y' || key == '5') {
+            } else if (res == VIEW_INPUT_CONFIRM) {
                 totp_wizard_next_from_algo(view_list_screen_get_selection(&g_totp_algo_menu));
-            } else if (key == 'N') {
-                // Go back to period
+            } else if (res == VIEW_INPUT_BACK_EMPTY) {
                 view_list_screen_init(&g_totp_period_menu, "Period", g_totp_period_items, 2);
                 g_app_state = APP_STATE_TOTP_ADD_PERIOD;
                 render_current_state(false);
             }
             break;
+        }
 #endif
 
 #if FEATURE_PASSWORD
@@ -1754,97 +1741,73 @@ void handle_key(char key) {
             }
             break;
 
-        case APP_STATE_PASSWORD_ADD_NAME:
-            if (key >= '0' && key <= '9') {
-                view_t9_input_key(&g_t9_input, key);
+        case APP_STATE_PASSWORD_ADD_NAME: {
+            view_input_result_t res = view_handle_t9_wizard_key(&g_t9_input, key, true);
+            if (res == VIEW_INPUT_CHANGED) {
                 render_current_state(true);
-            } else if (key == 'N') {
-                if (strlen(g_t9_input.buffer) > 0) {
-                    view_t9_input_backspace(&g_t9_input);
-                    render_current_state(true);
-                } else {
-                    go_to_password_list();
-                }
-            } else if (key == 'Y') {
-                if (strlen(g_t9_input.buffer) > 0) {
-                    password_wizard_next_from_name();
-                }
+            } else if (res == VIEW_INPUT_CONFIRM) {
+                password_wizard_next_from_name();
+            } else if (res == VIEW_INPUT_BACK_EMPTY) {
+                go_to_password_list();
             }
             break;
+        }
 
-        case APP_STATE_PASSWORD_ADD_USERNAME:
-            if (key >= '0' && key <= '9') {
-                view_t9_input_key(&g_t9_input, key);
+        case APP_STATE_PASSWORD_ADD_USERNAME: {
+            view_input_result_t res = view_handle_t9_wizard_key(&g_t9_input, key, false);
+            if (res == VIEW_INPUT_CHANGED) {
                 render_current_state(true);
-            } else if (key == 'N') {
-                if (strlen(g_t9_input.buffer) > 0) {
-                    view_t9_input_backspace(&g_t9_input);
-                    render_current_state(true);
-                } else {
-                    view_t9_input_init(&g_t9_input, "Entry Name", g_password_wizard.name);
-                    g_app_state = APP_STATE_PASSWORD_ADD_NAME;
-                    render_current_state(false);
-                }
-            } else if (key == 'Y') {
+            } else if (res == VIEW_INPUT_CONFIRM) {
                 password_wizard_next_from_username();
+            } else if (res == VIEW_INPUT_BACK_EMPTY) {
+                view_t9_input_init(&g_t9_input, "Entry Name", g_password_wizard.name);
+                g_app_state = APP_STATE_PASSWORD_ADD_NAME;
+                render_current_state(false);
             }
             break;
+        }
 
-        case APP_STATE_PASSWORD_ADD_URL:
-            if (key >= '0' && key <= '9') {
-                view_t9_input_key(&g_t9_input, key);
+        case APP_STATE_PASSWORD_ADD_URL: {
+            view_input_result_t res = view_handle_t9_wizard_key(&g_t9_input, key, false);
+            if (res == VIEW_INPUT_CHANGED) {
                 render_current_state(true);
-            } else if (key == 'N') {
-                if (strlen(g_t9_input.buffer) > 0) {
-                    view_t9_input_backspace(&g_t9_input);
-                    render_current_state(true);
-                } else {
-                    view_t9_input_init(&g_t9_input, "Username", g_password_wizard.username);
-                    g_app_state = APP_STATE_PASSWORD_ADD_USERNAME;
-                    render_current_state(false);
-                }
-            } else if (key == 'Y') {
+            } else if (res == VIEW_INPUT_CONFIRM) {
                 password_wizard_next_from_url();
+            } else if (res == VIEW_INPUT_BACK_EMPTY) {
+                view_t9_input_init(&g_t9_input, "Username", g_password_wizard.username);
+                g_app_state = APP_STATE_PASSWORD_ADD_USERNAME;
+                render_current_state(false);
             }
             break;
+        }
 
-        case APP_STATE_PASSWORD_ADD_PASSWORD:
-            if (key >= '0' && key <= '9') {
-                view_t9_input_key(&g_t9_input, key);
+        case APP_STATE_PASSWORD_ADD_PASSWORD: {
+            view_input_result_t res = view_handle_t9_wizard_key(&g_t9_input, key, true);
+            if (res == VIEW_INPUT_CHANGED) {
                 render_current_state(true);
-            } else if (key == 'N') {
-                if (strlen(g_t9_input.buffer) > 0) {
-                    view_t9_input_backspace(&g_t9_input);
-                    render_current_state(true);
-                } else {
-                    view_t9_input_init(&g_t9_input, "URL", g_password_wizard.url);
-                    g_app_state = APP_STATE_PASSWORD_ADD_URL;
-                    render_current_state(false);
-                }
-            } else if (key == 'Y') {
-                if (strlen(g_t9_input.buffer) > 0) {
-                    password_wizard_next_from_password();
-                }
+            } else if (res == VIEW_INPUT_CONFIRM) {
+                password_wizard_next_from_password();
+            } else if (res == VIEW_INPUT_BACK_EMPTY) {
+                view_t9_input_init(&g_t9_input, "URL", g_password_wizard.url);
+                g_app_state = APP_STATE_PASSWORD_ADD_URL;
+                render_current_state(false);
             }
             break;
+        }
 
-        case APP_STATE_PASSWORD_ADD_NOTES:
-            if (key >= '0' && key <= '9') {
-                view_t9_input_key(&g_t9_input, key);
+        case APP_STATE_PASSWORD_ADD_NOTES: {
+            view_input_result_t res = view_handle_t9_wizard_key(&g_t9_input, key, false);
+            if (res == VIEW_INPUT_CHANGED) {
                 render_current_state(true);
-            } else if (key == 'N') {
-                if (strlen(g_t9_input.buffer) > 0) {
-                    view_t9_input_backspace(&g_t9_input);
-                    render_current_state(true);
-                } else {
-                    view_t9_input_init(&g_t9_input, "Password", g_password_wizard.password);
-                    g_app_state = APP_STATE_PASSWORD_ADD_PASSWORD;
-                    render_current_state(false);
-                }
-            } else if (key == 'Y') {
+            } else if (res == VIEW_INPUT_CONFIRM) {
                 password_wizard_finish();
+            } else if (res == VIEW_INPUT_BACK_EMPTY) {
+                view_t9_input_init(&g_t9_input, "Password", g_password_wizard.password);
+                g_app_state = APP_STATE_PASSWORD_ADD_PASSWORD;
+                render_current_state(false);
             }
             break;
+        }
 #endif
 
 #if FEATURE_FIDO2
@@ -2424,11 +2387,35 @@ void handle_key(char key) {
                         g_app_state = APP_STATE_SELFTEST;
                         render_current_state(false);
                         break;
+#if FEATURE_SAO
+                    case TOOLS_IDX_SAO:
+                        sao_scan();
+                        g_sao_last_scan_ms = millis();
+                        sao_get_info_string(g_sao_info_text, sizeof(g_sao_info_text));
+                        view_info_screen_init(&g_info_view, i18n_str(STR_SAO), g_sao_info_text);
+                        g_app_state = APP_STATE_SAO_INFO;
+                        render_current_state(false);
+                        break;
+#endif
                 }
             } else if (key == 'N') {
                 go_to_main_menu();
             }
             break;
+
+#if FEATURE_SAO
+        case APP_STATE_SAO_INFO:
+            if (key == '2' || key == '8') {
+                view_info_screen_scroll(&g_info_view, key == '8');
+                render_current_state(true);
+            } else if (key == 'N') {
+                build_tools_menu();
+                view_list_screen_init(&g_tools_menu, i18n_str(STR_TOOLS), g_tools_items, g_tools_item_count);
+                g_app_state = APP_STATE_TOOLS_MENU;
+                render_current_state(false);
+            }
+            break;
+#endif
 
 #if FEATURE_BLE_BADGE
         // Remote Badge main menu (3 submenus: vCards, Broadcast, Settings)
@@ -3028,7 +3015,7 @@ void handle_key(char key) {
 
         case APP_STATE_VCARD_QR:
             if (key) {
-                gui_backlight_off();  // Turn off backlight when leaving QR view
+                view_qr_code_cleanup(&g_qr_view);
                 g_app_state = g_vcard_qr_return_state;
                 render_current_state(false);
             }
@@ -3350,7 +3337,7 @@ void handle_key(char key) {
 
         case APP_STATE_CA_QR_CODE:
             if (key) {
-                gui_backlight_off();  // Turn off backlight when leaving QR view
+                view_qr_code_cleanup(&g_qr_view);
                 g_app_state = APP_STATE_CA_MENU;
                 render_current_state(false);
             }
@@ -3580,6 +3567,297 @@ void handle_key(char key) {
                 // Back to State
                 view_t9_input_init(&g_t9_input, i18n_str(STR_CA_ENTER_STATE), g_ca_wizard.state);
                 g_app_state = APP_STATE_CA_WIZARD_STATE;
+                render_current_state(false);
+            }
+            break;
+#endif
+
+#if FEATURE_GPG
+        case APP_STATE_GPG_MENU:
+            if (key == '2') {
+                view_list_screen_navigate(&g_gpg_menu, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_gpg_menu, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                uint8_t sel = view_list_screen_get_selection(&g_gpg_menu);
+                switch (sel) {
+                    case GPG_IDX_STATUS: {
+                        gpg_status_t status;
+                        if (gpg_get_status(&status) && status.initialized) {
+                            // Format fingerprint
+                            char fp_str[60];
+                            for (int i = 0; i < 20; i++) {
+                                sprintf(fp_str + i*3, "%02X ", status.fingerprint[i]);
+                            }
+                            fp_str[59] = '\0';
+
+                            snprintf(g_gpg_detail_text, sizeof(g_gpg_detail_text),
+                                "User-ID:\n%s\n\n"
+                                "Curve: %s\n\n"
+                                "Fingerprint:\n%s\n\n"
+                                "Signatures: %lu",
+                                status.user_id,
+                                status.curve == CDC_CURVE_ED25519 ? "Ed25519" : "P-256",
+                                fp_str,
+                                (unsigned long)status.sign_count);
+                        } else {
+                            snprintf(g_gpg_detail_text, sizeof(g_gpg_detail_text),
+                                "%s", i18n_str(STR_GPG_NOT_INIT));
+                        }
+                        view_info_screen_init(&g_info_view, i18n_str(STR_GPG_STATUS), g_gpg_detail_text);
+                        g_app_state = APP_STATE_GPG_DETAILS;
+                        render_current_state(false);
+                        break;
+                    }
+                    case GPG_IDX_GENERATE:
+                        if (gpg_is_initialized()) {
+                            view_info_screen_init(&g_info_view, i18n_str(STR_GPG_RESET),
+                                i18n_str(STR_GPG_RESET_CONFIRM));
+                            g_app_state = APP_STATE_GPG_RESET_CONFIRM;
+                            render_current_state(false);
+                        } else {
+                            memset(&g_gpg_wizard, 0, sizeof(g_gpg_wizard));
+                            g_gpg_wizard.curve = CDC_CURVE_ED25519;
+                            view_t9_input_init(&g_t9_input, i18n_str(STR_GPG_ENTER_NAME), "");
+                            g_app_state = APP_STATE_GPG_WIZARD_NAME;
+                            render_current_state(false);
+                        }
+                        break;
+                    case GPG_IDX_EXPORT:
+                        if (!gpg_is_initialized()) {
+                            view_toast_error(i18n_str(STR_GPG_NOT_INIT), 1500);
+                        } else {
+                            size_t out_len;
+                            if (gpg_export_pubkey_pem(g_gpg_detail_text, sizeof(g_gpg_detail_text), &out_len)) {
+                                view_info_screen_init(&g_info_view, i18n_str(STR_GPG_EXPORT), g_gpg_detail_text);
+                                g_app_state = APP_STATE_GPG_DETAILS;
+                                render_current_state(false);
+                            } else {
+                                view_toast_error("Export failed", 1500);
+                            }
+                        }
+                        break;
+                    case GPG_IDX_QR_CODE:
+                        if (!gpg_is_initialized()) {
+                            view_toast_error(i18n_str(STR_GPG_NOT_INIT), 1500);
+                        } else {
+                            size_t out_len = 0;
+                            if (gpg_export_pubkey_pem(g_gpg_detail_text, sizeof(g_gpg_detail_text), &out_len)) {
+                                view_qr_code_init(&g_qr_view, i18n_str(STR_GPG_QR_PUBKEY), NULL, g_gpg_detail_text);
+                                g_app_state = APP_STATE_GPG_QR_CODE;
+                                render_current_state(false);
+                            } else {
+                                view_toast_error("Export failed", 1500);
+                            }
+                        }
+                        break;
+                    case GPG_IDX_RECV_KEYS: {
+                        // Show received keys list
+                        uint8_t count = gpg_received_count();
+                        for (uint8_t i = 0; i < count && i < 16; i++) {
+                            gpg_received_key_info_t info;
+                            if (gpg_received_get_info(i, &info)) {
+                                g_gpg_recv_items[i] = {info.user_id,
+                                    info.signed_by_me ? VIEW_LIST_ICON_BLE : VIEW_LIST_ICON_NONE,
+                                    !info.signed_by_me};  // Grayed out if not signed
+                            }
+                        }
+                        view_list_screen_init(&g_gpg_recv_list, i18n_str(STR_GPG_RECV_LIST),
+                            g_gpg_recv_items, count > 0 ? count : 0);
+                        g_app_state = APP_STATE_GPG_RECV_LIST;
+                        render_current_state(false);
+                        break;
+                    }
+                }
+            } else if (key == 'N') {
+                go_to_main_menu();
+            }
+            break;
+
+        case APP_STATE_GPG_DETAILS:
+            if (key == '2') {
+                view_info_screen_scroll(&g_info_view, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_info_screen_scroll(&g_info_view, true);
+                render_current_state(true);
+            } else if (key == 'N') {
+                g_app_state = APP_STATE_GPG_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_GPG_GENERATING:
+            break;
+
+        case APP_STATE_GPG_QR_CODE:
+            if (key) {
+                view_qr_code_cleanup(&g_qr_view);
+                g_app_state = APP_STATE_GPG_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_GPG_RESET_CONFIRM:
+            if (key == 'Y') {
+                if (gpg_reset()) {
+                    view_toast_success(i18n_str(STR_GPG_RESET_SUCCESS), 1500);
+                } else {
+                    view_toast_error("Reset failed", 1500);
+                }
+                build_gpg_menu();
+                view_list_screen_init(&g_gpg_menu, i18n_str(STR_GPG_MENU), g_gpg_items, GPG_IDX_COUNT);
+                g_app_state = APP_STATE_GPG_MENU;
+                render_current_state(false);
+            } else if (key == 'N') {
+                g_app_state = APP_STATE_GPG_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_GPG_WIZARD_NAME:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (g_t9_input.len > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    g_app_state = APP_STATE_GPG_MENU;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                const char *text = view_t9_input_get_text(&g_t9_input);
+                if (strlen(text) == 0) {
+                    view_toast_error("Name required", 1500);
+                } else {
+                    strncpy(g_gpg_wizard.name, text, GPG_FIELD_MAX_LEN - 1);
+                    view_t9_input_init(&g_t9_input, i18n_str(STR_GPG_ENTER_EMAIL), "");
+                    g_app_state = APP_STATE_GPG_WIZARD_EMAIL;
+                    render_current_state(false);
+                }
+            }
+            break;
+
+        case APP_STATE_GPG_WIZARD_EMAIL:
+            if (key >= '0' && key <= '9') {
+                view_t9_input_key(&g_t9_input, key);
+                render_current_state(true);
+            } else if (key == 'N') {
+                if (g_t9_input.len > 0) {
+                    view_t9_input_backspace(&g_t9_input);
+                    render_current_state(true);
+                } else {
+                    view_t9_input_init(&g_t9_input, i18n_str(STR_GPG_ENTER_NAME), g_gpg_wizard.name);
+                    g_app_state = APP_STATE_GPG_WIZARD_NAME;
+                    render_current_state(false);
+                }
+            } else if (key == 'Y') {
+                const char *text = view_t9_input_get_text(&g_t9_input);
+                strncpy(g_gpg_wizard.email, text, GPG_FIELD_MAX_LEN - 1);
+                view_list_screen_init(&g_gpg_curve_menu, i18n_str(STR_GPG_SELECT_CURVE),
+                    g_gpg_curve_items, 2);
+                g_app_state = APP_STATE_GPG_WIZARD_CURVE;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_GPG_WIZARD_CURVE:
+            if (key == '2') {
+                view_list_screen_navigate(&g_gpg_curve_menu, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_gpg_curve_menu, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                uint8_t sel = view_list_screen_get_selection(&g_gpg_curve_menu);
+                g_gpg_wizard.curve = (sel == 0) ? CDC_CURVE_ED25519 : CDC_CURVE_P256;
+
+                view_info_screen_init(&g_info_view, i18n_str(STR_GPG_GENERATE),
+                    i18n_str(STR_GPG_GENERATING));
+                g_app_state = APP_STATE_GPG_GENERATING;
+                render_current_state(false);
+
+                // Build user ID
+                char user_id[128];
+                if (g_gpg_wizard.email[0]) {
+                    snprintf(user_id, sizeof(user_id), "%s <%s>", g_gpg_wizard.name, g_gpg_wizard.email);
+                } else {
+                    strncpy(user_id, g_gpg_wizard.name, sizeof(user_id) - 1);
+                }
+
+                gpg_set_pending_user_id(user_id);
+                if (gpg_generate_key(g_gpg_wizard.curve)) {
+                    view_toast_success(i18n_str(STR_GPG_GENERATED), 1500);
+                } else {
+                    view_toast_error(i18n_str(STR_GPG_GENERATE_FAILED), 1500);
+                }
+                build_gpg_menu();
+                view_list_screen_init(&g_gpg_menu, i18n_str(STR_GPG_MENU), g_gpg_items, GPG_IDX_COUNT);
+                g_app_state = APP_STATE_GPG_MENU;
+                render_current_state(false);
+            } else if (key == 'N') {
+                view_t9_input_init(&g_t9_input, i18n_str(STR_GPG_ENTER_EMAIL), g_gpg_wizard.email);
+                g_app_state = APP_STATE_GPG_WIZARD_EMAIL;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_GPG_RECV_LIST:
+            if (key == '2') {
+                view_list_screen_navigate(&g_gpg_recv_list, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_list_screen_navigate(&g_gpg_recv_list, true);
+                render_current_state(true);
+            } else if (key == 'Y' || key == '5') {
+                g_gpg_recv_selected = view_list_screen_get_selection(&g_gpg_recv_list);
+                gpg_received_key_info_t info;
+                if (gpg_received_get_info(g_gpg_recv_selected, &info)) {
+                    char fp_str[60];
+                    for (int i = 0; i < 20; i++) {
+                        sprintf(fp_str + i*3, "%02X ", info.fingerprint[i]);
+                    }
+                    snprintf(g_gpg_detail_text, sizeof(g_gpg_detail_text),
+                        "User-ID:\n%s\n\n"
+                        "Curve: %s\n\n"
+                        "Fingerprint:\n%s\n\n"
+                        "Signed: %s\n\n"
+                        "[Y] Sign  [N] Back",
+                        info.user_id,
+                        info.curve == CDC_CURVE_ED25519 ? "Ed25519" : "P-256",
+                        fp_str,
+                        info.signed_by_me ? "Yes" : "No");
+                    view_info_screen_init(&g_info_view, i18n_str(STR_GPG_RECV_DETAIL), g_gpg_detail_text);
+                    g_app_state = APP_STATE_GPG_RECV_DETAIL;
+                    render_current_state(false);
+                }
+            } else if (key == 'N') {
+                g_app_state = APP_STATE_GPG_MENU;
+                render_current_state(false);
+            }
+            break;
+
+        case APP_STATE_GPG_RECV_DETAIL:
+            if (key == '2') {
+                view_info_screen_scroll(&g_info_view, false);
+                render_current_state(true);
+            } else if (key == '8') {
+                view_info_screen_scroll(&g_info_view, true);
+                render_current_state(true);
+            } else if (key == 'Y') {
+                if (gpg_cross_sign(g_gpg_recv_selected)) {
+                    view_toast_success("Key signed!", 1500);
+                } else {
+                    view_toast_error("Signing failed", 1500);
+                }
+                g_app_state = APP_STATE_GPG_RECV_LIST;
+                render_current_state(false);
+            } else if (key == 'N') {
+                g_app_state = APP_STATE_GPG_RECV_LIST;
                 render_current_state(false);
             }
             break;

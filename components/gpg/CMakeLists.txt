@@ -20,7 +20,7 @@ if(EXISTS "${FEATURE_FLAGS_PATH}")
         idf_component_register(
             SRCS "gpg.cpp"
             INCLUDE_DIRS "."
-            REQUIRES cdc_badge
+            REQUIRES cdc_badge openpgp
             PRIV_REQUIRES esp_system nvs_flash mbedtls
         )
     else()

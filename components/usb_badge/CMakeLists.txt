@@ -25,3 +25,12 @@ idf_component_register(
     REQUIRES ${USB_REQUIRES}
     PRIV_REQUIRES ${USB_PRIV_REQUIRES}
 )
+
+# Force linker to use our usbd_app_driver_get_cb instead of TinyUSB's weak version
+# The --undefined flag ensures our symbol is pulled in before TinyUSB's weak stub
+if(FEATURE_GPG_CCID)
+    target_link_options(${COMPONENT_LIB} INTERFACE
+        "-Wl,--undefined=usbd_app_driver_get_cb"
+    )
+    message(STATUS "USB Badge: Forcing usbd_app_driver_get_cb linkage for CCID")
+endif()

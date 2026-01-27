@@ -3,7 +3,9 @@ idf_component_register(
          "i2c_bus.cpp" "power_management.cpp" "pin_expander.cpp"
          "cdc_rtc.cpp" "gui.cpp" "views.cpp"
          "pin_storage.cpp" "badge_settings.cpp" "i18n.cpp" "system_status.cpp"
-         "temp_sensor.cpp"
+         "temp_sensor.cpp" "sao.cpp" "key_fingerprint.cpp"
+         "keyboard_typing.cpp"
     INCLUDE_DIRS "."
     REQUIRES cdc_utils libtropic_sdk freertos mbedtls driver esp_timer esp_netif nvs_flash CalEPD Adafruit-GFX espressif__qrcode
+    PRIV_REQUIRES ble_hid usb_badge
 )
