@@ -5,6 +5,7 @@
 #include "temp_sensor.h"
 
 #include "esp_heap_caps.h"
+#include "nvs_flash.h"
 
 #include <cstdio>
 
@@ -33,16 +34,31 @@ void system_status_build_selftest_text(const hw_status_t *status, char *buf, siz
     pos += snprintf(buf + pos, buf_size - pos, "TR01 Session: %s\n",
                     status->tropic01_session_ok ? "OK" : "---");
 
-    pos += snprintf(buf + pos, buf_size - pos, "\n--- Runtime ---\n\n");
+    pos += snprintf(buf + pos, buf_size - pos, "\n--- Memory ---\n\n");
 
-    // Free Heap
-    pos += snprintf(buf + pos, buf_size - pos, "Heap: %lu KB\n",
-                    (unsigned long)(esp_get_free_heap_size() / 1024));
+    // Internal Heap
+    size_t free_heap = esp_get_free_heap_size();
+    size_t min_heap = esp_get_minimum_free_heap_size();
+    pos += snprintf(buf + pos, buf_size - pos, "Heap: %lu/%lu KB\n",
+                    (unsigned long)(free_heap / 1024),
+                    (unsigned long)(min_heap / 1024));
 
     // PSRAM
-    size_t psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    pos += snprintf(buf + pos, buf_size - pos, "PSRAM: %lu KB\n",
-                    (unsigned long)(psram / 1024));
+    size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t psram_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+    pos += snprintf(buf + pos, buf_size - pos, "PSRAM: %lu/%lu KB\n",
+                    (unsigned long)(psram_free / 1024),
+                    (unsigned long)(psram_total / 1024));
+
+    // NVS
+    nvs_stats_t nvs_stats;
+    if (nvs_get_stats(NULL, &nvs_stats) == ESP_OK) {
+        pos += snprintf(buf + pos, buf_size - pos, "NVS: %lu/%lu entries\n",
+                        (unsigned long)nvs_stats.used_entries,
+                        (unsigned long)nvs_stats.total_entries);
+    }
+
+    pos += snprintf(buf + pos, buf_size - pos, "\n--- Runtime ---\n\n");
 
     // Battery
     pos += snprintf(buf + pos, buf_size - pos, "Battery: %d%% %s\n",

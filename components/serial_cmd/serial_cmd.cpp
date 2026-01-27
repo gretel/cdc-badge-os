@@ -19,6 +19,9 @@
 #include "tropic01_cache.h"
 #include "pin_storage.h"
 #include "esp_timer.h"
+#include "esp_system.h"
+#include "esp_heap_caps.h"
+#include "nvs_flash.h"
 #include <esp_attr.h>
 
 #if FEATURE_TOTP
@@ -134,6 +137,7 @@ static void show_help(void) {
     console_printf("  HELP                 - Show this help\r\n");
     console_printf("  PING                 - Connection test\r\n");
     console_printf("  STATUS               - Badge status\r\n");
+    console_printf("  MEM                  - Memory usage (Heap/PSRAM/NVS)\r\n");
 #if CDC_LOG_RING_BUFFER
     console_printf("  LOG_TAIL [n]         - Show last N log lines (max 100)\r\n");
 #endif
@@ -438,6 +442,44 @@ static void cmd_status(void) {
     console_printf("FIDO2 credentials: %d/%d\r\n", fido2_get_credential_count(), FIDO2_MAX_CREDENTIALS);
     console_printf("FIDO2 initialized: %s\r\n", fido2_is_initialized() ? "yes" : "no");
 #endif
+
+    console_flush();
+}
+
+static void cmd_mem(void) {
+    console_printf("=== Memory Status ===\r\n");
+
+    // Internal DRAM heap
+    size_t free_heap = esp_get_free_heap_size();
+    size_t min_heap = esp_get_minimum_free_heap_size();
+    console_printf("Internal Heap:\r\n");
+    console_printf("  Free:    %lu KB\r\n", (unsigned long)(free_heap / 1024));
+    console_printf("  Min:     %lu KB (lowest since boot)\r\n", (unsigned long)(min_heap / 1024));
+
+    // PSRAM (external SPI RAM)
+    size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t psram_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+    size_t psram_used = psram_total - psram_free;
+    console_printf("PSRAM:\r\n");
+    console_printf("  Total:   %lu KB\r\n", (unsigned long)(psram_total / 1024));
+    console_printf("  Used:    %lu KB\r\n", (unsigned long)(psram_used / 1024));
+    console_printf("  Free:    %lu KB\r\n", (unsigned long)(psram_free / 1024));
+
+    // NVS statistics
+    nvs_stats_t nvs_stats;
+    if (nvs_get_stats(NULL, &nvs_stats) == ESP_OK) {
+        console_printf("NVS (Flash):\r\n");
+        console_printf("  Used:    %lu entries\r\n", (unsigned long)nvs_stats.used_entries);
+        console_printf("  Free:    %lu entries\r\n", (unsigned long)nvs_stats.free_entries);
+        console_printf("  Total:   %lu entries\r\n", (unsigned long)nvs_stats.total_entries);
+        console_printf("  Namespaces: %lu\r\n", (unsigned long)nvs_stats.namespace_count);
+    } else {
+        console_printf("NVS: stats unavailable\r\n");
+    }
+
+    // TROPIC01 R-Memory cache info
+    console_printf("TROPIC01 Cache:\r\n");
+    console_printf("  Slots loaded: %s\r\n", tropic01_cache_is_loaded() ? "yes" : "no");
 
     console_flush();
 }
@@ -2244,6 +2286,7 @@ static void execute_command(char *cmd) {
     if (strcasecmp(cmd, "HELP") == 0) { show_help(); return; }
     if (strcasecmp(cmd, "PING") == 0) { cmd_ping(); return; }
     if (strcasecmp(cmd, "STATUS") == 0) { cmd_status(); return; }
+    if (strcasecmp(cmd, "MEM") == 0) { cmd_mem(); return; }
     if (strcasecmp(cmd, "LOG_TAIL") == 0) { cmd_log_tail((char *)""); return; }
     if (strncasecmp(cmd, "LOG_TAIL ", 9) == 0) { cmd_log_tail(cmd + 9); return; }
     if (strcasecmp(cmd, "ERROR_LOG") == 0) { cmd_error_log(); return; }
