@@ -1,54 +1,56 @@
 # GPG Cross-Signing Protocol (Badge2Badge)
 
-Protokoll für den Austausch und das Cross-Signing von GPG Public Keys zwischen CDC Badges via BLE.
+> **Note:** This document is a design snapshot and may not reflect the current implementation. Features described here may have changed significantly. Always refer to the source code for accurate details.
 
-## Übersicht
+Protocol for exchanging and cross-signing GPG public keys between CDC Badges via BLE.
 
-Cross-Signing ermöglicht:
-- Austausch von GPG Public Keys zwischen Badges
-- Signieren empfangener Keys (Web of Trust)
-- Persönliche Verifikation bei Conferences/Meetups
+## Overview
 
-## Konzept
+Cross-signing enables:
+- Exchange of GPG public keys between badges
+- Signing received keys (Web of Trust)
+- Personal verification at conferences/meetups
+
+## Concept
 
 ```
 Badge A                             Badge B
    │                                   │
-   │  ─────── GPG Key senden ───────►  │
+   │  ─────── Send GPG Key ─────────►  │
    │                                   │
-   │  ◄────── GPG Key empfangen ─────  │
+   │  ◄────── Receive GPG Key ───────  │
    │                                   │
    │      ┌─────────────────────┐      │
-   │      │  In Person Check:   │      │
-   │      │  Fingerprint        │      │
-   │      │  vergleichen        │      │
+   │      │  In-Person Check:   │      │
+   │      │  Compare            │      │
+   │      │  Fingerprints       │      │
    │      └─────────────────────┘      │
    │                                   │
-   │  ─────── Cross-Signatur ───────►  │
+   │  ─────── Cross-Signature ───────► │
    │                                   │
-   │  ◄────── Cross-Signatur ────────  │
+   │  ◄────── Cross-Signature ──────── │
    │                                   │
 ```
 
-## BLE Protokoll
+## BLE Protocol
 
 ### UUIDs
 
-Verwendet den gleichen GATT Service wie vCard Exchange:
+Uses the same GATT service as vCard Exchange:
 - Service: `8E2F1F20-8B5D-4D7A-9A6E-4C9D6A8B1A01`
 
-### GPG-spezifische Opcodes
+### GPG-Specific Opcodes
 
-| Opcode | Name | Richtung | Beschreibung |
-|--------|------|----------|--------------|
-| `0x11` | GPG_WRITE_START | Client→Server | Start GPG Key Transfer, +2 Byte Länge |
-| `0x12` | GPG_WRITE_CONT | Client→Server | Fortsetzen |
-| `0x13` | GPG_WRITE_END | Client→Server | Abschluss |
-| `0x91` | GPG_DATA_START | Server→Client | Start GPG Key Response, +2 Byte Länge |
-| `0x92` | GPG_DATA_CONT | Server→Client | Fortsetzen |
-| `0x93` | GPG_DATA_END | Server→Client | Abschluss |
+| Opcode | Name | Direction | Description |
+|--------|------|-----------|-------------|
+| `0x11` | GPG_WRITE_START | Client→Server | Start GPG key transfer, +2 byte length |
+| `0x12` | GPG_WRITE_CONT | Client→Server | Continue |
+| `0x13` | GPG_WRITE_END | Client→Server | Complete |
+| `0x91` | GPG_DATA_START | Server→Client | Start GPG key response, +2 byte length |
+| `0x92` | GPG_DATA_CONT | Server→Client | Continue |
+| `0x93` | GPG_DATA_END | Server→Client | Complete |
 
-### Payload-Format
+### Payload Format
 
 ```
 ┌─────────┬────────────┬─────────────┬─────────────┬─────────────┬────────────┐
@@ -57,18 +59,18 @@ Verwendet den gleichen GATT Service wie vCard Exchange:
 └─────────┴────────────┴─────────────┴─────────────┴─────────────┴────────────┘
 ```
 
-| Feld | Größe | Beschreibung |
-|------|-------|--------------|
+| Field | Size | Description |
+|-------|------|-------------|
 | Curve | 1 | `1` = Ed25519, `2` = P-256 |
-| PubKey Len | 1 | 32 für Ed25519, 64 für P-256 |
-| Public Key | 32/64 | Raw Public Key Bytes |
-| Fingerprint | 20 | SHA-1 GPG Fingerprint |
-| UserID Len | 1 | Länge der User ID |
+| PubKey Len | 1 | 32 for Ed25519, 64 for P-256 |
+| Public Key | 32/64 | Raw public key bytes |
+| Fingerprint | 20 | SHA-1 GPG fingerprint |
+| UserID Len | 1 | Length of User ID |
 | User ID | max 63 | "Name <email>" (UTF-8) |
 
 **Maximum Payload:** 150 Bytes
 
-### Ablauf
+### Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -92,12 +94,12 @@ Verwendet den gleichen GATT Service wie vCard Exchange:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Cross-Signatur
+## Cross-Signature
 
-### Daten die signiert werden
+### Data Being Signed
 
 ```c
-// SHA256 über:
+// SHA256 over:
 uint8_t data_to_sign[84];  // 20 + 64
 memcpy(data_to_sign, fingerprint, 20);       // GPG Fingerprint
 memcpy(data_to_sign + 20, user_id, 64);      // User ID (padded)
@@ -106,25 +108,25 @@ memcpy(data_to_sign + 20, user_id, 64);      // User ID (padded)
 uint8_t hash[32];
 SHA256(data_to_sign, 84, hash);
 
-// Signatur mit eigenem GPG Key
+// Signature with own GPG Signature Key (Slot 27)
 gpg_sign_hash(hash, 32, signature, &sig_len);
 ```
 
-### Signatur-Format
+### Signature Format
 
-| Kurve | Signatur-Länge | Format |
-|-------|----------------|--------|
+| Curve | Signature Length | Format |
+|-------|------------------|--------|
 | Ed25519 | 64 Bytes | R (32) + S (32) |
 | P-256 | 64 Bytes | R (32) + S (32) |
 
-## Speicherung
+## Storage
 
 ### NVS Schema
 
 - **Namespace:** `gpg_recv`
-- **Key-Format:** `pk_<fingerprint_hex_8>`
+- **Key Format:** `pk_<fingerprint_hex_8>`
 
-### Struktur
+### Structure
 
 ```c
 typedef struct {
@@ -134,20 +136,20 @@ typedef struct {
     uint8_t pubkey_len;             // 1 Byte
     uint8_t fingerprint[20];        // 20 Bytes
     uint32_t received_at;           // 4 Bytes (Unix timestamp)
-    uint8_t my_signature[64];       // 64 Bytes (eigene Cross-Signatur)
+    uint8_t my_signature[64];       // 64 Bytes (own cross-signature)
     uint8_t sig_len;                // 1 Byte
     uint8_t flags;                  // 1 Byte (0x01 = verified in person)
 } gpg_received_key_nvs_t;
 ```
 
-**Maximum Keys:** 16 (NVS-Limitierung)
+**Maximum Keys:** 16 (NVS limitation)
 
 ## API
 
-### Empfangen
+### Receiving
 
 ```c
-// Key von anderem Badge empfangen und speichern
+// Receive key from another badge and store
 bool gpg_receive_pubkey(
     const uint8_t *pubkey, size_t pubkey_len,
     uint8_t curve,
@@ -156,30 +158,30 @@ bool gpg_receive_pubkey(
 );
 ```
 
-### Auflisten
+### Listing
 
 ```c
-// Anzahl empfangener Keys
+// Number of received keys
 uint8_t gpg_received_count(void);
 
-// Info zu einem Key abrufen
+// Get info for a key
 bool gpg_received_get_info(uint8_t index, gpg_received_key_info_t *info);
 ```
 
 ### Cross-Signing
 
 ```c
-// Key signieren
+// Sign a key
 bool gpg_cross_sign(uint8_t index);
 
-// Signatur abrufen
+// Get signature
 bool gpg_received_get_signature(uint8_t index, uint8_t *sig_out, size_t *sig_len);
 ```
 
-### Export für BLE
+### Export for BLE
 
 ```c
-// Eigenen Key für BLE-Übertragung exportieren
+// Export own key for BLE transmission
 bool gpg_export_for_broadcast(
     uint8_t *pubkey, size_t *pubkey_len,
     uint8_t *curve,
@@ -190,14 +192,14 @@ bool gpg_export_for_broadcast(
 
 ## Serial Commands
 
-| Command | Beschreibung |
-|---------|--------------|
-| `GPG_RECV_LIST` | Alle empfangenen Keys auflisten |
-| `GPG_RECV_INFO <index>` | Details zu einem Key |
-| `GPG_CROSS_SIGN <index>` | Key signieren |
-| `GPG_RECV_DELETE <index>` | Key löschen |
+| Command | Description |
+|---------|-------------|
+| `GPG_RECV_LIST` | List all received keys |
+| `GPG_RECV_INFO <index>` | Details for a key |
+| `GPG_CROSS_SIGN <index>` | Sign key |
+| `GPG_RECV_DELETE <index>` | Delete key |
 
-### Beispiel-Ausgabe
+### Example Output
 
 ```
 > GPG_RECV_LIST
@@ -219,36 +221,36 @@ Signed: Yes
 Signature: (hex dump)
 ```
 
-## Sicherheit
+## Security
 
-### Voraussetzungen
+### Prerequisites
 
-- BLE Secure Connections aktiviert
-- Numeric Comparison für Pairing
-- User muss Pairing bestätigen
+- BLE Secure Connections enabled
+- Numeric Comparison for pairing
+- User must confirm pairing
 
-### Verifikation
+### Verification
 
-Cross-Signing sollte nur nach persönlicher Verifikation erfolgen:
+Cross-signing should only occur after personal verification:
 
-1. Fingerprints vergleichen (Display beider Badges)
-2. Name/Email verifizieren
-3. Dann erst signieren
+1. Compare fingerprints (display on both badges)
+2. Verify name/email
+3. Then sign
 
 ### Fingerprints
 
-Das Badge berechnet zwei Fingerprint-Formate:
+The badge calculates two fingerprint formats:
 
-| Version | Hash | Länge | Standard | Verwendung |
-|---------|------|-------|----------|------------|
+| Version | Hash | Length | Standard | Usage |
+|---------|------|--------|----------|-------|
 | V4 | SHA-1 | 20 Bytes (40 Hex) | RFC 4880 | GnuPG 2.x |
 | V5 | SHA-256 | 32 Bytes (64 Hex) | RFC 9580 | GnuPG 2.5+ |
 
-Beide werden automatisch bei Key-Generierung berechnet und gespeichert.
+Both are automatically calculated during key generation and stored.
 
 ### OpenPGP Export
 
-Cross-signierte Keys können im RFC 4880 Format exportiert werden:
+Cross-signed keys can be exported in RFC 4880 format:
 
 ```bash
 # Via Serial Command
@@ -260,59 +262,59 @@ GPG_EXPORT_SIGNED <index>
 -----END PGP PUBLIC KEY BLOCK-----
 ```
 
-Das Export-Format enthält:
+The export format contains:
 - Public Key Packet (Tag 6, V4)
 - User ID Packet (Tag 13)
 - Certification Signature (Tag 2, Type 0x10)
 
-Import in GnuPG:
+Import into GnuPG:
 ```bash
 gpg --import exported_key.asc
 ```
 
-## Workflow (Benutzer-Sicht)
+## Workflow (User Perspective)
 
-### Key senden
+### Send Key
 
-1. GPG-Menü → **Key senden**
-2. Badge sucht andere Badges
-3. Ziel auswählen
-4. BLE-Pairing bestätigen
-5. Austausch läuft automatisch
+1. GPG Menu → **Send Key**
+2. Badge searches for other badges
+3. Select target
+4. Confirm BLE pairing
+5. Exchange runs automatically
 
-### Empfangene Keys anzeigen
+### View Received Keys
 
-1. GPG-Menü → **Empfangene Keys**
-2. Liste durchblättern
-3. Key auswählen für Details
+1. GPG Menu → **Received Keys**
+2. Browse list
+3. Select key for details
 
-### Key signieren
+### Sign Key
 
-1. Empfangenen Key in Liste auswählen
-2. **Signieren** wählen
-3. Fingerprint mit Besitzer vergleichen
-4. Bestätigen
+1. Select received key in list
+2. Select **Sign**
+3. Compare fingerprint with owner
+4. Confirm
 
-## Kompatibilität
+## Compatibility
 
-- **Badge-zu-Badge:** Vollständig unterstützt
-- **Mit GnuPG 2.x:** Public Keys und Cross-Signaturen exportierbar als RFC 4880 Pakete
-- **Mit GnuPG 2.5+:** V5 Fingerprints (SHA-256) vorbereitet
-- **BLE-Protokoll:** Badge-spezifisches GATT-Protokoll (kein Standard-BLE-Profil für GPG-Keys)
+- **Badge-to-Badge:** Fully supported
+- **With GnuPG 2.x:** Public keys and cross-signatures exportable as RFC 4880 packets
+- **With GnuPG 2.5+:** V5 fingerprints (SHA-256) prepared
+- **BLE Protocol:** Badge-specific GATT protocol (no standard BLE profile for GPG keys)
 
-## Technische Details
+## Technical Details
 
 ### MPI Encoding (RFC 4880 Section 3.2)
 
-Multi-Precision Integers werden mit führendem Bit-Count codiert:
-- Ed25519: 256 oder 255 Bits (abhängig von MSB)
-- P-256: 520 Bits (04 || X || Y = 65 Bytes × 8)
+Multi-Precision Integers are encoded with a leading bit count:
+- Ed25519: 256 or 255 bits (depending on MSB)
+- P-256: 520 bits (04 || X || Y = 65 Bytes × 8)
 
-### Signatur-Semantik
+### Signature Semantics
 
-| Algorithmus | OID | Signierung |
-|-------------|-----|------------|
-| EdDSA (Ed25519) | 1.3.6.1.4.1.11591.15.1 | Hash als "Message" |
-| ECDSA (P-256) | 1.2.840.10045.3.1.7 | Hash direkt |
+| Algorithm | OID | Signing |
+|-----------|-----|---------|
+| EdDSA (Ed25519) | 1.3.6.1.4.1.11591.15.1 | Hash as "Message" |
+| ECDSA (P-256) | 1.2.840.10045.3.1.7 | Hash directly |
 
-Beide produzieren 64-Byte Signaturen (R || S, je 32 Bytes).
+Both produce 64-byte signatures (R || S, 32 bytes each).
