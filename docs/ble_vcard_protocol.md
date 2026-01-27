@@ -1,6 +1,8 @@
 # BLE vCard Protocol (Badge2Badge)
 
-This document defines the BLE beacon (mini‑card) and the BLE vCard exchange (full vCard), and explains how to implement it on your own device.
+> **Note:** This document is a design snapshot and may not reflect the current implementation. Features described here may have changed significantly. Always refer to the source code for accurate details.
+
+This document defines the BLE beacon (mini-card) and the BLE vCard exchange (full vCard), and explains how to implement it on your own device.
 
 Notes:
 - BLE exchange is intentionally **badge‑to‑badge only** (custom GATT). The standards‑compliant interop path is QR.

@@ -1,191 +1,203 @@
 # GPG Key Management
 
-GPG-Schlüsselverwaltung auf dem CDC Badge mit TROPIC01 Secure Element.
+> **Note:** This document is a design snapshot and may not reflect the current implementation. Features described here may have changed significantly. Always refer to the source code for accurate details.
 
-## Übersicht
+GPG key management on the CDC Badge using the TROPIC01 Secure Element.
 
-| Feature | Beschreibung |
-|---------|--------------|
-| **Key Storage** | Private Keys sicher im TROPIC01 Slot 29 |
-| **Unterstützte Kurven** | Ed25519 (empfohlen), P-256 (NIST) |
-| **USB CCID** | SmartCard-Interface für GnuPG (optional) |
-| **Cross-Signing** | Key Exchange mit anderen Badges via BLE |
-| **QR Export** | Public Key als QR-Code anzeigen |
+## Overview
 
-## Schnellstart
+| Feature | Description |
+|---------|-------------|
+| **Key Storage** | Private keys stored securely in TROPIC01 Slots 27-29 |
+| **Key Types** | Signature (SIG), Decryption (DEC), Authentication (AUT) |
+| **Supported Curves** | Ed25519 (SIG/AUT), P-256 ECDH (DEC), P-256 ECDSA (all) |
+| **USB CCID** | SmartCard interface for GnuPG (OpenPGP 3.4) |
+| **Cross-Signing** | Key exchange with other badges via BLE |
+| **QR Export** | Display public key as QR code |
 
-### 1. GPG-Key über das Menü erstellen
+## Quick Start
 
-1. Hauptmenü → **GPG**
-2. **Key erstellen** wählen
-3. Name eingeben (T9-Tastatur)
-4. E-Mail eingeben
-5. Kurve wählen (Ed25519 empfohlen)
-6. Warten bis Key generiert ist
+### 1. Generate GPG Keys via Menu
 
-### 2. GPG-Key über Serial erstellen
+1. Main Menu → **GPG**
+2. Select **Generate Key**
+3. Enter name (T9 keyboard)
+4. Enter email
+5. Select curve (Ed25519 recommended)
+6. Wait for key generation (creates all 3 keys)
+
+### 2. Generate GPG Keys via Serial
 
 ```bash
-# GPG initialisieren (Ed25519)
+# Generate with Ed25519 (SIG/AUT) + P-256 (DEC)
 echo "GPG_GENERATE 1 Max Mustermann <max@example.com>" > /dev/ttyACM0
 
-# Oder mit P-256
+# Or with P-256 for all keys
 echo "GPG_GENERATE 2 Max Mustermann <max@example.com>" > /dev/ttyACM0
 
-# Status prüfen
+# Check status
 echo "GPG_STATUS" > /dev/ttyACM0
 ```
 
-## Key-Details anzeigen
+**Note:** `GPG_GENERATE` always creates three keys:
+- **SIG** (Slot 27): Signature key - Ed25519 or P-256 ECDSA
+- **DEC** (Slot 28): Decryption key - Always P-256 ECDH (TROPIC01 has no X25519)
+- **AUT** (Slot 29): Authentication key - Ed25519 or P-256 ECDSA
 
-Im GPG-Menü:
-1. **Status** wählen
-2. Zeigt: User-ID, Fingerprint, Kurve, Erstelldatum, Signaturzähler
+## Key Details
 
-## Public Key exportieren
+In the GPG menu:
+1. Select **Status**
+2. Shows: User-ID, Fingerprints, Curves, Creation date, Signature counter
 
-### Als QR-Code (auf dem Display)
+## Public Key Export
 
-1. GPG-Menü → **QR-Code**
-2. QR-Code mit Smartphone/Computer scannen
+### As QR Code (on display)
 
-### Über Serial
+1. GPG Menu → **QR Code**
+2. Scan QR code with smartphone/computer
+
+### Via Serial
 
 ```bash
 echo "GPG_EXPORT" > /dev/ttyACM0
-# Gibt PEM-codierten Public Key aus
+# Outputs PEM-encoded public keys
 ```
 
-## USB CCID SmartCard (Optional)
+## USB CCID SmartCard
 
-Der Badge kann als GPG SmartCard über USB CCID fungieren.
+The badge functions as an OpenPGP 3.4 SmartCard via USB CCID.
 
-### Aktivieren
+### Enable
 
 In `feature_flags.h`:
 ```c
 #define FEATURE_GPG 1
-#define FEATURE_GPG_CCID 1
 ```
 
-### Mit GnuPG verwenden
+### Use with GnuPG
 
 ```bash
-# Karte erkennen
+# Detect card
 gpg --card-status
 
-# Public Key von Karte holen
+# Fetch public key from card
 gpg --card-edit
 > fetch
 
-# Key-Liste prüfen
+# Check key list
 gpg --list-keys
 
-# Test-Signatur
+# Test signature
 echo "test" | gpg --sign --armor | gpg --verify
 ```
 
-**Hinweis:** Der Fingerprint wird vom Host (GnuPG) berechnet und via PUT DATA an die Karte gesendet. Bei lokaler Key-Generierung ist der Fingerprint zunächst 0x00...00 bis `gpg --card-edit > fetch` ausgeführt wird.
+### Card Serial Number
+
+The card serial number is derived from the ESP32 MAC address (last 4 bytes), making each badge unique. Manufacturer ID is "CD" (0x4344).
 
 ### VID/PID
 
-Der Badge verwendet Gemalto VID/PID für kompatibilität:
+The badge uses Gemalto VID/PID for compatibility:
 - VID: `0x08E6`
 - PID: `0x4433`
 
-Dies umgeht die libccid Whitelist ohne udev-Regeln.
+This bypasses the libccid whitelist without requiring udev rules.
 
 ## Cross-Signing (Badge-to-Badge)
 
-Tausche GPG Public Keys mit anderen Badges via BLE und signiere sie.
+Exchange GPG public keys with other badges via BLE and sign them.
 
 ### Workflow
 
-1. **Eigenen Key broadcasten**
-   - GPG-Menü → **Key senden**
-   - BLE sucht nach anderen Badges
+1. **Broadcast own key**
+   - GPG Menu → **Send Key**
+   - BLE searches for other badges
 
-2. **Key empfangen**
-   - GPG-Menü → **Empfangene Keys**
-   - Zeigt Liste aller empfangenen Keys
+2. **Receive key**
+   - GPG Menu → **Received Keys**
+   - Shows list of all received keys
 
-3. **Key signieren**
-   - Empfangenen Key auswählen
-   - **Signieren** wählen
-   - Cross-Signatur wird erstellt
+3. **Sign key**
+   - Select received key
+   - Select **Sign**
+   - Cross-signature is created
 
 ### Cross-Sign Format
 
-Die Signatur wird über folgende Daten erstellt:
+The signature is created over the following data:
 ```
 SHA256(fingerprint || user_id)
 ```
 
-### Serial Commands für empfangene Keys
+### Serial Commands for Received Keys
 
 ```bash
-# Empfangene Keys auflisten
+# List received keys
 echo "GPG_RECV_LIST" > /dev/ttyACM0
 
-# Details zu einem Key
+# Details for a key
 echo "GPG_RECV_INFO 0" > /dev/ttyACM0
 
-# Key signieren
+# Sign key
 echo "GPG_CROSS_SIGN 0" > /dev/ttyACM0
 
-# Key löschen
+# Delete key
 echo "GPG_RECV_DELETE 0" > /dev/ttyACM0
 ```
 
 ## Serial Commands
 
-| Command | Beschreibung |
-|---------|--------------|
-| `GPG_STATUS` | Zeigt Key-Status (User-ID, Fingerprint, etc.) |
-| `GPG_GENERATE <curve> <user_id>` | Key erstellen (curve: 1=Ed25519, 2=P-256) |
-| `GPG_EXPORT` | Public Key als PEM exportieren |
-| `GPG_RESET` | Key löschen (erfordert CONFIRM) |
-| `GPG_RECV_LIST` | Empfangene Keys auflisten |
-| `GPG_RECV_INFO <index>` | Details zu empfangenem Key |
-| `GPG_CROSS_SIGN <index>` | Empfangenen Key signieren |
-| `GPG_RECV_DELETE <index>` | Empfangenen Key löschen |
+| Command | Description |
+|---------|-------------|
+| `GPG_STATUS` | Show key status (User-ID, Fingerprints, etc.) |
+| `GPG_GENERATE <curve> <user_id>` | Generate keys (curve: 1=Ed25519, 2=P-256) |
+| `GPG_EXPORT` | Export public keys as PEM |
+| `GPG_RESET` | Delete all keys (requires CONFIRM) |
+| `GPG_RECV_LIST` | List received keys |
+| `GPG_RECV_INFO <index>` | Details for received key |
+| `GPG_CROSS_SIGN <index>` | Sign received key |
+| `GPG_RECV_DELETE <index>` | Delete received key |
 
-## Speicher-Architektur
+## Storage Architecture
 
-### TROPIC01
+### TROPIC01 ECC Slots
 
-| Slot | Verwendung |
-|------|------------|
-| 29 | GPG Master Key (ECC) |
+| Slot | Usage |
+|------|-------|
+| 27 | GPG Signature Key (SIG) |
+| 28 | GPG Decryption Key (DEC) |
+| 29 | GPG Authentication Key (AUT) |
 
 ### R-Memory
 
-| Slot | Verwendung |
-|------|------------|
-| 134 | GPG Metadata (User-ID, Fingerprint, etc.) |
+| Slot | Usage |
+|------|-------|
+| 134 | GPG Metadata (User-ID, Fingerprints, etc.) |
 
 ### NVS
 
-| Namespace | Verwendung |
-|-----------|------------|
-| `gpg_recv` | Empfangene Public Keys |
+| Namespace | Usage |
+|-----------|-------|
+| `openpgp` | OpenPGP card state (fingerprints, gen times) |
+| `gpg_recv` | Received public keys |
 
-## API-Referenz
+## API Reference
 
-Siehe `components/gpg/gpg.h` für die vollständige C-API.
+See `components/gpg/gpg.h` for the complete C API.
 
-### Wichtige Funktionen
+### Key Functions
 
 ```c
-// Initialisierung
+// Initialization
 bool gpg_init(void);
 bool gpg_is_initialized(void);
 bool gpg_get_status(gpg_status_t *status);
 
 // Key Management
 bool gpg_set_pending_user_id(const char *user_id);
-bool gpg_generate_key(uint8_t curve);  // CDC_CURVE_ED25519 oder CDC_CURVE_P256
-bool gpg_reset(void);
+bool gpg_generate_key(uint8_t curve);  // CDC_CURVE_ED25519 or CDC_CURVE_P256
+bool gpg_reset(void);                  // Deletes all 3 keys
 
 // Export
 bool gpg_export_pubkey_pem(char *buf, size_t size, size_t *out_len);
@@ -208,33 +220,32 @@ bool gpg_cross_sign(uint8_t index);
 In `feature_flags.h`:
 
 ```c
-#define FEATURE_GPG 1       // GPG Key Storage (Standard: aktiviert)
-#define FEATURE_GPG_CCID 0  // USB CCID SmartCard (Standard: deaktiviert)
+#define FEATURE_GPG 1       // GPG Key Storage (default: enabled)
 ```
 
-## Einschränkungen
+## Limitations
 
-- **ECDH/Decryption:** Nicht unterstützt (TROPIC01 Limitierung)
-- **RSA:** Nicht unterstützt
-- **Subkeys:** Nicht unterstützt (nur Master Key)
-- **Empfangene Keys:** Max. 16 Keys in NVS
+- **RSA:** Not supported (TROPIC01 limitation)
+- **X25519:** Not supported for ECDH (uses P-256 instead)
+- **Subkeys:** Not supported in traditional sense (uses dedicated slots)
+- **Received Keys:** Max 16 keys in NVS
 
 ## Troubleshooting
 
-### Key Generation schlägt fehl
+### Key Generation Fails
 
-1. Prüfen ob User-ID gesetzt: `GPG_STATUS`
-2. TROPIC01 Status prüfen: `TR01_STATUS`
-3. Slot 29 frei?: `TR01_SLOTS`
+1. Check if User-ID is set: `GPG_STATUS`
+2. Check TROPIC01 status: `TR01_STATUS`
+3. Check slots: `TR01_SLOTS`
 
-### CCID wird nicht erkannt
+### CCID Not Recognized
 
-1. `FEATURE_GPG_CCID` in feature_flags.h aktiviert?
-2. USB neu verbinden
-3. `gpg --card-status` mit Debug: `gpg --debug ccid --card-status`
+1. `FEATURE_GPG` enabled in feature_flags.h?
+2. Reconnect USB
+3. Debug: `gpg --debug ccid --card-status`
 
-### Cross-Sign funktioniert nicht
+### Cross-Sign Not Working
 
-1. Eigener Key muss existieren
-2. BLE muss aktiviert sein
-3. Anderer Badge muss in Reichweite sein
+1. Own keys must exist
+2. BLE must be enabled
+3. Other badge must be in range
