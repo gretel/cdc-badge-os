@@ -1,0 +1,841 @@
+// FIDO2 Storage Layer (TROPIC01 + NVS)
+// Handles credential storage in ECC slots and R-Memory
+
+#include "mod_fido2/fido2_storage.h"
+#include "mod_fido2/fido2_common.h"
+#include "cdc_hal/ISecureElement.h"
+#include "cdc_log.h"
+#include <mbedtls/sha256.h>
+#include <nvs_flash.h>
+#include <nvs.h>
+#include <string.h>
+
+using cdc::mod_fido2::get_se;
+using cdc::mod_fido2::sha256;
+
+// ============================================================================
+// Storage Layout
+// ============================================================================
+
+#define FIDO2_RMEM_MAGIC        "FID2"
+#define FIDO2_RMEM_MAGIC_LEN    4
+#define NVS_NAMESPACE           "fido2"
+#define NVS_KEY_COUNTER         "auth_cnt"
+
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t magic[FIDO2_RMEM_MAGIC_LEN];    // "FID2"
+    uint8_t rp_id_hash[32];                 // SHA-256 of RP ID
+    char rp_id[FIDO2_RP_ID_MAX_LEN];        // RP ID string (for display)
+    uint8_t user_id[FIDO2_USER_ID_MAX_LEN]; // User handle
+    uint8_t user_id_len;                    // Length of user ID
+    char user_name[FIDO2_USER_NAME_MAX_LEN];// Display name
+    uint32_t sign_count;                    // Per-credential counter
+    uint8_t cred_id_nonce[16];              // Random nonce for credential ID
+    uint8_t flags;                          // Flags (resident, cred_protect, etc.)
+    uint8_t cred_protect;                   // Credential protection level
+    uint8_t curve;                          // CDC_CURVE_P256 or CDC_CURVE_ED25519
+    uint8_t reserved[7];                    // Reserved for future use
+} fido2_stored_cred_t;                      // Total: ~180 bytes
+#pragma pack(pop)
+
+#define FIDO2_STORED_SIZE sizeof(fido2_stored_cred_t)
+
+// Flag bits
+#define FIDO2_FLAG_RESIDENT     0x01
+
+// ============================================================================
+// State
+// ============================================================================
+
+static struct {
+    bool initialized;
+    uint32_t auth_counter;
+    bool counter_loaded;
+
+    // Cached credential info
+    struct {
+        bool valid;
+        uint8_t rp_id_hash[32];
+        char rp_id[FIDO2_RP_ID_MAX_LEN];
+        char user_name[FIDO2_USER_NAME_MAX_LEN];
+        uint8_t user_id[FIDO2_USER_ID_MAX_LEN];  // User handle for replacement detection
+        uint8_t user_id_len;
+        uint32_t sign_count;
+        bool resident;
+        uint8_t cred_protect;
+        uint8_t curve;  // CDC_CURVE_P256 or CDC_CURVE_ED25519
+    } creds[FIDO2_MAX_CREDENTIALS];
+
+    uint8_t cred_count;
+} g_storage = {};
+
+static uint8_t s_ecc_start = 0;
+static uint8_t s_ecc_end = 0;
+static uint16_t s_rmem_start = 0;
+static uint16_t s_rmem_end = 0;
+
+void fido2_storage_set_slot_range(uint8_t ecc_start, uint8_t ecc_end,
+                                  uint16_t rmem_start, uint16_t rmem_end) {
+    s_ecc_start = ecc_start;
+    s_ecc_end = ecc_end;
+    s_rmem_start = rmem_start;
+    s_rmem_end = rmem_end;
+}
+
+uint8_t fido2_storage_ecc_start(void) { return s_ecc_start; }
+uint8_t fido2_storage_ecc_end(void) { return s_ecc_end; }
+uint16_t fido2_storage_rmem_start(void) { return s_rmem_start; }
+uint16_t fido2_storage_rmem_end(void) { return s_rmem_end; }
+
+static bool slot_range_valid(void) {
+    return s_ecc_end >= s_ecc_start && s_rmem_end >= s_rmem_start;
+}
+
+static uint16_t ecc_count(void) {
+    if (!slot_range_valid()) return 0;
+    return static_cast<uint16_t>(s_ecc_end - s_ecc_start + 1);
+}
+
+static uint16_t rmem_count(void) {
+    if (!slot_range_valid()) return 0;
+    return static_cast<uint16_t>(s_rmem_end - s_rmem_start + 1);
+}
+
+static bool slot_logical_valid(uint8_t slot) {
+    uint16_t count = ecc_count();
+    return count > 0 && slot < count;
+}
+
+static uint8_t ecc_slot_for_logical(uint8_t slot) {
+    return static_cast<uint8_t>(s_ecc_start + slot);
+}
+
+static uint16_t rmem_slot_for_logical(uint8_t slot) {
+    if (!slot_range_valid()) return 0;
+    uint16_t offset = static_cast<uint16_t>(slot);
+    return static_cast<uint16_t>(s_rmem_start + offset);
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+// Read credential from R-Memory and validate magic header
+static bool read_rmem_credential(uint8_t logical_slot, fido2_stored_cred_t* stored) {
+    if (!stored) return false;
+
+    auto* se = get_se();
+    if (!se) return false;
+
+    uint16_t rmem_slot = rmem_slot_for_logical(logical_slot);
+    uint8_t data[256];
+    uint16_t size = 0;
+
+    auto res = se->rmemRead(rmem_slot, data, sizeof(data), &size);
+    if (res != cdc::hal::SeResult::OK || size < FIDO2_STORED_SIZE) {
+        return false;
+    }
+
+    auto* tmp = reinterpret_cast<fido2_stored_cred_t*>(data);
+    if (memcmp(tmp->magic, FIDO2_RMEM_MAGIC, FIDO2_RMEM_MAGIC_LEN) != 0) {
+        return false;
+    }
+
+    memcpy(stored, tmp, sizeof(fido2_stored_cred_t));
+    return true;
+}
+
+// Update cache entry from stored credential data
+static void update_cache_from_stored(uint8_t slot, const fido2_stored_cred_t* stored,
+                                      bool is_resident) {
+    g_storage.creds[slot].valid = true;
+    memcpy(g_storage.creds[slot].rp_id_hash, stored->rp_id_hash, 32);
+    strncpy(g_storage.creds[slot].rp_id, stored->rp_id, FIDO2_RP_ID_MAX_LEN - 1);
+    strncpy(g_storage.creds[slot].user_name, stored->user_name, FIDO2_USER_NAME_MAX_LEN - 1);
+    g_storage.creds[slot].user_id_len = stored->user_id_len;
+    if (stored->user_id_len > 0) {
+        memcpy(g_storage.creds[slot].user_id, stored->user_id, stored->user_id_len);
+    }
+    g_storage.creds[slot].sign_count = stored->sign_count;
+    g_storage.creds[slot].resident = is_resident;
+    g_storage.creds[slot].cred_protect = stored->cred_protect;
+    g_storage.creds[slot].curve = stored->curve;
+}
+
+// Erase both ECC key and R-Memory for a logical slot
+static void erase_slot_data(uint8_t logical_slot) {
+    auto* se = get_se();
+    if (!se) return;
+
+    uint8_t phys_slot = ecc_slot_for_logical(logical_slot);
+    se->eccDelete(phys_slot);
+
+    uint16_t rmem_slot = rmem_slot_for_logical(logical_slot);
+    se->rmemErase(rmem_slot);
+}
+
+// Convert raw 64-byte ECDSA signature to DER format
+// Returns length written to 'der_sig'
+static uint8_t raw_sig_to_der(const uint8_t raw_sig[64], uint8_t* der_sig) {
+    uint8_t* p = der_sig;
+    *p++ = 0x30;  // SEQUENCE
+
+    // Calculate lengths (handle leading zero for positive integers)
+    uint8_t r_pad = (raw_sig[0] & 0x80) ? 1 : 0;
+    uint8_t s_pad = (raw_sig[32] & 0x80) ? 1 : 0;
+
+    // Skip leading zeros in R and S (but keep at least one byte)
+    uint8_t r_skip = 0;
+    while (r_skip < 31 && raw_sig[r_skip] == 0 && !(raw_sig[r_skip + 1] & 0x80)) {
+        r_skip++;
+    }
+    uint8_t s_skip = 0;
+    while (s_skip < 31 && raw_sig[32 + s_skip] == 0 && !(raw_sig[32 + s_skip + 1] & 0x80)) {
+        s_skip++;
+    }
+
+    uint8_t r_len = 32 - r_skip + r_pad;
+    uint8_t s_len = 32 - s_skip + s_pad;
+
+    uint8_t total_len = 2 + r_len + 2 + s_len;
+    *p++ = total_len;
+
+    // R
+    *p++ = 0x02;  // INTEGER
+    *p++ = r_len;
+    if (r_pad) *p++ = 0x00;
+    memcpy(p, raw_sig + r_skip, 32 - r_skip);
+    p += 32 - r_skip;
+
+    // S
+    *p++ = 0x02;  // INTEGER
+    *p++ = s_len;
+    if (s_pad) *p++ = 0x00;
+    memcpy(p, raw_sig + 32 + s_skip, 32 - s_skip);
+    p += 32 - s_skip;
+
+    return static_cast<uint8_t>(p - der_sig);
+}
+
+// Sign hash with ECDSA, returns raw 64-byte signature
+static bool ecdsa_sign_hash(uint8_t logical_slot, const uint8_t hash[32],
+                            uint8_t raw_sig[64]) {
+    auto* se = get_se();
+    if (!se) return false;
+
+    uint8_t phys_slot = ecc_slot_for_logical(logical_slot);
+    size_t raw_len = 64;
+
+    if (se->ecdsaSign(phys_slot, hash, 32, raw_sig, &raw_len) !=
+        cdc::hal::SeResult::OK || raw_len != 64) {
+        LOG_E("FIDO2", "ECDSA sign failed for slot %d", logical_slot);
+        return false;
+    }
+    return true;
+}
+
+// Write credential to R-Memory (erases first, then writes)
+static bool write_rmem_credential(uint8_t logical_slot, const fido2_stored_cred_t* stored) {
+    auto* se = get_se();
+    if (!se) return false;
+
+    uint16_t rmem_slot = rmem_slot_for_logical(logical_slot);
+
+    // Erase first (R-Memory requires empty slot)
+    se->rmemErase(rmem_slot);
+
+    if (se->rmemWrite(rmem_slot, reinterpret_cast<const uint8_t*>(stored),
+                      FIDO2_STORED_SIZE) != cdc::hal::SeResult::OK) {
+        LOG_E("FIDO2", "Failed to write credential metadata to slot %d", rmem_slot);
+        return false;
+    }
+    return true;
+}
+
+// ============================================================================
+// NVS Counter Operations
+// ============================================================================
+
+void fido2_storage_counter_load(void) {
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
+    if (err != ESP_OK) {
+        if (err != ESP_ERR_NVS_NOT_FOUND) {
+            LOG_W("FIDO2", "Failed to open NVS for counter: %s", esp_err_to_name(err));
+        }
+        g_storage.auth_counter = 0;
+        g_storage.counter_loaded = true;
+        return;
+    }
+
+    err = nvs_get_u32(nvs, NVS_KEY_COUNTER, &g_storage.auth_counter);
+    if (err != ESP_OK) {
+        if (err != ESP_ERR_NVS_NOT_FOUND) {
+            LOG_W("FIDO2", "Failed to read counter from NVS: %s", esp_err_to_name(err));
+        }
+        g_storage.auth_counter = 0;
+    } else {
+        LOG_I("FIDO2", "Loaded auth counter: %lu", g_storage.auth_counter);
+    }
+
+    nvs_close(nvs);
+    g_storage.counter_loaded = true;
+}
+
+uint32_t fido2_storage_counter_get(void) {
+    if (!g_storage.counter_loaded) {
+        fido2_storage_counter_load();
+    }
+    return g_storage.auth_counter;
+}
+
+bool fido2_storage_counter_increment(void) {
+    if (!g_storage.counter_loaded) {
+        fido2_storage_counter_load();
+    }
+    g_storage.auth_counter++;
+
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        LOG_E("FIDO2", "Failed to open NVS for counter write: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    err = nvs_set_u32(nvs, NVS_KEY_COUNTER, g_storage.auth_counter);
+    if (err != ESP_OK) {
+        LOG_E("FIDO2", "Failed to set counter in NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs);
+        return false;
+    }
+
+    err = nvs_commit(nvs);
+    if (err != ESP_OK) {
+        LOG_W("FIDO2", "NVS commit failed: %s", esp_err_to_name(err));
+    }
+
+    nvs_close(nvs);
+    return true;
+}
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+uint8_t fido2_storage_init(void) {
+    LOG_I("FIDO2", "Initializing storage...");
+
+    memset(&g_storage, 0, sizeof(g_storage));
+    fido2_storage_counter_load();
+
+    auto* se = cdc::hal::getSecureElementInstance();
+    if (!se) {
+        LOG_E("FIDO2", "No secure element available");
+        return 0;
+    }
+
+    // Load credential metadata from R-Memory
+    if (!slot_range_valid()) {
+        LOG_E("FIDO2", "Slot range not configured");
+        return 0;
+    }
+
+    uint16_t count = ecc_count();
+    uint16_t rcount = rmem_count();
+    if (rcount < count) {
+        LOG_E("FIDO2", "R-Memory range smaller than ECC range");
+        return 0;
+    }
+
+    for (uint8_t i = 0; i < count && i < FIDO2_MAX_CREDENTIALS; i++) {
+        fido2_stored_cred_t stored;
+        if (read_rmem_credential(i, &stored)) {
+            bool is_resident = (stored.flags & FIDO2_FLAG_RESIDENT) != 0;
+            update_cache_from_stored(i, &stored, is_resident);
+            g_storage.cred_count++;
+            LOG_D("FIDO2", "Found credential %d: %s (curve=%d)", i, stored.rp_id, stored.curve);
+        }
+    }
+
+    g_storage.initialized = true;
+    LOG_I("FIDO2", "Found %d credentials", g_storage.cred_count);
+    return g_storage.cred_count;
+}
+
+// ============================================================================
+// Lookup Operations (use cache - no TROPIC01 access)
+// ============================================================================
+
+uint8_t fido2_storage_count(void) {
+    return g_storage.cred_count;
+}
+
+bool fido2_storage_slot_used(uint8_t slot) {
+    if (!slot_logical_valid(slot)) return false;
+    return g_storage.creds[slot].valid;
+}
+
+int8_t fido2_storage_find_free_slot(void) {
+    uint16_t count = ecc_count();
+    for (uint8_t i = 0; i < count && i < FIDO2_MAX_CREDENTIALS; i++) {
+        if (!g_storage.creds[i].valid) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+uint8_t fido2_storage_find_by_rp(const uint8_t *rp_id_hash,
+                                  uint8_t *out_slots, uint8_t max_slots) {
+    uint8_t count = 0;
+
+    uint16_t total = ecc_count();
+    for (uint8_t i = 0; i < total && i < FIDO2_MAX_CREDENTIALS && count < max_slots; i++) {
+        if (g_storage.creds[i].valid &&
+            memcmp(g_storage.creds[i].rp_id_hash, rp_id_hash, 32) == 0) {
+            out_slots[count++] = i;
+        }
+    }
+
+    return count;
+}
+
+uint8_t fido2_storage_find_by_rp_resident(const uint8_t *rp_id_hash,
+                                          uint8_t *out_slots, uint8_t max_slots) {
+    uint8_t count = 0;
+
+    LOG_D("FIDO2", "Searching for resident creds, total=%d", g_storage.cred_count);
+    uint16_t total = ecc_count();
+    for (uint8_t i = 0; i < total && i < FIDO2_MAX_CREDENTIALS && count < max_slots; i++) {
+        if (g_storage.creds[i].valid) {
+            bool rp_match = memcmp(g_storage.creds[i].rp_id_hash, rp_id_hash, 32) == 0;
+            LOG_D("FIDO2", "Slot %d: valid=%d resident=%d rp_match=%d rp=%s",
+                  i, g_storage.creds[i].valid, g_storage.creds[i].resident,
+                  rp_match, g_storage.creds[i].rp_id);
+            if (g_storage.creds[i].resident && rp_match) {
+                out_slots[count++] = i;
+            }
+        }
+    }
+
+    return count;
+}
+
+bool fido2_storage_is_resident(uint8_t slot) {
+    if (!slot_logical_valid(slot)) return false;
+    return g_storage.creds[slot].valid && g_storage.creds[slot].resident;
+}
+
+int8_t fido2_storage_find_by_rp_user(const uint8_t *rp_id_hash,
+                                      const uint8_t *user_id,
+                                      uint8_t user_id_len) {
+    if (!rp_id_hash) return -1;
+
+    uint16_t total = ecc_count();
+    for (uint8_t i = 0; i < total && i < FIDO2_MAX_CREDENTIALS; i++) {
+        if (!g_storage.creds[i].valid) continue;
+
+        // Check RP ID hash match
+        if (memcmp(g_storage.creds[i].rp_id_hash, rp_id_hash, 32) != 0) continue;
+
+        // Check User ID match
+        if (g_storage.creds[i].user_id_len != user_id_len) continue;
+        if (user_id_len == 0) {
+            // Both have empty user_id - match!
+            LOG_D("FIDO2", "Found existing credential in slot %d (empty user_id)", i);
+            return i;
+        }
+        if (user_id && memcmp(g_storage.creds[i].user_id, user_id, user_id_len) == 0) {
+            LOG_D("FIDO2", "Found existing credential in slot %d for replacement", i);
+            return i;
+        }
+    }
+
+    return -1;  // No existing credential found
+}
+
+int8_t fido2_storage_find_slot_by_cred_id(const uint8_t *cred_id, uint16_t cred_id_len) {
+    if (!cred_id || cred_id_len != FIDO2_CRED_ID_LEN) return -1;
+
+    uint8_t slot = cred_id[0];
+    if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
+        return -1;
+    }
+
+    uint8_t stored_id[FIDO2_CRED_ID_LEN];
+    if (!fido2_storage_get_cred_id(slot, stored_id)) {
+        return -1;
+    }
+
+    if (memcmp(stored_id, cred_id, FIDO2_CRED_ID_LEN) != 0) {
+        return -1;
+    }
+
+    return (int8_t)slot;
+}
+
+bool fido2_storage_get_user(uint8_t slot,
+                            uint8_t *user_id,
+                            uint8_t *user_id_len,
+                            char *user_name,
+                            size_t user_name_max) {
+    if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
+        return false;
+    }
+
+    fido2_stored_cred_t stored;
+    if (!read_rmem_credential(slot, &stored)) {
+        return false;
+    }
+
+    if (user_id && user_id_len) {
+        uint8_t len = stored.user_id_len;
+        if (len > FIDO2_USER_ID_MAX_LEN) len = FIDO2_USER_ID_MAX_LEN;
+        memcpy(user_id, stored.user_id, len);
+        *user_id_len = len;
+    }
+
+    if (user_name && user_name_max > 0) {
+        size_t copy_len = strnlen(stored.user_name, FIDO2_USER_NAME_MAX_LEN);
+        if (copy_len >= user_name_max) copy_len = user_name_max - 1;
+        memcpy(user_name, stored.user_name, copy_len);
+        user_name[copy_len] = '\0';
+    }
+
+    return true;
+}
+
+bool fido2_storage_verify_cred_id(uint8_t slot, const uint8_t *cred_id) {
+    if (!cred_id) return false;
+    uint8_t stored_id[FIDO2_CRED_ID_LEN];
+    if (!fido2_storage_get_cred_id(slot, stored_id)) {
+        return false;
+    }
+    return memcmp(stored_id, cred_id, FIDO2_CRED_ID_LEN) == 0;
+}
+
+bool fido2_storage_get_cred_id(uint8_t slot, uint8_t *out_cred_id) {
+    if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid || !out_cred_id) {
+        return false;
+    }
+
+    fido2_stored_cred_t stored;
+    if (!read_rmem_credential(slot, &stored)) {
+        LOG_E("FIDO2", "Failed to read credential %d", slot);
+        return false;
+    }
+
+    // Build credential ID: slot (1) + nonce (16) + padding (47) = 64 bytes
+    memset(out_cred_id, 0, FIDO2_CRED_ID_LEN);
+    out_cred_id[0] = slot;
+    memcpy(out_cred_id + 1, stored.cred_id_nonce, 16);
+
+    return true;
+}
+
+// ============================================================================
+// Credential Operations
+// ============================================================================
+
+bool fido2_storage_get_credential(uint8_t slot, fido2_credential_info_t *info) {
+    if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid || !info) {
+        return false;
+    }
+
+    memset(info, 0, sizeof(*info));
+    info->slot = slot;
+    memcpy(info->rp_id_hash, g_storage.creds[slot].rp_id_hash, 32);
+    strncpy(info->rp_id, g_storage.creds[slot].rp_id, FIDO2_RP_ID_MAX_LEN - 1);
+    strncpy(info->user_name, g_storage.creds[slot].user_name, FIDO2_USER_NAME_MAX_LEN - 1);
+    info->user_id_len = 0;
+    info->sign_count = g_storage.creds[slot].sign_count;
+    info->resident_key = g_storage.creds[slot].resident;
+    info->cred_protect = g_storage.creds[slot].cred_protect;
+    info->curve = g_storage.creds[slot].curve;
+
+    // Load user ID from R-Memory (not cached)
+    uint8_t user_id_len = 0;
+    if (fido2_storage_get_user(slot, info->user_id, &user_id_len,
+                               info->user_name, FIDO2_USER_NAME_MAX_LEN)) {
+        info->user_id_len = user_id_len;
+    }
+
+    return true;
+}
+
+uint8_t fido2_storage_get_curve(uint8_t slot) {
+    if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
+        return 0xFF;  // Invalid
+    }
+    return g_storage.creds[slot].curve;
+}
+
+bool fido2_storage_create_credential(
+    const char *rp_id,
+    const uint8_t *rp_id_hash,
+    const uint8_t *user_id,
+    uint8_t user_id_len,
+    const char *user_name,
+    bool resident_key,
+    uint8_t cred_protect,
+    uint8_t curve,
+    uint8_t *out_slot,
+    uint8_t *out_cred_id,
+    uint8_t *out_pubkey
+) {
+    if (user_id && user_id_len > FIDO2_USER_ID_MAX_LEN) {
+        LOG_E("FIDO2", "User ID too long: %u", user_id_len);
+        return false;
+    }
+
+    // FIDO2 spec: If credential with same RP ID + User ID exists, replace it
+    int8_t existing_slot = fido2_storage_find_by_rp_user(rp_id_hash, user_id, user_id_len);
+    int8_t slot;
+
+    if (existing_slot >= 0) {
+        // Replace existing credential
+        LOG_I("FIDO2", "Replacing existing credential in slot %d", existing_slot);
+        slot = existing_slot;
+
+        // Erase existing key and metadata
+        erase_slot_data(static_cast<uint8_t>(slot));
+
+        // Update cache: mark as invalid temporarily, will be re-validated after creation
+        g_storage.creds[slot].valid = false;
+        g_storage.cred_count--;
+    } else {
+        // Find free slot for new credential
+        slot = fido2_storage_find_free_slot();
+        if (slot < 0) {
+            LOG_E("FIDO2", "No free slots");
+            return false;
+        }
+    }
+
+    const char *curve_name = (curve == CDC_CURVE_ED25519) ? "Ed25519" : "P-256";
+    LOG_I("FIDO2", "Creating %s credential in slot %d for %s", curve_name, slot, rp_id);
+
+    // Explicitly erase ECC slot first to ensure it's empty
+    // (handles cache/chip state mismatch)
+    LOG_D("FIDO2", "Erasing slot %d before key generation", slot);
+    uint8_t phys_slot = ecc_slot_for_logical(static_cast<uint8_t>(slot));
+    auto* se = get_se();
+    if (!se) return false;
+    se->eccDelete(phys_slot);
+
+    // Generate ECC key with requested curve
+    cdc::hal::EccCurve se_curve =
+        (curve == CDC_CURVE_ED25519) ? cdc::hal::EccCurve::ED25519
+                                     : cdc::hal::EccCurve::P256;
+    if (se->eccGenerate(phys_slot, se_curve) != cdc::hal::SeResult::OK) {
+        LOG_E("FIDO2", "Failed to generate %s key in slot %d", curve_name, slot);
+        return false;
+    }
+
+    // Read public key
+    // P-256: 64 bytes (X||Y without 0x04 prefix)
+    // Ed25519: 32 bytes
+    uint8_t pubkey[64];
+    uint8_t pubkey_size = (curve == CDC_CURVE_ED25519) ? 32 : 64;
+    cdc::hal::EccCurve se_read_curve = cdc::hal::EccCurve::P256;
+    if (se->eccGetPublicKey(phys_slot, pubkey, &se_read_curve) != cdc::hal::SeResult::OK) {
+        LOG_E("FIDO2", "Failed to read public key from slot %d", slot);
+        se->eccDelete(phys_slot);
+        return false;
+    }
+
+    // Generate random nonce for credential ID
+    uint8_t nonce[16];
+    if (!se->getRandom(nonce, 16)) {
+        LOG_E("FIDO2", "Failed to generate nonce");
+        se->eccDelete(phys_slot);
+        return false;
+    }
+
+    // Build credential ID (64 bytes)
+    // Format: slot (1) + nonce (16) + padding (47)
+    // In production, use HMAC for binding
+    memset(out_cred_id, 0, FIDO2_CRED_ID_LEN);
+    out_cred_id[0] = slot;
+    memcpy(out_cred_id + 1, nonce, 16);
+
+    // Prepare stored credential
+    fido2_stored_cred_t stored;
+    memset(&stored, 0, sizeof(stored));
+    memcpy(stored.magic, FIDO2_RMEM_MAGIC, FIDO2_RMEM_MAGIC_LEN);
+    memcpy(stored.rp_id_hash, rp_id_hash, 32);
+    if (rp_id) {
+        strncpy(stored.rp_id, rp_id, FIDO2_RP_ID_MAX_LEN - 1);
+    }
+    if (user_id && user_id_len > 0) {
+        memcpy(stored.user_id, user_id, user_id_len);
+        stored.user_id_len = user_id_len;
+    }
+    if (user_name) {
+        strncpy(stored.user_name, user_name, FIDO2_USER_NAME_MAX_LEN - 1);
+    }
+    stored.sign_count = 0;
+    memcpy(stored.cred_id_nonce, nonce, 16);
+    stored.flags = resident_key ? FIDO2_FLAG_RESIDENT : 0;
+    stored.cred_protect = cred_protect;
+    stored.curve = curve;
+
+    // Write to R-Memory
+    if (!write_rmem_credential(static_cast<uint8_t>(slot), &stored)) {
+        se->eccDelete(phys_slot);
+        return false;
+    }
+
+    // Update local cache
+    update_cache_from_stored(static_cast<uint8_t>(slot), &stored, resident_key);
+    g_storage.cred_count++;
+
+    // Copy public key output (32 bytes for Ed25519, 64 for P-256)
+    memcpy(out_pubkey, pubkey, pubkey_size);
+    *out_slot = slot;
+
+    LOG_I("FIDO2", "Created %s credential in slot %d", curve_name, slot);
+    return true;
+}
+
+bool fido2_storage_delete_credential(uint8_t slot) {
+    if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
+        return false;
+    }
+
+    LOG_I("FIDO2", "Deleting credential in slot %d", slot);
+
+    // Erase ECC key and R-Memory
+    erase_slot_data(slot);
+
+    // Update local cache
+    g_storage.creds[slot].valid = false;
+    g_storage.cred_count--;
+
+    LOG_I("FIDO2", "Deleted credential in slot %d", slot);
+    return true;
+}
+
+uint32_t fido2_storage_increment_sign_count(uint8_t slot) {
+    if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
+        return 0;
+    }
+
+    // Increment local cache
+    g_storage.creds[slot].sign_count++;
+    uint32_t new_count = g_storage.creds[slot].sign_count;
+
+    // Read current stored data from TROPIC01
+    fido2_stored_cred_t stored;
+    if (read_rmem_credential(slot, &stored)) {
+        stored.sign_count = new_count;
+        if (!write_rmem_credential(slot, &stored)) {
+            LOG_E("FIDO2", "CRITICAL: Failed to persist sign count for slot %d!", slot);
+        }
+    }
+
+    return new_count;
+}
+
+// ============================================================================
+// Signing Operations (requires TROPIC01 access)
+// ============================================================================
+
+bool fido2_storage_sign(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
+                        uint8_t *signature, uint8_t *sig_len) {
+    if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
+        return false;
+    }
+
+    // ECDSA sign: hash message and sign
+    uint8_t hash[32];
+    sha256(msg, msg_len, hash);
+
+    uint8_t raw_sig[64];
+    if (!ecdsa_sign_hash(slot, hash, raw_sig)) {
+        return false;
+    }
+
+    // Convert to DER format
+    *sig_len = raw_sig_to_der(raw_sig, signature);
+
+    LOG_D("FIDO2", "Signed with slot %d, sig_len=%d", slot, *sig_len);
+    return true;
+}
+
+bool fido2_storage_sign_raw(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
+                            uint8_t *signature, uint8_t *sig_len) {
+    if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
+        return false;
+    }
+
+    uint8_t curve = g_storage.creds[slot].curve;
+
+    if (curve == CDC_CURVE_ED25519) {
+        // EdDSA sign: sign message directly
+        auto* se = get_se();
+        if (!se) return false;
+
+        uint8_t phys_slot = ecc_slot_for_logical(slot);
+        if (se->eddsaSign(phys_slot, msg, msg_len, signature) != cdc::hal::SeResult::OK) {
+            LOG_E("FIDO2", "EdDSA sign failed for slot %d", slot);
+            return false;
+        }
+        *sig_len = 64;  // Ed25519 signature is always 64 bytes
+        LOG_D("FIDO2", "EdDSA signed %d bytes with slot %d", msg_len, slot);
+    } else {
+        // ECDSA sign: sign SHA-256 hash
+        uint8_t hash[32];
+        sha256(msg, msg_len, hash);
+        if (!ecdsa_sign_hash(slot, hash, signature)) {
+            return false;
+        }
+        *sig_len = 64;  // Raw signature is always 64 bytes for P-256
+        LOG_D("FIDO2", "ECDSA signed %d bytes with slot %d", msg_len, slot);
+    }
+
+    return true;
+}
+
+// Sign with DER-encoded output (for U2F compatibility)
+bool fido2_storage_sign_der(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
+                            uint8_t *signature, uint8_t *sig_len) {
+    if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
+        return false;
+    }
+
+    // ECDSA sign: hash message and sign
+    uint8_t hash[32];
+    sha256(msg, msg_len, hash);
+
+    uint8_t raw_sig[64];
+    if (!ecdsa_sign_hash(slot, hash, raw_sig)) {
+        return false;
+    }
+
+    // Convert to DER format
+    *sig_len = raw_sig_to_der(raw_sig, signature);
+
+    LOG_D("FIDO2", "Signed DER %d bytes with slot %d, sig_len=%d", msg_len, slot, *sig_len);
+    return true;
+}
+
+bool fido2_storage_get_pubkey(uint8_t slot, uint8_t *pubkey) {
+    if (!slot_logical_valid(slot)) {
+        return false;
+    }
+
+    auto* se = get_se();
+    if (!se) {
+        return false;
+    }
+
+    uint8_t phys_slot = ecc_slot_for_logical(slot);
+    if (!se->eccSlotUsed(phys_slot)) {
+        return false;
+    }
+
+    cdc::hal::EccCurve curve = cdc::hal::EccCurve::P256;
+    return se->eccGetPublicKey(phys_slot, pubkey, &curve) == cdc::hal::SeResult::OK;
+}

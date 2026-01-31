@@ -1,5 +1,19 @@
+# CDC Badge OS - Serial Command Interface
+# Modular command registration and processing
+
 idf_component_register(
-    SRCS "serial_cmd.cpp"
-    INCLUDE_DIRS "."
-    REQUIRES cdc_utils cdc_badge ble_badge totp fido2 ca gpg freertos password
+    SRCS
+        "src/CommandRegistry.cpp"
+        "src/Console.cpp"
+        "src/SerialCmd.cpp"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        cdc_core
+        driver
+        freertos
+        esp_timer
+        usb_badge
+        cdc_log
+        cdc_os_ui
 )

@@ -39,4 +39,3 @@ if missing:
         print(f"  - {rel}")
     print("[pio_submodules] Initializing submodules (pinned revisions)...")
     _update_submodules(project_dir, missing)
-

@@ -1,0 +1,324 @@
+/**
+ * PinChangeView Implementation
+ *
+ * PIN change wizard with three steps.
+ */
+
+#include "cdc_os_ui/views/PinChangeView.h"
+#include "cdc_core/PinManager.h"
+#include "cdc_ui/I18n.h"
+#include "cdc_hal/IDisplay.h"
+#include "cdc_log.h"
+#include "esp_timer.h"
+#include <goodisplay/gdey029T94.h>
+#include <cstring>
+
+static const char* TAG = "PinChangeView";
+
+// Display constants
+static constexpr int TITLE_Y = 15;
+static constexpr int STEP_Y = 30;
+static constexpr int PIN_Y = 55;
+static constexpr int PIN_DOT_SIZE = 12;
+static constexpr int PIN_DOT_SPACING = 16;
+static constexpr int MESSAGE_Y = 90;
+
+namespace cdc::ui {
+
+void PinChangeView::init(uint8_t minLength, uint8_t maxLength) {
+    minLength_ = minLength < 4 ? 4 : minLength;
+    maxLength_ = maxLength > MAX_PIN_LENGTH ? MAX_PIN_LENGTH : maxLength;
+    step_ = Step::CURRENT_PIN;
+    clearBuffer();
+    memset(currentPin_, 0, sizeof(currentPin_));
+    memset(newPin_, 0, sizeof(newPin_));
+    memset(confirmPin_, 0, sizeof(confirmPin_));
+    message_ = nullptr;
+    messageShownMs_ = 0;
+    pinChanged_ = false;
+    dirty_ = true;
+}
+
+void PinChangeView::onEnter(void* context) {
+    (void)context;
+    init(minLength_, maxLength_);
+}
+
+void PinChangeView::clearBuffer() {
+    char* buf = getCurrentBuffer();
+    if (buf) {
+        memset(buf, 0, MAX_PIN_LENGTH + 1);
+    }
+    length_ = 0;
+}
+
+char* PinChangeView::getCurrentBuffer() {
+    switch (step_) {
+        case Step::CURRENT_PIN: return currentPin_;
+        case Step::NEW_PIN: return newPin_;
+        case Step::CONFIRM_PIN: return confirmPin_;
+    }
+    return currentPin_;
+}
+
+const char* PinChangeView::getStepTitle() const {
+    switch (step_) {
+        case Step::CURRENT_PIN: return tr(StringId::CURRENT_PIN);
+        case Step::NEW_PIN: return tr(StringId::NEW_PIN);
+        case Step::CONFIRM_PIN: return tr(StringId::CONFIRM_PIN);
+    }
+    return "";
+}
+
+uint8_t PinChangeView::getRetriesRemaining() const {
+    if (onRetries_) return onRetries_();
+    return core::PinManager::instance().getBadgeRetries();
+}
+
+void PinChangeView::addDigit(char digit) {
+    if (length_ >= maxLength_) return;
+
+    char* buf = getCurrentBuffer();
+    buf[length_++] = digit;
+    buf[length_] = '\0';
+    dirty_ = true;
+}
+
+void PinChangeView::backspace() {
+    if (length_ > 0) {
+        char* buf = getCurrentBuffer();
+        buf[--length_] = '\0';
+        dirty_ = true;
+    }
+}
+
+void PinChangeView::showMessage(const char* msg) {
+    message_ = msg;
+    messageShownMs_ = esp_timer_get_time() / 1000;
+    dirty_ = true;
+}
+
+void PinChangeView::confirmStep() {
+    switch (step_) {
+        case Step::CURRENT_PIN: {
+            // Verify current PIN
+            if (length_ < minLength_) {
+                showMessage(tr(StringId::PIN_TOO_SHORT));
+                clearBuffer();
+                return;
+            }
+
+            bool ok = onVerify_ ? onVerify_(currentPin_) : core::PinManager::instance().verifyBadgePin(currentPin_);
+            bool blocked = onBlocked_ ? onBlocked_() : core::PinManager::instance().isBadgeBlocked();
+            if (!ok) {
+                if (blocked) {
+                    showMessage(tr(StringId::LOCKED_OUT));
+                } else {
+                    showMessage(tr(StringId::WRONG_PIN));
+                }
+                clearBuffer();
+                return;
+            }
+
+            // Move to new PIN step
+            step_ = Step::NEW_PIN;
+            clearBuffer();
+            message_ = nullptr;
+            LOG_I(TAG, "Current PIN verified, entering new PIN");
+            dirty_ = true;
+            break;
+        }
+
+        case Step::NEW_PIN: {
+            if (length_ < minLength_) {
+                showMessage(tr(StringId::PIN_TOO_SHORT));
+                clearBuffer();
+                return;
+            }
+
+            // Move to confirm step
+            step_ = Step::CONFIRM_PIN;
+            clearBuffer();
+            message_ = nullptr;
+            LOG_I(TAG, "New PIN entered, confirming");
+            dirty_ = true;
+            break;
+        }
+
+        case Step::CONFIRM_PIN: {
+            if (length_ < minLength_) {
+                showMessage(tr(StringId::PIN_TOO_SHORT));
+                clearBuffer();
+                return;
+            }
+
+            // Check if PINs match
+            if (strcmp(newPin_, confirmPin_) != 0) {
+                showMessage(tr(StringId::PIN_MISMATCH));
+                // Go back to new PIN step
+                step_ = Step::NEW_PIN;
+                memset(newPin_, 0, sizeof(newPin_));
+                clearBuffer();
+                LOG_W(TAG, "PIN mismatch, re-enter new PIN");
+                return;
+            }
+
+            // Change the PIN
+            bool changed = onChange_
+                ? onChange_(currentPin_, newPin_)
+                : core::PinManager::instance().setBadgePin(newPin_);
+            if (changed) {
+                pinChanged_ = true;
+                showMessage(tr(StringId::PIN_CHANGED));
+                LOG_I(TAG, "PIN changed successfully");
+            } else {
+                showMessage(tr(StringId::ERROR_GENERIC));
+                LOG_E(TAG, "Failed to set new PIN");
+            }
+            break;
+        }
+    }
+}
+
+void PinChangeView::onTick(uint32_t nowMs) {
+    if (messageShownMs_ > 0 && message_ != nullptr) {
+        if (nowMs - messageShownMs_ >= MESSAGE_DISPLAY_MS) {
+            message_ = nullptr;
+            messageShownMs_ = 0;
+            dirty_ = true;
+
+            // If PIN was changed, pop the view
+            if (pinChanged_ && onComplete_) {
+                onComplete_(true);
+            }
+        }
+    }
+}
+
+InputResult PinChangeView::onKey(char key) {
+    // Don't accept input if locked out
+    bool blocked = onBlocked_ ? onBlocked_() : core::PinManager::instance().isBadgeBlocked();
+    if (blocked) {
+        return InputResult::REQUEST_POP;
+    }
+
+    // Handle digits
+    if (key >= '0' && key <= '9') {
+        addDigit(key);
+        return InputResult::CONSUMED;
+    }
+
+    switch (key) {
+        case 'N': // Backspace or cancel
+            if (length_ > 0) {
+                backspace();
+            } else if (step_ == Step::CURRENT_PIN) {
+                // Cancel from first step
+                if (onComplete_) {
+                    onComplete_(false);
+                }
+                return InputResult::REQUEST_POP;
+            } else {
+                // Go back to previous step
+                if (step_ == Step::CONFIRM_PIN) {
+                    step_ = Step::NEW_PIN;
+                    length_ = strlen(newPin_);
+                } else if (step_ == Step::NEW_PIN) {
+                    step_ = Step::CURRENT_PIN;
+                    length_ = strlen(currentPin_);
+                }
+                dirty_ = true;
+            }
+            return InputResult::CONSUMED;
+
+        case 'Y': // Confirm
+            if (length_ >= minLength_) {
+                confirmStep();
+            }
+            return InputResult::CONSUMED;
+
+        default:
+            return InputResult::IGNORED;
+    }
+}
+
+const char* PinChangeView::getFooterHint() const {
+    return tr(StringId::HINT_PIN_INPUT);
+}
+
+void PinChangeView::render(bool partial) {
+    hal::IDisplay* display = hal::getDisplayInstance();
+    if (!display) return;
+
+    auto* gfx = static_cast<Gdey029T94*>(display->getNativeHandle());
+    if (!gfx) return;
+
+    const uint16_t width = display->getWidth();
+    const uint16_t height = display->getHeight();
+
+    if (!partial) {
+        gfx->fillScreen(EPD_WHITE);
+    }
+
+    gfx->setTextColor(EPD_BLACK);
+
+    gfx->setTextSize(1);
+    const char* title = title_ ? title_ : tr(StringId::CHANGE_PIN);
+    int16_t x1, y1;
+    uint16_t w, h;
+    gfx->getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
+    gfx->setCursor((width - w) / 2, TITLE_Y);
+    gfx->print(title);
+
+    const char* stepTitle = getStepTitle();
+    char stepStr[48];
+    snprintf(stepStr, sizeof(stepStr), "%d/3: %s", static_cast<int>(step_) + 1, stepTitle);
+    gfx->getTextBounds(stepStr, 0, 0, &x1, &y1, &w, &h);
+    gfx->setCursor((width - w) / 2, STEP_Y);
+    gfx->print(stepStr);
+
+    int dotsToShow = length_ > 8 ? length_ : 8;
+    int totalWidth = dotsToShow * PIN_DOT_SIZE + (dotsToShow - 1) * (PIN_DOT_SPACING - PIN_DOT_SIZE);
+    int startX = (width - totalWidth) / 2;
+
+    for (int i = 0; i < dotsToShow; i++) {
+        int x = startX + i * PIN_DOT_SPACING;
+        int y = PIN_Y;
+
+        if (i < length_) {
+            gfx->fillCircle(x + PIN_DOT_SIZE / 2, y + PIN_DOT_SIZE / 2, PIN_DOT_SIZE / 2 - 1, EPD_BLACK);
+        } else {
+            gfx->drawCircle(x + PIN_DOT_SIZE / 2, y + PIN_DOT_SIZE / 2, PIN_DOT_SIZE / 2 - 1, EPD_BLACK);
+        }
+    }
+
+    if (step_ == Step::CURRENT_PIN) {
+        uint8_t retries = getRetriesRemaining();
+        char retriesStr[24];
+        snprintf(retriesStr, sizeof(retriesStr), "%s: %d", tr(StringId::RETRIES), retries);
+        gfx->setTextSize(1);
+        gfx->getTextBounds(retriesStr, 0, 0, &x1, &y1, &w, &h);
+        gfx->setCursor((width - w) / 2, PIN_Y + 25);
+        gfx->print(retriesStr);
+    }
+
+    gfx->fillRect(0, MESSAGE_Y - 2, width, 20, EPD_WHITE);
+    if (message_) {
+        gfx->setTextSize(1);
+        gfx->getTextBounds(message_, 0, 0, &x1, &y1, &w, &h);
+        gfx->setCursor((width - w) / 2, MESSAGE_Y);
+        gfx->print(message_);
+    }
+
+    const char* hint = getFooterHint();
+    if (hint) {
+        gfx->fillRect(0, height - 16, width, 16, EPD_BLACK);
+        gfx->setTextColor(EPD_WHITE);
+        gfx->setCursor(4, height - 12);
+        gfx->print(hint);
+    }
+
+    dirty_ = false;
+}
+
+} // namespace cdc::ui

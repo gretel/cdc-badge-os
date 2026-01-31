@@ -1,0 +1,178 @@
+/**
+ * Command Registry Implementation
+ * Manages registered commands and dispatches to handlers
+ */
+
+#include "serial_cmd/ICommandRegistry.h"
+#include "serial_cmd/Console.h"
+#include "cdc_core/feature_flags.h"
+#include "cdc_core/PinManager.h"
+#include "cdc_log.h"
+#include <cstring>
+#include <cctype>
+
+static const char* TAG = "CMDREGS";
+
+namespace cdc::serial {
+
+// Maximum number of registered commands
+static constexpr size_t MAX_COMMANDS = 64;
+
+class CommandRegistry : public ICommandRegistry {
+public:
+    void setAuthProvider(bool (*authCheck)()) override {
+        authCheck_ = authCheck;
+    }
+
+    bool registerCommand(const Command& cmd) override {
+        if (count_ >= MAX_COMMANDS) {
+            LOG_W(TAG, "Command limit reached");
+            return false;
+        }
+
+        // Check for duplicate
+        for (size_t i = 0; i < count_; i++) {
+            if (strcasecmp(commands_[i].name, cmd.name) == 0) {
+                LOG_W(TAG, "Command '%s' already registered", cmd.name);
+                return false;
+            }
+        }
+
+        commands_[count_++] = cmd;
+        LOG_I(TAG, "Registered command: %s (%s)", cmd.name, cmd.moduleName);
+        return true;
+    }
+
+    void unregisterModule(const char* moduleName) override {
+        if (!moduleName) return;
+
+        size_t writeIdx = 0;
+        for (size_t readIdx = 0; readIdx < count_; readIdx++) {
+            if (commands_[readIdx].moduleName &&
+                strcmp(commands_[readIdx].moduleName, moduleName) == 0) {
+                // Skip this command (remove it)
+                continue;
+            }
+            if (writeIdx != readIdx) {
+                commands_[writeIdx] = commands_[readIdx];
+            }
+            writeIdx++;
+        }
+        count_ = writeIdx;
+    }
+
+    bool processCommand(const char* line) override {
+        if (!line || !*line) return false;
+
+        // Find command name (first word)
+        char cmdBuf[64];
+        size_t cmdLen = 0;
+        while (*line && !isspace(*line) && cmdLen < sizeof(cmdBuf) - 1) {
+            cmdBuf[cmdLen++] = *line++;
+        }
+        cmdBuf[cmdLen] = '\0';
+
+        // Skip whitespace to get to arguments
+        while (*line && isspace(*line)) line++;
+
+#if FEATURE_SECURE_SERIAL
+        // Check if PIN is blocked (lockout or retries exhausted)
+        // When blocked, only PING is allowed (to check device is alive)
+        auto& pm = cdc::core::PinManager::instance();
+        if (pm.isBadgeBlocked()) {
+            if (strcasecmp(cmdBuf, "PING") != 0) {
+                if (pm.isLockoutActive()) {
+                    uint32_t remainingSec = pm.getLockoutRemainingMs() / 1000;
+                    Console::printf("ERROR: PIN locked. Wait %lu seconds.\r\n",
+                                   (unsigned long)remainingSec);
+                } else {
+                    Console::printf("ERROR: PIN permanently locked.\r\n");
+                }
+                return true;  // Command blocked
+            }
+            // PING is allowed even when blocked
+        } else {
+            // When secure serial is enabled, block ALL commands except PING and AUTH
+            // when not authenticated
+            bool isAllowedWithoutAuth = (strcasecmp(cmdBuf, "PING") == 0 ||
+                                          strcasecmp(cmdBuf, "AUTH") == 0);
+            if (!isAllowedWithoutAuth && authCheck_ && !authCheck_()) {
+                Console::printf("ERROR: Not authenticated. Use AUTH <pin> to login.\r\n");
+                return true;  // Command blocked
+            }
+        }
+#endif
+
+        // Find and execute command
+        for (size_t i = 0; i < count_; i++) {
+            if (strcasecmp(commands_[i].name, cmdBuf) == 0) {
+                // Per-command auth check (for commands that require auth even when
+                // FEATURE_SECURE_SERIAL is disabled)
+                if (commands_[i].requiresAuth && authCheck_ && !authCheck_()) {
+                    Console::printf("ERROR: Authentication required. Use AUTH <pin> first.\r\n");
+                    return true;  // Command found but not executed
+                }
+                if (commands_[i].handler) {
+                    commands_[i].handler(line);
+                }
+                // Signal successful command execution for timer reset
+                if (onCommandExecuted_) {
+                    onCommandExecuted_();
+                }
+                return true;
+            }
+        }
+
+        Console::printf("ERROR: Unknown command '%s'\r\n", cmdBuf);
+        Console::printf("Type 'HELP' for available commands.\r\n");
+        return false;
+    }
+
+    void showHelp() override {
+        Console::printf("=== Available Commands ===\r\n");
+
+        // Group by module
+        const char* currentModule = nullptr;
+
+        for (size_t i = 0; i < count_; i++) {
+            const char* module = commands_[i].moduleName ? commands_[i].moduleName : "system";
+
+            // Print module header if changed
+            if (!currentModule || strcmp(currentModule, module) != 0) {
+                Console::printf("\r\n[%s]\r\n", module);
+                currentModule = module;
+            }
+
+            // Print command
+            Console::printf("  %-20s %s\r\n",
+                           commands_[i].name,
+                           commands_[i].help ? commands_[i].help : "");
+        }
+
+        Console::printf("\r\n");
+        Console::flush();
+    }
+
+    size_t getCommandCount() const override {
+        return count_;
+    }
+
+    void setOnCommandExecuted(void (*callback)()) override {
+        onCommandExecuted_ = callback;
+    }
+
+private:
+    Command commands_[MAX_COMMANDS] = {};
+    size_t count_ = 0;
+    bool (*authCheck_)() = nullptr;
+    void (*onCommandExecuted_)() = nullptr;
+};
+
+// Singleton instance
+static CommandRegistry g_commandRegistry;
+
+ICommandRegistry& getCommandRegistry() {
+    return g_commandRegistry;
+}
+
+} // namespace cdc::serial

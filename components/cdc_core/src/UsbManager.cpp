@@ -1,0 +1,120 @@
+#include "cdc_core/UsbManager.h"
+#include "cdc_log.h"
+#include "usb_badge/usb_hid.h"
+#include <string.h>
+
+static const char* TAG = "UsbManager";
+
+namespace cdc::core {
+
+UsbManager& UsbManager::instance() {
+    static UsbManager s_instance;
+    return s_instance;
+}
+
+bool UsbManager::init() {
+    state_ = ServiceState::INITIALIZED;
+    return true;
+}
+
+bool UsbManager::start() {
+    state_ = ServiceState::STARTED;
+    return true;
+}
+
+void UsbManager::stop() {
+    state_ = ServiceState::STOPPED;
+}
+
+bool UsbManager::canActivate(UsbHidInterface type) const {
+    (void)type;
+    uint8_t count = 0;
+    for (const auto& entry : entries_) {
+        if (entry.active) count++;
+    }
+    return count < MAX_ACTIVE_HID;
+}
+
+bool UsbManager::registerInterface(UsbHidInterface type, const char* moduleName,
+                                   const UsbInterfaceSpec& def) {
+    const uint8_t idx = static_cast<uint8_t>(type);
+    if (idx >= (sizeof(entries_) / sizeof(entries_[0]))) return false;
+
+    auto& entry = entries_[idx];
+    if (entry.active) {
+        if (entry.owner && moduleName && strcmp(entry.owner, moduleName) == 0) {
+            return true;
+        }
+        LOG_W(TAG, "Interface %d already owned by %s", idx, entry.owner ? entry.owner : "?");
+        return false;
+    }
+
+    if (!canActivate(type)) {
+        LOG_W(TAG, "HID interface limit reached (max %d)", MAX_ACTIVE_HID);
+        return false;
+    }
+
+    entry.active = true;
+    entry.owner = moduleName;
+    entry.def = def;
+    activeMask_ |= (1u << idx);
+    LOG_I(TAG, "Registered HID interface %d for %s", idx, moduleName ? moduleName : "?");
+    applyConfiguration();
+    return true;
+}
+
+void UsbManager::unregisterInterface(UsbHidInterface type, const char* moduleName) {
+    const uint8_t idx = static_cast<uint8_t>(type);
+    if (idx >= (sizeof(entries_) / sizeof(entries_[0]))) return;
+
+    auto& entry = entries_[idx];
+    if (!entry.active) return;
+    if (entry.owner && moduleName && strcmp(entry.owner, moduleName) != 0) {
+        LOG_W(TAG, "Interface %d owned by %s, not %s", idx,
+              entry.owner ? entry.owner : "?", moduleName ? moduleName : "?");
+        return;
+    }
+
+    entry.active = false;
+    entry.owner = nullptr;
+    entry.def = {};
+    activeMask_ &= ~(1u << idx);
+    LOG_I(TAG, "Unregistered HID interface %d", idx);
+    applyConfiguration();
+}
+
+bool UsbManager::applyConfiguration() {
+    needsReplug_ = false;
+    ::UsbInterfaceDef defs[3] = {};
+    size_t count = 0;
+
+    auto append_def = [&](UsbHidInterface type) {
+        const auto& entry = entries_[static_cast<uint8_t>(type)];
+        if (!entry.active) return;
+        auto& out = defs[count++];
+        out.cls = static_cast<::UsbInterfaceClass>(entry.def.cls);
+        out.name = entry.def.name;
+        out.reportDesc = entry.def.reportDesc;
+        out.reportDescLen = entry.def.reportDescLen;
+        out.protocol = entry.def.protocol;
+        out.hasOut = entry.def.hasOut;
+        out.epInSize = entry.def.epInSize;
+        out.epOutSize = entry.def.epOutSize;
+        out.callbacks.onGetReport = entry.def.callbacks.onGetReport;
+        out.callbacks.onSetReport = entry.def.callbacks.onSetReport;
+        out.callbacks.onReportComplete = entry.def.callbacks.onReportComplete;
+    };
+
+    append_def(UsbHidInterface::Fido);
+    append_def(UsbHidInterface::Keyboard);
+    append_def(UsbHidInterface::Ccid);
+
+    bool replug_needed = false;
+    bool ok = usb_hid_apply_config(defs, count, &replug_needed);
+    if (!ok || replug_needed) {
+        needsReplug_ = true;
+    }
+    return ok;
+}
+
+} // namespace cdc::core

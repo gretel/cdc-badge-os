@@ -1,0 +1,16 @@
+menu "CDC Badge USB"
+
+    config USB_EARLY_DEBUG
+        bool "Start USB early for debugging"
+        default n
+        help
+            When enabled, USB CDC starts immediately during boot for early debug output.
+            This causes USB re-enumeration after modules are loaded, which may require
+            unplugging and re-plugging the device on some hosts.
+
+            When disabled (recommended for production), USB starts only after all
+            modules are initialized, providing clean enumeration with all interfaces.
+
+            Enable this only during development when you need boot-time debug logs.
+
+endmenu

@@ -1,0 +1,11 @@
+menu "Serial Command"
+
+    config SECURE_SERIAL
+        bool "Enable Secure Serial (require PIN authentication)"
+        default y
+        help
+            When enabled, serial commands require PIN authentication.
+            Only PING and AUTH commands work without login.
+            Session times out after inactivity.
+
+endmenu

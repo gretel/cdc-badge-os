@@ -1,0 +1,277 @@
+/**
+ * E-Paper Display HAL Implementation
+ * Wraps CalEPD library for Gdey029T94 (296x128 B/W)
+ *
+ * IMPORTANT: Display and TROPIC01 share the SPI bus (SPI2_HOST).
+ * CalEPD initializes the bus when display.init() is called.
+ */
+
+#include "cdc_hal/IDisplay.h"
+#include "cdc_hal/hw_config.h"
+#include "esp_log.h"
+#include "driver/ledc.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include <goodisplay/gdey029T94.h>
+
+static const char* TAG = "EpaperDisplay";
+
+// Display objects - lazy initialized to avoid constructor running before app_main()
+static EpdSpi* g_epd_spi = nullptr;
+static Gdey029T94* g_epd_display = nullptr;
+
+namespace cdc::hal {
+
+// LEDC configuration for backlight
+static constexpr ledc_timer_t LEDC_TIMER = LEDC_TIMER_0;
+static constexpr ledc_mode_t LEDC_MODE = LEDC_LOW_SPEED_MODE;
+static constexpr ledc_channel_t LEDC_CHANNEL = LEDC_CHANNEL_0;
+static constexpr ledc_timer_bit_t LEDC_DUTY_RES = LEDC_TIMER_10_BIT;
+static constexpr uint32_t LEDC_FREQUENCY = 10000;
+
+// NVS keys
+static constexpr const char* NVS_NAMESPACE = "display";
+static constexpr const char* NVS_KEY_BACKLIGHT = "backlight";
+
+// Render task config
+static constexpr uint32_t RENDER_TASK_STACK_SIZE = 4096;
+static constexpr UBaseType_t RENDER_TASK_PRIORITY = 5;
+
+/**
+ * Concrete E-Paper display implementation
+ */
+class EpaperDisplay : public IDisplay {
+public:
+    static constexpr uint16_t WIDTH = 296;
+    static constexpr uint16_t HEIGHT = 128;
+    static constexpr uint16_t BACKLIGHT_DEFAULT = 512;
+    static constexpr uint16_t BACKLIGHT_MAX = 1023;
+
+    EpaperDisplay() = default;
+
+    // IService implementation
+    bool init() override;
+    bool start() override;
+    void stop() override;
+    core::ServiceState getState() const override { return state_; }
+    const char* getName() const override { return "display"; }
+
+    // IDisplay implementation
+    void clear() override;
+    void flush(RefreshMode mode) override;
+    void flushSync(RefreshMode mode) override;
+    bool isBusy() const override { return renderPending_; }
+    uint16_t getWidth() const override { return WIDTH; }
+    uint16_t getHeight() const override { return HEIGHT; }
+    void setBacklight(uint16_t level) override;
+    uint16_t getBacklight() const override { return backlightLevel_; }
+    bool isBacklightOn() const override { return backlightOn_ && backlightLevel_ > 0; }
+    void* getNativeHandle() override { return g_epd_display; }
+
+private:
+    void loadBacklight();
+    void saveBacklight();
+    void applyBacklight(uint16_t level);
+    static void renderTask(void* arg);
+
+    core::ServiceState state_ = core::ServiceState::UNINITIALIZED;
+
+    // Backlight state
+    uint16_t backlightLevel_ = BACKLIGHT_DEFAULT;
+    bool backlightOn_ = true;
+
+    // Async render
+    SemaphoreHandle_t renderMutex_ = nullptr;
+    TaskHandle_t renderTaskHandle_ = nullptr;
+    volatile bool renderPending_ = false;
+    volatile bool renderFull_ = false;
+};
+
+// Singleton instance
+static EpaperDisplay g_display;
+
+bool EpaperDisplay::init() {
+    if (state_ != core::ServiceState::UNINITIALIZED) {
+        return state_ == core::ServiceState::INITIALIZED ||
+               state_ == core::ServiceState::STARTED;
+    }
+
+    // Load backlight setting from NVS
+    loadBacklight();
+
+    // Configure backlight PWM (XTAL clock for light sleep compatibility)
+    ledc_timer_config_t ledcTimer = {
+        .speed_mode = LEDC_MODE,
+        .duty_resolution = LEDC_DUTY_RES,
+        .timer_num = LEDC_TIMER,
+        .freq_hz = LEDC_FREQUENCY,
+        .clk_cfg = LEDC_USE_XTAL_CLK,
+        .deconfigure = false
+    };
+    ledc_timer_config(&ledcTimer);
+
+    ledc_channel_config_t ledcChannel = {
+        .gpio_num = EPD_LED_PIN,
+        .speed_mode = LEDC_MODE,
+        .channel = LEDC_CHANNEL,
+        .intr_type = LEDC_INTR_DISABLE,
+        .timer_sel = LEDC_TIMER,
+        .duty = backlightLevel_,
+        .hpoint = 0,
+        .sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE,
+        .flags = {.output_invert = 0}
+    };
+    ledc_channel_config(&ledcChannel);
+
+    // Lazy-initialize display objects (avoid global constructor crash)
+    if (!g_epd_spi) {
+        g_epd_spi = new EpdSpi();
+    }
+    if (!g_epd_display) {
+        g_epd_display = new Gdey029T94(*g_epd_spi);
+    }
+
+    // Initialize display (CalEPD uses Kconfig for SPI pins)
+    // This also initializes the shared SPI bus
+    g_epd_display->init(false);  // debug=false
+    g_epd_display->setRotation(1);  // Landscape
+    g_epd_display->setMonoMode(true);  // Required for partial refresh
+    g_epd_display->fillScreen(EPD_WHITE);
+
+    // Create render mutex and task for async rendering
+    renderMutex_ = xSemaphoreCreateMutex();
+    if (!renderMutex_) {
+        state_ = core::ServiceState::ERROR;
+        return false;
+    }
+
+    BaseType_t ret = xTaskCreate(
+        renderTask, "epd_render",
+        RENDER_TASK_STACK_SIZE, this,
+        RENDER_TASK_PRIORITY, &renderTaskHandle_
+    );
+    if (ret != pdPASS) {
+        state_ = core::ServiceState::ERROR;
+        return false;
+    }
+
+    state_ = core::ServiceState::INITIALIZED;
+    return true;
+}
+
+bool EpaperDisplay::start() {
+    if (state_ == core::ServiceState::INITIALIZED ||
+        state_ == core::ServiceState::STOPPED) {
+        state_ = core::ServiceState::STARTED;
+        backlightOn_ = true;
+        applyBacklight(backlightLevel_);
+        return true;
+    }
+    return state_ == core::ServiceState::STARTED;
+}
+
+void EpaperDisplay::stop() {
+    if (state_ == core::ServiceState::STARTED) {
+        backlightOn_ = false;
+        applyBacklight(0);
+        state_ = core::ServiceState::STOPPED;
+    }
+}
+
+void EpaperDisplay::clear() {
+    if (g_epd_display) g_epd_display->fillScreen(EPD_WHITE);
+}
+
+void EpaperDisplay::flush(RefreshMode mode) {
+    if (!renderTaskHandle_) {
+        // Fallback: sync render
+        flushSync(mode);
+        return;
+    }
+
+    xSemaphoreTake(renderMutex_, portMAX_DELAY);
+    if (renderPending_) {
+        // Upgrade to full refresh if requested
+        if (mode == RefreshMode::FULL) renderFull_ = true;
+    } else {
+        renderPending_ = true;
+        renderFull_ = (mode == RefreshMode::FULL);
+    }
+    xSemaphoreGive(renderMutex_);
+
+    xTaskNotifyGive(renderTaskHandle_);
+}
+
+void EpaperDisplay::flushSync(RefreshMode mode) {
+    if (!g_epd_display) return;
+    if (mode == RefreshMode::FULL) {
+        g_epd_display->update();
+    } else {
+        // Partial refresh - use native dimensions (128x296)
+        g_epd_display->updateWindow(0, 0, 128, 296, false);
+    }
+}
+
+void EpaperDisplay::setBacklight(uint16_t level) {
+    if (level > BACKLIGHT_MAX) level = BACKLIGHT_MAX;
+    backlightLevel_ = level;
+    if (backlightOn_) {
+        applyBacklight(level);
+    }
+}
+
+void EpaperDisplay::loadBacklight() {
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
+        uint16_t saved = BACKLIGHT_DEFAULT;
+        if (nvs_get_u16(nvs, NVS_KEY_BACKLIGHT, &saved) == ESP_OK) {
+            backlightLevel_ = (saved > BACKLIGHT_MAX) ? BACKLIGHT_MAX : saved;
+        }
+        nvs_close(nvs);
+    }
+}
+
+void EpaperDisplay::saveBacklight() {
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_u16(nvs, NVS_KEY_BACKLIGHT, backlightLevel_);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+}
+
+void EpaperDisplay::applyBacklight(uint16_t level) {
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, level);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+}
+
+void EpaperDisplay::renderTask(void* arg) {
+    auto* self = static_cast<EpaperDisplay*>(arg);
+
+    while (true) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        xSemaphoreTake(self->renderMutex_, portMAX_DELAY);
+        bool doFull = self->renderFull_;
+        self->renderPending_ = false;
+        xSemaphoreGive(self->renderMutex_);
+
+        if (g_epd_display) {
+            if (doFull) {
+                g_epd_display->update();
+            } else {
+                g_epd_display->updateWindow(0, 0, 128, 296, false);
+            }
+        }
+    }
+}
+
+// Factory function to get display instance
+IDisplay* getDisplayInstance() {
+    return &g_display;
+}
+
+} // namespace cdc::hal

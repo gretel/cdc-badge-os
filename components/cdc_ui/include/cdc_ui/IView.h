@@ -1,0 +1,142 @@
+#pragma once
+
+#include <cstdint>
+
+namespace cdc::ui {
+
+/**
+ * Result of input handling
+ */
+enum class InputResult : uint8_t {
+    CONSUMED,       // Input was handled, may need re-render
+    IGNORED,        // Input was not handled
+    REQUEST_POP,    // View wants to be popped (back/cancel)
+    REQUEST_PUSH    // View wants to push a child view
+};
+
+/**
+ * View interface - base for all UI screens
+ *
+ * Views are stateful screen components that handle rendering and input.
+ * They are managed by ViewStack for navigation.
+ *
+ * Reference: ~/GIT/cdc-badge-os-legacy/components/cdc_badge/views.h
+ */
+class IView {
+public:
+    virtual ~IView() = default;
+
+    // === Lifecycle ===
+
+    /**
+     * Called when view becomes active (pushed or becomes top)
+     * @param context Optional context data from parent
+     */
+    virtual void onEnter(void* context = nullptr) = 0;
+
+    /**
+     * Called when view is being removed from stack
+     */
+    virtual void onExit() = 0;
+
+    /**
+     * Called when view becomes visible again (child popped)
+     */
+    virtual void onResume() = 0;
+
+    // === Rendering ===
+
+    /**
+     * Render view content to display buffer
+     * @param partial True for partial update, false for full refresh
+     */
+    virtual void render(bool partial) = 0;
+
+    /**
+     * Check if view needs re-rendering
+     */
+    virtual bool needsRender() const = 0;
+
+    /**
+     * Mark view as needing re-render
+     */
+    virtual void markDirty() = 0;
+
+    // === Input ===
+
+    /**
+     * Handle key press
+     * @param key Key character ('0'-'9', 'Y', 'N', etc.)
+     * @return Input result
+     */
+    virtual InputResult onKey(char key) = 0;
+
+    /**
+     * Handle long key press (optional)
+     * @param key Key character
+     * @return Input result
+     */
+    virtual InputResult onLongPress(char key) { (void)key; return InputResult::IGNORED; }
+
+    // === Periodic ===
+
+    /**
+     * Called periodically for animations/timers
+     * @param nowMs Current time in milliseconds
+     */
+    virtual void onTick(uint32_t nowMs) { (void)nowMs; }
+
+    // === Footer ===
+
+    /**
+     * Get footer hint text (e.g., "[Y] OK [N] Back")
+     * Return nullptr for no footer
+     */
+    virtual const char* getFooterHint() const { return nullptr; }
+
+    // === Identity ===
+
+    /**
+     * Get view name for debugging
+     */
+    virtual const char* getName() const = 0;
+};
+
+/**
+ * ViewBase - Default implementation of IView
+ *
+ * Provides common functionality for views:
+ * - Dirty flag management
+ * - Title storage
+ * - Default lifecycle handlers
+ */
+class ViewBase : public IView {
+public:
+    virtual ~ViewBase() = default;
+
+    // Lifecycle with default implementations
+    void onEnter(void* context) override {
+        (void)context;
+        dirty_ = true;
+    }
+
+    void onExit() override { }
+
+    void onResume() override {
+        dirty_ = true;
+    }
+
+    // Dirty flag management
+    bool needsRender() const override { return dirty_; }
+    void markDirty() override { dirty_ = true; }
+
+protected:
+    void clearDirty() { dirty_ = false; }
+    void setTitle(const char* title) { title_ = title; }
+    const char* getTitle() const { return title_; }
+
+    bool dirty_ = true;
+    const char* title_ = nullptr;
+};
+
+} // namespace cdc::ui

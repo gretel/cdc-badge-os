@@ -55,11 +55,14 @@ if(NOT EXISTS ${LIBTROPIC_PATCH_MARKER})
     file(WRITE ${LIBTROPIC_PATCH_MARKER} "Patched for ESP-IDF GCM")
 endif()
 
-# Exclude upstream or legacy components that are now compiled as part of cdc_badge.
-set(EXCLUDE_COMPONENTS libtropic totp fido2 ssh ca pin wifi)
+# Exclude upstream or legacy components
+set(EXCLUDE_COMPONENTS libtropic)
+
+# Global include directories (for tusb_config.h)
 include_directories(BEFORE
-    ${CMAKE_SOURCE_DIR}/components/dirent_compat/include
     ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/main
 )
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(cdc-badge-nametag)
+project(cdc-badge-os)

@@ -1,0 +1,28 @@
+# CDC Badge OS - OS UI (cdc_os_ui)
+# OS-level views and app flow (LockScreen, AppUi, etc.)
+
+idf_component_register(
+    SRCS
+        "src/HardwareInfo.cpp"
+        "src/AppUi.cpp"
+        "src/WifiHandlers.cpp"
+        "src/SettingsHandlers.cpp"
+        "src/SleepManager.cpp"
+        "src/views/PinChangeView.cpp"
+        "src/views/LockScreenView.cpp"
+        "src/views/WifiListView.cpp"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        cdc_core
+        cdc_hal
+        cdc_log
+        cdc_ui
+        cdc_views
+        serial_cmd
+        Adafruit-GFX
+        nvs_flash
+        esp_timer
+        freertos
+        mbedtls
+)

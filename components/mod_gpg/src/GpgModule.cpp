@@ -1,0 +1,512 @@
+#include "mod_gpg/GpgModule.h"
+#include "mod_gpg/GpgStorage.h"
+#include "cdc_core/ModuleRegistry.h"
+#include "cdc_core/UsbManager.h"
+#include "cdc_ui/I18n.h"
+#include "mod_gpg/openpgp/openpgp.h"
+#include "cdc_ui/ViewStack.h"
+#include "cdc_views/ListView.h"
+#include "cdc_views/T9InputView.h"
+#include "cdc_views/InfoView.h"
+#include "cdc_views/QRCodeView.h"
+#include "cdc_views/ConfirmView.h"
+#include "cdc_views/ToastView.h"
+#include "cdc_os_ui/views/PinChangeView.h"
+#include "cdc_core/PinManager.h"
+#include "pin_storage.h"
+#include "serial_cmd/ICommandRegistry.h"
+#include "serial_cmd/Console.h"
+#include "mod_gpg/gpg.h"
+#include "cdc_log.h"
+#include <new>
+#include <cstring>
+#include <cstdio>
+#include <cctype>
+
+static const char* TAG = "GPG";
+
+namespace cdc::mod_gpg {
+
+static uint16_t s_strIdBase = 0;
+static constexpr uint16_t STR_GPG = 0;
+static constexpr uint16_t STR_STATUS = 1;
+static constexpr uint16_t STR_GENERATE = 2;
+static constexpr uint16_t STR_EXPORT = 3;
+static constexpr uint16_t STR_RESET = 4;
+static constexpr uint16_t STR_SETTINGS = 5;
+static constexpr uint16_t STR_USER_PIN = 6;
+static constexpr uint16_t STR_ADMIN_PIN = 7;
+static constexpr uint16_t STR_SLOT_ERROR = 8;
+static constexpr uint16_t STR_NAME = 9;
+static constexpr uint16_t STR_EMAIL = 10;
+static constexpr uint16_t STR_CURVE = 11;
+static constexpr uint16_t STR_CURVE_ED25519 = 12;
+static constexpr uint16_t STR_CURVE_P256 = 13;
+static constexpr uint16_t STR_NO_KEY = 14;
+static constexpr uint16_t STR_CONFIRM_RESET = 15;
+static constexpr uint16_t STR_EXPORT_TITLE = 16;
+static constexpr uint16_t STR_COUNT = 17;
+
+static const char* mstr(uint16_t offset) {
+    return ui::tr(s_strIdBase + offset);
+}
+
+static void registerStrings() {
+    auto& i18n = ui::I18n::instance();
+    s_strIdBase = i18n.registerModule("mod_gpg", STR_COUNT);
+    if (s_strIdBase == 0) {
+        LOG_E(TAG, "Failed to register i18n strings");
+        return;
+    }
+
+    i18n.registerTranslation(s_strIdBase + STR_GPG, ui::Language::EN, "GPG");
+    i18n.registerTranslation(s_strIdBase + STR_STATUS, ui::Language::EN, "Status");
+    i18n.registerTranslation(s_strIdBase + STR_GENERATE, ui::Language::EN, "Generate Keys");
+    i18n.registerTranslation(s_strIdBase + STR_EXPORT, ui::Language::EN, "Export Public");
+    i18n.registerTranslation(s_strIdBase + STR_RESET, ui::Language::EN, "Reset");
+    i18n.registerTranslation(s_strIdBase + STR_SETTINGS, ui::Language::EN, "Settings");
+    i18n.registerTranslation(s_strIdBase + STR_USER_PIN, ui::Language::EN, "User PIN");
+    i18n.registerTranslation(s_strIdBase + STR_ADMIN_PIN, ui::Language::EN, "Admin PIN");
+    i18n.registerTranslation(s_strIdBase + STR_SLOT_ERROR, ui::Language::EN, "Slot map error");
+    i18n.registerTranslation(s_strIdBase + STR_NAME, ui::Language::EN, "Name");
+    i18n.registerTranslation(s_strIdBase + STR_EMAIL, ui::Language::EN, "Email (optional)");
+    i18n.registerTranslation(s_strIdBase + STR_CURVE, ui::Language::EN, "Curve");
+    i18n.registerTranslation(s_strIdBase + STR_CURVE_ED25519, ui::Language::EN, "Ed25519");
+    i18n.registerTranslation(s_strIdBase + STR_CURVE_P256, ui::Language::EN, "P-256");
+    i18n.registerTranslation(s_strIdBase + STR_NO_KEY, ui::Language::EN, "No key configured");
+    i18n.registerTranslation(s_strIdBase + STR_CONFIRM_RESET, ui::Language::EN, "Reset all GPG keys?");
+    i18n.registerTranslation(s_strIdBase + STR_EXPORT_TITLE, ui::Language::EN, "GPG Public Key");
+
+    i18n.registerTranslation(s_strIdBase + STR_GPG, ui::Language::DE, "GPG");
+    i18n.registerTranslation(s_strIdBase + STR_STATUS, ui::Language::DE, "Status");
+    i18n.registerTranslation(s_strIdBase + STR_GENERATE, ui::Language::DE, "Keys erzeugen");
+    i18n.registerTranslation(s_strIdBase + STR_EXPORT, ui::Language::DE, "Public exportieren");
+    i18n.registerTranslation(s_strIdBase + STR_RESET, ui::Language::DE, "Zuruecksetzen");
+    i18n.registerTranslation(s_strIdBase + STR_SETTINGS, ui::Language::DE, "Einstellungen");
+    i18n.registerTranslation(s_strIdBase + STR_USER_PIN, ui::Language::DE, "User PIN");
+    i18n.registerTranslation(s_strIdBase + STR_ADMIN_PIN, ui::Language::DE, "Admin PIN");
+    i18n.registerTranslation(s_strIdBase + STR_SLOT_ERROR, ui::Language::DE, "Slot-Map Fehler");
+    i18n.registerTranslation(s_strIdBase + STR_NAME, ui::Language::DE, "Name");
+    i18n.registerTranslation(s_strIdBase + STR_EMAIL, ui::Language::DE, "Email (optional)");
+    i18n.registerTranslation(s_strIdBase + STR_CURVE, ui::Language::DE, "Kurve");
+    i18n.registerTranslation(s_strIdBase + STR_CURVE_ED25519, ui::Language::DE, "Ed25519");
+    i18n.registerTranslation(s_strIdBase + STR_CURVE_P256, ui::Language::DE, "P-256");
+    i18n.registerTranslation(s_strIdBase + STR_NO_KEY, ui::Language::DE, "Kein Key konfiguriert");
+    i18n.registerTranslation(s_strIdBase + STR_CONFIRM_RESET, ui::Language::DE, "Alle GPG Keys loeschen?");
+    i18n.registerTranslation(s_strIdBase + STR_EXPORT_TITLE, ui::Language::DE, "GPG Public Key");
+}
+
+static constexpr const char* CMD_MODULE = "gpg";
+static bool s_commandsRegistered = false;
+
+static void cmd_gpg_status(const char* args);
+static void cmd_gpg_generate(const char* args);
+static void cmd_gpg_export(const char* args);
+static void cmd_gpg_reset(const char* args);
+
+static void registerCommands() {
+    if (s_commandsRegistered) return;
+    s_commandsRegistered = true;
+    auto& registry = cdc::serial::getCommandRegistry();
+    registry.registerCommand({"GPG_STATUS", "Show GPG status", cmd_gpg_status, CMD_MODULE, true});
+    registry.registerCommand({"GPG_GENERATE", "Generate GPG keys", cmd_gpg_generate, CMD_MODULE, true});
+    registry.registerCommand({"GPG_EXPORT", "Export public keys", cmd_gpg_export, CMD_MODULE, true});
+    registry.registerCommand({"GPG_RESET", "Reset GPG keys", cmd_gpg_reset, CMD_MODULE, true});
+}
+
+static void cmd_gpg_status(const char* args) {
+    (void)args;
+    gpg_status_t status = {};
+    if (!gpg_get_status(&status)) {
+        cdc::serial::Console::printf("ERROR: No key configured\r\n");
+        return;
+    }
+    cdc::serial::Console::printf("User-ID: %s\r\n", status.user_id);
+    cdc::serial::Console::printf("Curve: %s\r\n",
+                                 status.curve == CDC_CURVE_ED25519 ? "Ed25519" : "P-256");
+    cdc::serial::Console::printf("Created: %lu\r\n", static_cast<unsigned long>(status.created_at));
+    cdc::serial::Console::printf("Sign Count: %lu\r\n", static_cast<unsigned long>(status.sign_count));
+}
+
+static void cmd_gpg_generate(const char* args) {
+    char curveBuf[8] = {};
+    char userId[GPG_USER_ID_MAX] = {};
+
+    const char* p = args;
+    while (p && *p && std::isspace(static_cast<unsigned char>(*p))) p++;
+    if (!p || !*p) {
+        cdc::serial::Console::printf("Usage: GPG_GENERATE <curve> <user_id>\r\n");
+        return;
+    }
+
+    size_t i = 0;
+    while (p[i] && !std::isspace(static_cast<unsigned char>(p[i])) && i + 1 < sizeof(curveBuf)) {
+        curveBuf[i] = p[i];
+        i++;
+    }
+    curveBuf[i] = '\0';
+    p += i;
+    while (p && *p && std::isspace(static_cast<unsigned char>(*p))) p++;
+    if (!p || !*p) {
+        cdc::serial::Console::printf("Usage: GPG_GENERATE <curve> <user_id>\r\n");
+        return;
+    }
+    strncpy(userId, p, sizeof(userId) - 1);
+
+    uint8_t curve = (atoi(curveBuf) == 2) ? CDC_CURVE_P256 : CDC_CURVE_ED25519;
+    gpg_set_pending_user_id(userId);
+    bool ok = gpg_generate_key(curve);
+    cdc::serial::Console::printf(ok ? "OK\r\n" : "ERROR\r\n");
+}
+
+static void cmd_gpg_export(const char* args) {
+    (void)args;
+    char pem_buf[2048];
+    size_t out_len = 0;
+    if (!gpg_export_pubkey_pem(pem_buf, sizeof(pem_buf), &out_len)) {
+        cdc::serial::Console::printf("ERROR\r\n");
+        return;
+    }
+    cdc::serial::Console::printf("%s\r\n", pem_buf);
+}
+
+static void cmd_gpg_reset(const char* args) {
+    (void)args;
+    bool ok = gpg_reset();
+    cdc::serial::Console::printf(ok ? "OK\r\n" : "ERROR\r\n");
+}
+
+static ui::ListView s_menuView;
+static ui::ListView s_settingsView;
+static ui::PinChangeView s_pinChangeView;
+static ui::T9InputView s_t9Input;
+static ui::ListView s_curveView;
+static ui::InfoView s_infoView;
+static ui::QRCodeView s_qrView;
+static bool s_viewsInitialized = false;
+static ui::ListItem s_menuItems[] = {
+    { nullptr, 0, false, nullptr },
+    { nullptr, 0, false, nullptr },
+    { nullptr, 0, false, nullptr },
+    { nullptr, 0, false, nullptr },
+    { nullptr, 0, false, nullptr },
+};
+static ui::ListItem s_settingsItems[] = {
+    { nullptr, 0, false, nullptr },
+    { nullptr, 0, false, nullptr },
+};
+
+struct WizardState {
+    char name[64];
+    char email[64];
+    uint8_t curve;
+};
+
+static WizardState s_wizard = {};
+
+static void showStatus();
+static void wizardStart();
+static void showExport();
+static void confirmReset();
+static void showSettings();
+static void onSettingsSelect(uint16_t index, void*);
+
+static void onMenuSelect(uint16_t index, void*) {
+    switch (index) {
+        case 0: showStatus(); break;
+        case 1: wizardStart(); break;
+        case 2: showExport(); break;
+        case 3: showSettings(); break;
+        case 4: confirmReset(); break;
+        default: break;
+    }
+}
+
+static void rebuildMenu() {
+    s_menuItems[0].label = mstr(STR_STATUS);
+    s_menuItems[1].label = mstr(STR_GENERATE);
+    s_menuItems[2].label = mstr(STR_EXPORT);
+    s_menuItems[3].label = mstr(STR_SETTINGS);
+    s_menuItems[4].label = mstr(STR_RESET);
+    s_menuView.init(mstr(STR_GPG), s_menuItems, 5);
+}
+
+static bool gpg_verify_pw1(const char* pin) {
+    return pin_storage_openpgp_verify_pw1(pin);
+}
+
+static bool gpg_verify_pw3(const char* pin) {
+    return pin_storage_openpgp_verify_pw3(pin);
+}
+
+static bool gpg_change_pw1(const char*, const char* newPin) {
+    return pin_storage_openpgp_change_pw1(newPin);
+}
+
+static bool gpg_change_pw3(const char*, const char* newPin) {
+    return pin_storage_openpgp_change_pw3(newPin);
+}
+
+static uint8_t gpg_retries_pw1() {
+    return pin_storage_openpgp_pw1_retries();
+}
+
+static uint8_t gpg_retries_pw3() {
+    return pin_storage_openpgp_pw3_retries();
+}
+
+static bool gpg_blocked_pw1() {
+    return pin_storage_openpgp_pw1_blocked();
+}
+
+static bool gpg_blocked_pw3() {
+    return pin_storage_openpgp_pw3_blocked();
+}
+
+static void onGpgPinComplete(bool) {
+    ui::ViewStack::instance().pop();
+}
+
+static void onSettingsSelect(uint16_t index, void*) {
+    s_pinChangeView.setOnComplete(onGpgPinComplete);
+    s_pinChangeView.setTitle(index == 0 ? mstr(STR_USER_PIN) : mstr(STR_ADMIN_PIN));
+    if (index == 0) {
+        s_pinChangeView.setVerifyCallback(gpg_verify_pw1);
+        s_pinChangeView.setChangeCallback(gpg_change_pw1);
+        s_pinChangeView.setRetriesCallback(gpg_retries_pw1);
+        s_pinChangeView.setBlockedCallback(gpg_blocked_pw1);
+        s_pinChangeView.init(cdc::core::PinManager::PW1_MIN, cdc::core::PinManager::PIN_MAX);
+    } else {
+        s_pinChangeView.setVerifyCallback(gpg_verify_pw3);
+        s_pinChangeView.setChangeCallback(gpg_change_pw3);
+        s_pinChangeView.setRetriesCallback(gpg_retries_pw3);
+        s_pinChangeView.setBlockedCallback(gpg_blocked_pw3);
+        s_pinChangeView.init(cdc::core::PinManager::PW3_MIN, cdc::core::PinManager::PIN_MAX);
+    }
+    ui::ViewStack::instance().push(&s_pinChangeView);
+}
+
+static void showSettings() {
+    s_settingsItems[0].label = mstr(STR_USER_PIN);
+    s_settingsItems[1].label = mstr(STR_ADMIN_PIN);
+    s_settingsView.init(mstr(STR_SETTINGS), s_settingsItems, 2);
+    s_settingsView.setOnSelect(onSettingsSelect);
+    ui::ViewStack::instance().push(&s_settingsView);
+}
+
+static void showStatus() {
+    gpg_status_t status = {};
+    if (!gpg_get_status(&status)) {
+        s_infoView.init(mstr(STR_STATUS), mstr(STR_NO_KEY));
+        ui::ViewStack::instance().push(&s_infoView);
+        return;
+    }
+
+    char fp_hex[GPG_FINGERPRINT_LEN * 2 + 1] = {};
+    for (size_t i = 0; i < GPG_FINGERPRINT_LEN; i++) {
+        snprintf(fp_hex + i * 2, 3, "%02X", status.fingerprint[i]);
+    }
+    const char* curveName = status.curve == CDC_CURVE_ED25519 ? mstr(STR_CURVE_ED25519)
+                                                             : mstr(STR_CURVE_P256);
+    static char detail[512];
+    snprintf(detail, sizeof(detail),
+             "User-ID: %s\nCurve: %s\nFingerprint: %s\nCreated: %lu\nSign Count: %lu",
+             status.user_id, curveName, fp_hex,
+             static_cast<unsigned long>(status.created_at),
+             static_cast<unsigned long>(status.sign_count));
+    s_infoView.init(mstr(STR_STATUS), detail);
+    ui::ViewStack::instance().push(&s_infoView);
+}
+
+static void onWizardName(const char* text);
+static void onWizardEmail(const char* text);
+static void onWizardCurve(uint16_t index, void*);
+
+static void wizardStart() {
+    memset(&s_wizard, 0, sizeof(s_wizard));
+    s_t9Input.init(mstr(STR_NAME), nullptr, 63);
+    s_t9Input.setOnSave(onWizardName);
+    ui::ViewStack::instance().push(&s_t9Input);
+}
+
+static void onWizardName(const char* text) {
+    strncpy(s_wizard.name, text ? text : "", sizeof(s_wizard.name) - 1);
+    s_t9Input.init(mstr(STR_EMAIL), nullptr, 63);
+    s_t9Input.setOnSave(onWizardEmail);
+    ui::ViewStack::instance().push(&s_t9Input);
+}
+
+static void onWizardEmail(const char* text) {
+    strncpy(s_wizard.email, text ? text : "", sizeof(s_wizard.email) - 1);
+    static ui::ListItem curveItems[] = {
+        { nullptr, 0, false, nullptr },
+        { nullptr, 0, false, nullptr },
+    };
+    curveItems[0].label = mstr(STR_CURVE_ED25519);
+    curveItems[1].label = mstr(STR_CURVE_P256);
+    s_curveView.init(mstr(STR_CURVE), curveItems, 2);
+    s_curveView.setOnSelect(onWizardCurve);
+    ui::ViewStack::instance().push(&s_curveView);
+}
+
+static void onWizardCurve(uint16_t index, void*) {
+    s_wizard.curve = (index == 0) ? CDC_CURVE_ED25519 : CDC_CURVE_P256;
+    char user_id[GPG_USER_ID_MAX] = {};
+    size_t name_len = strnlen(s_wizard.name, sizeof(s_wizard.name) - 1);
+    size_t email_len = strnlen(s_wizard.email, sizeof(s_wizard.email) - 1);
+    if (email_len == 0) {
+        snprintf(user_id, sizeof(user_id), "%.*s", static_cast<int>(sizeof(user_id) - 1), s_wizard.name);
+    } else {
+        size_t max_len = sizeof(user_id) - 1;
+        size_t name_fit = name_len > max_len ? max_len : name_len;
+        size_t email_fit = 0;
+        if (name_fit < max_len) {
+            size_t remaining = max_len - name_fit;
+            if (remaining > 3) {
+                email_fit = remaining - 3;
+            }
+        }
+        if (email_fit == 0) {
+            memcpy(user_id, s_wizard.name, name_fit);
+            user_id[name_fit] = '\0';
+        } else {
+            size_t pos = 0;
+            memcpy(user_id + pos, s_wizard.name, name_fit);
+            pos += name_fit;
+            user_id[pos++] = ' ';
+            user_id[pos++] = '<';
+            memcpy(user_id + pos, s_wizard.email, email_fit);
+            pos += email_fit;
+            user_id[pos++] = '>';
+            user_id[pos] = '\0';
+        }
+    }
+    gpg_set_pending_user_id(user_id);
+    if (gpg_generate_key(s_wizard.curve)) {
+        ui::showToastSuccess(ui::tr(ui::StringId::OK));
+    } else {
+        ui::showToastError(ui::tr(ui::StringId::FAILED));
+    }
+    while (ui::ViewStack::instance().depth() > 1) {
+        ui::ViewStack::instance().pop();
+    }
+}
+
+static void showExport() {
+    static char pem_buf[2048];
+    size_t out_len = 0;
+    if (!gpg_export_pubkey_pem(pem_buf, sizeof(pem_buf), &out_len)) {
+        ui::showToastError(ui::tr(ui::StringId::FAILED));
+        return;
+    }
+    cdc::serial::Console::printf("%s\r\n", pem_buf);
+    s_qrView.init(mstr(STR_EXPORT_TITLE), nullptr, pem_buf);
+    ui::ViewStack::instance().push(&s_qrView);
+}
+
+static void onResetConfirm(void*) {
+    if (gpg_reset()) {
+        ui::showToastSuccess(ui::tr(ui::StringId::OK));
+    } else {
+        ui::showToastError(ui::tr(ui::StringId::FAILED));
+    }
+}
+
+static void confirmReset() {
+    ui::showConfirm(mstr(STR_CONFIRM_RESET), onResetConfirm, nullptr,
+                    ui::ConfirmView::Icon::WARNING, nullptr);
+}
+
+GpgModule& GpgModule::instance() {
+    static GpgModule inst;
+    return inst;
+}
+
+bool GpgModule::init() {
+    LOG_I(TAG, "Initializing GPG module");
+    registerStrings();
+    registerCommands();
+
+    core::ModuleRegistry::instance().registerModule(this);
+    if (!slotRange_.hasEcc) {
+        core::ModuleRegistry::instance().reportModuleError(getName(), "GPG slot range missing");
+        state_ = core::ServiceState::ERROR;
+        return false;
+    }
+    gpg_storage_set_slot_range(slotRange_.eccStart, slotRange_.eccEnd);
+    if (!gpg_storage_ready()) {
+        core::ModuleRegistry::instance().reportModuleError(getName(), "GPG slot range invalid");
+        state_ = core::ServiceState::ERROR;
+        return false;
+    }
+    core::ModuleRegistry::instance().clearModuleErrorByName(getName());
+    state_ = core::ServiceState::INITIALIZED;
+    return true;
+}
+
+bool GpgModule::start() {
+    if (state_ != core::ServiceState::INITIALIZED &&
+        state_ != core::ServiceState::STOPPED) {
+        return false;
+    }
+
+    core::UsbInterfaceSpec spec = {};
+    spec.cls = core::UsbInterfaceClass::Ccid;
+    spec.name = "OpenPGP SmartCard";
+    spec.epInSize = 64;
+    spec.epOutSize = 64;
+    if (!openpgp_init()) {
+        core::ModuleRegistry::instance().reportModuleError(getName(), "OpenPGP init failed");
+    }
+    if (!core::UsbManager::instance().registerInterface(core::UsbHidInterface::Ccid, getName(), spec)) {
+        LOG_W(TAG, "Failed to register CCID interface");
+    }
+
+    state_ = core::ServiceState::STARTED;
+    return true;
+}
+
+void GpgModule::stop() {
+    core::UsbManager::instance().unregisterInterface(core::UsbHidInterface::Ccid, getName());
+    state_ = core::ServiceState::STOPPED;
+}
+
+void GpgModule::setSlotRange(const core::IModule::SlotRange& range) {
+    slotRange_ = range;
+}
+
+core::IModule::SlotRequest GpgModule::getSlotRequest() const {
+    core::IModule::SlotRequest req = {};
+    req.mapName = getName();
+    req.minEccSlots = 3;
+    req.minRmemSlots = 1;
+    return req;
+}
+
+uint8_t GpgModule::getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems) {
+    if (!items || maxItems == 0) return 0;
+    items[0] = {mstr(STR_GPG), 60, []() -> ui::IView* {
+        if (!s_viewsInitialized) {
+            s_menuView.setOnSelect(onMenuSelect);
+            s_viewsInitialized = true;
+        }
+        if (!GpgModule::instance().slotRange_.hasEcc || !GpgModule::instance().slotRange_.hasRmem) {
+            ui::showToastError(mstr(STR_SLOT_ERROR));
+            return nullptr;
+        }
+        rebuildMenu();
+        return &s_menuView;
+    }, nullptr, getName(), core::MenuLocation::MAIN_MENU};
+    return 1;
+}
+
+} // namespace cdc::mod_gpg
+
+extern "C" void mod_gpg_register() {
+    cdc::core::ModuleRegistry::instance().registerInitializer([]() {
+        auto& module = cdc::mod_gpg::GpgModule::instance();
+        if (module.init()) {
+            module.start();
+        }
+    });
+}

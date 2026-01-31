@@ -37,6 +37,11 @@ idf_component_register(
     REQUIRES mbedtls
 )
 
+# TROPIC01 silicon revision (ACAB = production silicon)
+target_compile_definitions(${COMPONENT_LIB} PRIVATE
+    ACAB
+)
+
 # Enable libtropic error logs (prints PSA error codes on crypto failures).
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     LT_LOG_ENABLE_ERROR=1

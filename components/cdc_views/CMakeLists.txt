@@ -1,0 +1,26 @@
+# CDC Views - Reusable Standard View Components
+# Contains ListView, T9Input, Slider, PinEntry, DateInput, TimeInput, etc.
+
+idf_component_register(
+    SRCS
+        "src/ListView.cpp"
+        "src/SliderView.cpp"
+        "src/PinEntryView.cpp"
+        "src/DateInputView.cpp"
+        "src/TimeInputView.cpp"
+        "src/MessageBox.cpp"
+        "src/T9InputView.cpp"
+        "src/InfoView.cpp"
+        "src/ToastView.cpp"
+        "src/ContextMenuView.cpp"
+        "src/QRCodeView.cpp"
+        "src/ConfirmView.cpp"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        cdc_ui
+        cdc_core
+        cdc_hal
+        cdc_log
+        CalEPD
+)

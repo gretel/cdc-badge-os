@@ -1,18 +1,24 @@
 # macOS
 .DS_Store
+Thumbs.db
 
 # IDE
-.vscode
-.idea
+.vscode/
+.idea/
+*.sublime-*
 
 # Build artifacts
-.pio
-build
-managed_components
+.pio/
+build/
+managed_components/
 dependencies.lock
+sdkconfig.old
+sdkconfig.*.old
 CMakeCache.txt
-CMakeFiles
+CMakeFiles/
 cmake-build-*/
+.worktrees/
+docs/plans/
 
 # Patch marker files
 components/*/.patched
@@ -22,14 +28,13 @@ components/*/.patched
 *.orig
 *~
 
+# Logs
+*.log
+
 # Legacy code
 legacy/
 
-# Submodule working tree noise (status ignored via .gitmodules)
-components/CalEPD/
-third_party/libtropic/
-
-# Claude config
+# Claude / AI config (not for public repo)
 CLAUDE.md
 agents.md
 .claude/
