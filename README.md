@@ -6,6 +6,8 @@ Modular firmware for the CDC Badge v1.0 hardware security key featuring TROPIC01
 
 > **Early Alpha** - This firmware is in active development and **not production ready**. Security hardening is incomplete. Do not use for protecting critical accounts. See [SECURITY.md](SECURITY.md) for hardening steps required before production use.
 
+> **Rewrite** - This is a complete rewrite of the original firmware to create a cleaner, more maintainable codebase with modular architecture.
+
 ## Features
 
 | Feature | Status | Description |
@@ -65,10 +67,24 @@ See [Module Development Guide](docs/MODULE_DEVELOPMENT.md) for creating new modu
 | **FIDO2 ClientPIN** | Protocol 2 with HKDF-SHA256 |
 | **Attestation** | Self-signed (device-unique AAGUID) |
 
+### PIN Lockout
+
+The device uses a multi-PIN system with brute-force protection:
+
+| PIN | Purpose | Max Retries | Lockout |
+|-----|---------|-------------|---------|
+| Badge PIN | Device unlock, serial auth | 3 | 60 seconds |
+| PW1 | FIDO2/GPG user operations | 3 | 60 seconds |
+| PW3 | GPG admin operations | 3 | 60 seconds |
+
+After 3 failed attempts, the device locks for 60 seconds. Retries reset after successful authentication.
+
+**Note:** `DEBUG_MODE=1` disables lockouts for development. Set to 0 for production!
+
 ### TROPIC01 Secure Element
 
 - 32 ECC key slots (P-256 and Ed25519)
-- 512 R-Memory slots (444 bytes each)
+- 512 R-Memory slots (454 bytes payload each)
 - Hardware random number generator
 - Tamper-resistant key storage
 - Keys cannot be extracted or cloned
@@ -105,6 +121,27 @@ git submodule update --init --recursive
 
 # Monitor (115200 baud)
 ~/.platformio/penv/bin/pio device monitor
+```
+
+### Compile-Time Flags
+
+Feature flags in `components/cdc_core/include/cdc_core/feature_flags.h`:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `DEBUG_MODE` | 1 | Disables PIN lockouts and increases log verbosity. **Set to 0 for production!** |
+| `FEATURE_SECURE_SERIAL` | 0 | Require PIN authentication for serial commands |
+
+Set via build flags in `platformio.ini`:
+```ini
+build_flags =
+    -DDEBUG_MODE=0
+    -DFEATURE_SECURE_SERIAL=1
+```
+
+Or via Kconfig menuconfig:
+```bash
+~/.platformio/penv/bin/pio run -t menuconfig
 ```
 
 ### First-Time Setup
@@ -203,4 +240,12 @@ GNU General Public License v3.0 - see [LICENSE.md](LICENSE.md)
 
 ---
 
+## Disclaimer
+
 *Co-developed with [Claude Code](https://claude.ai/code) by Anthropic.*
+
+This repository is a **proof-of-concept / demonstrator**. It may contain **serious bugs**, incomplete edge-case handling, and other "sharp edges". Do **not** use it as-is for production or security-critical deployments.
+
+While I'm experienced with cryptography and encryption concepts, this is my first project implemented directly on the ESP32. For ESP-IDF/embedded best practices I relied heavily on external guidance and reviews. As a result, you may still find non-idiomatic ESP32 code, suboptimal design patterns, duplication, or refactoring debt.
+
+The intent is to clean this up before the first major release (v1.0.0), once I have more routine in ESP32 development and can consolidate patterns, structure, and implementation details specific for this device.
