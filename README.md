@@ -147,7 +147,7 @@ Or via Kconfig menuconfig:
 ### First-Time Setup
 
 1. **Change the default PIN** (Settings -> Change PIN)
-   - Default PIN: `1234`
+   - Default PIN: `123456`
    - FIDO2 requires a non-default PIN
 
 2. **Set the time** via WiFi NTP or serial command:
