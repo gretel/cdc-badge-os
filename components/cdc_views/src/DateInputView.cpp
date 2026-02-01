@@ -127,21 +127,13 @@ bool DateInputView::validateAndClamp() {
 }
 
 InputResult DateInputView::onKey(char key) {
-    // Digit input
+    // Digit input (all 0-9 keys are digits, auto-advances between fields)
     if (key >= '0' && key <= '9') {
         enterDigit(key);
         return InputResult::CONSUMED;
     }
 
     switch (key) {
-        case '4':  // Previous field
-            prevField();
-            return InputResult::CONSUMED;
-
-        case '6':  // Next field
-            nextField();
-            return InputResult::CONSUMED;
-
         case 'N':  // Clear or cancel
             if (digitPos_ > 0 ||
                 (currentField_ == Field::DAY && day_ > 0) ||
@@ -227,10 +219,6 @@ void DateInputView::render(bool partial) {
     }
 
     gfx->fillRect(underlineX, UNDERLINE_Y, underlineW, 3, EPD_BLACK);
-
-    gfx->setTextSize(1);
-    gfx->setCursor(10, HINT_Y);
-    gfx->print(tr(StringId::HINT_FIELD_NAV));
 
     const char* hint = getFooterHint();
     if (hint) {

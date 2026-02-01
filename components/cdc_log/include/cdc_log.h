@@ -76,6 +76,43 @@ void console_printf(const char* fmt, ...);
 void console_putchar(char c);
 void console_flush(void);
 
+// ============================================================================
+// Console Hooks (for additional I/O transports like BLE)
+// ============================================================================
+
+/**
+ * Output hook - called for every console output
+ * @param data Output data
+ * @param len Data length
+ */
+typedef void (*console_output_hook_t)(const char* data, size_t len);
+
+/**
+ * Input available hook - check if additional input is available
+ * @return true if data available
+ */
+typedef bool (*console_input_available_hook_t)(void);
+
+/**
+ * Input getchar hook - get character from additional source
+ * @return Character or -1 if none available
+ */
+typedef int (*console_input_getchar_hook_t)(void);
+
+/**
+ * Register output hook (only one supported at a time)
+ * @param hook Callback function, or NULL to unregister
+ */
+void console_register_output_hook(console_output_hook_t hook);
+
+/**
+ * Register input hooks (only one set supported at a time)
+ * @param avail_hook Available check callback, or NULL to unregister
+ * @param getchar_hook Getchar callback, or NULL to unregister
+ */
+void console_register_input_hook(console_input_available_hook_t avail_hook,
+                                  console_input_getchar_hook_t getchar_hook);
+
 #ifdef __cplusplus
 }
 #endif

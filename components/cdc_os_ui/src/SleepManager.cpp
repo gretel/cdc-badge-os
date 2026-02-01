@@ -4,11 +4,15 @@
 #include "cdc_hal/ISleepController.h"
 #include "cdc_hal/IPowerManager.h"
 #include "cdc_hal/IDisplay.h"
+#include "cdc_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <ctime>
 #include <cstdio>
+#include <cstring>
+
+static const char* TAG = "SleepMgr";
 
 namespace cdc::ui {
 
@@ -54,6 +58,12 @@ void SleepManager::checkLockScreenSleep(uint32_t nowMs) {
         if ((lockScreen_->getStatusIcons() & StatusIcon::LIGHT_SLEEP) != StatusIcon::NONE) {
             lockScreen_->removeStatusIcon(StatusIcon::LIGHT_SLEEP);
         }
+        return;
+    }
+
+    // Skip if sleep is inhibited (caffeinated mode)
+    if (isSleepInhibited()) {
+        lockScreenEnteredMs_ = nowMs;  // Reset timer
         return;
     }
 
@@ -143,6 +153,68 @@ void SleepManager::handleWakeup() {
         lockScreen_->removeStatusIcon(StatusIcon::LIGHT_SLEEP);
         lockScreenEnteredMs_ = esp_timer_get_time() / 1000;
         inLightSleep_ = false;
+    }
+}
+
+// =============================================================================
+// Sleep Inhibitor API
+// =============================================================================
+
+bool SleepManager::addSleepInhibitor(const char* reason) {
+    if (!reason) return false;
+
+    // Check if already exists
+    for (uint8_t i = 0; i < inhibitorCount_; i++) {
+        if (inhibitors_[i] && strcmp(inhibitors_[i], reason) == 0) {
+            return false;  // Already exists
+        }
+    }
+
+    // Check if full
+    if (inhibitorCount_ >= MAX_SLEEP_INHIBITORS) {
+        LOG_W(TAG, "Sleep inhibitor list full, cannot add: %s", reason);
+        return false;
+    }
+
+    // Add inhibitor
+    inhibitors_[inhibitorCount_++] = reason;
+    LOG_I(TAG, "Sleep inhibitor added: %s (count=%d)", reason, inhibitorCount_);
+
+    // Update icon
+    updateCaffeinatedIcon();
+    return true;
+}
+
+bool SleepManager::removeSleepInhibitor(const char* reason) {
+    if (!reason) return false;
+
+    // Find and remove
+    for (uint8_t i = 0; i < inhibitorCount_; i++) {
+        if (inhibitors_[i] && strcmp(inhibitors_[i], reason) == 0) {
+            // Shift remaining entries
+            for (uint8_t j = i; j < inhibitorCount_ - 1; j++) {
+                inhibitors_[j] = inhibitors_[j + 1];
+            }
+            inhibitors_[--inhibitorCount_] = nullptr;
+
+            LOG_I(TAG, "Sleep inhibitor removed: %s (count=%d)", reason, inhibitorCount_);
+
+            // Update icon
+            updateCaffeinatedIcon();
+            return true;
+        }
+    }
+
+    return false;  // Not found
+}
+
+void SleepManager::updateCaffeinatedIcon() {
+    if (!lockScreen_) return;
+
+    if (inhibitorCount_ > 0) {
+        lockScreen_->addStatusIcon(StatusIcon::CAFFEINATED);
+    } else {
+        lockScreen_->removeStatusIcon(StatusIcon::CAFFEINATED);
     }
 }
 

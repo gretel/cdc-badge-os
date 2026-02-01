@@ -244,6 +244,15 @@ void I18n::initCoreStrings() {
     REG(BLUETOOTH,          "Bluetooth",            "Bluetooth");
     REG(BLUETOOTH_ON,       "Bluetooth ON",         "Bluetooth EIN");
     REG(BLUETOOTH_OFF,      "Bluetooth OFF",        "Bluetooth AUS");
+    REG(BLE_STATUS,         "BLE Status",           "BLE Status");
+    REG(BLE_SCAN,           "Scan Devices",         "Geraete suchen");
+    REG(BLE_SCANNING,       "Scanning...",          "Suche...");
+    REG(BLE_NO_DEVICES,     "No devices found",     "Keine Geraete gefunden");
+    REG(BLE_CONNECTED_TO,   "Connected to",         "Verbunden mit");
+    REG(BLE_NOT_CONNECTED,  "Not connected",        "Nicht verbunden");
+    REG(BLE_MAC_ADDRESS,    "MAC",                  "MAC");
+    REG(BLE_SIGNAL,         "Signal",               "Signal");
+    REG(BLE_PAIRED_DEVICES, "Paired devices",       "Gekoppelte Geraete");
     REG(SYSTEM_TEST,        "System Test",          "Systemtest");
     REG(TR01_CACHE_REBUILD, "TR01 Cache Rebuild",   "TR01 Cache neu aufbauen");
     REG(TR01_CACHE_CLEANUP, "TR01 Cache Cleanup",   "TR01 Cache aufraeumen");
@@ -289,8 +298,8 @@ void I18n::initCoreStrings() {
     REG(HINT_LIST_MENU,     "[3] Menu",             "[3] Menu");
     REG(HINT_SCROLL_BACK,   "[2/8] Scroll [N] Back","[2/8] Scrollen [N] Zuruck");
     REG(HINT_FIELD_NAV,     "[4] <  [6] >",         "[4] <  [6] >");
-    REG(HINT_DATE_INPUT,    "[4/6] Field [0-9] Input [Y] OK", "[4/6] Feld [0-9] Eingabe [Y] OK");
-    REG(HINT_TIME_INPUT,    "[4/6] Field [0-9] Input [Y] OK", "[4/6] Feld [0-9] Eingabe [Y] OK");
+    REG(HINT_DATE_INPUT,    "[0-9] [Y] OK [N] Clear",   "[0-9] [Y] OK [N] Loeschen");
+    REG(HINT_TIME_INPUT,    "[0-9] [Y] OK [N] Clear",   "[0-9] [Y] OK [N] Loeschen");
 
     // === QR ===
     REG(QR_ERROR,           "QR Error",            "QR Fehler");

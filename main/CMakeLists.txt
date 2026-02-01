@@ -11,6 +11,7 @@ set(MODULES
     mod_fido2
     mod_password
     mod_gpg
+    mod_ble_serial
 )
 # =============================================================================
 

@@ -16,6 +16,9 @@ namespace cdc::ui {
 // Light sleep timeout (seconds after which lock screen enters light sleep)
 static constexpr uint32_t LIGHT_SLEEP_TIMEOUT_MS = 120 * 1000;
 
+// Maximum number of sleep inhibitors
+static constexpr uint8_t MAX_SLEEP_INHIBITORS = 8;
+
 // Light sleep management for lock screen
 class SleepManager {
 public:
@@ -36,11 +39,38 @@ public:
     // Check if currently in light sleep
     bool isInLightSleep() const { return inLightSleep_; }
 
+    // === Sleep Inhibitor API ===
+
+    /**
+     * Add a sleep inhibitor (prevents sleep while active)
+     * @param reason Identifier for the inhibitor (e.g., module name)
+     * @return true if added, false if already exists or full
+     */
+    bool addSleepInhibitor(const char* reason);
+
+    /**
+     * Remove a sleep inhibitor
+     * @param reason Identifier to remove
+     * @return true if removed, false if not found
+     */
+    bool removeSleepInhibitor(const char* reason);
+
+    /**
+     * Check if sleep is currently inhibited
+     */
+    bool isSleepInhibited() const { return inhibitorCount_ > 0; }
+
+    /**
+     * Get count of active inhibitors
+     */
+    uint8_t getInhibitorCount() const { return inhibitorCount_; }
+
 private:
     SleepManager() = default;
 
     void enterLockScreenSleep();
     void handleWakeup();
+    void updateCaffeinatedIcon();
 
     hal::ISleepController* sleep_ = nullptr;
     hal::IPowerManager* power_ = nullptr;
@@ -48,6 +78,10 @@ private:
 
     uint32_t lockScreenEnteredMs_ = 0;
     bool inLightSleep_ = false;
+
+    // Sleep inhibitors
+    const char* inhibitors_[MAX_SLEEP_INHIBITORS] = {};
+    uint8_t inhibitorCount_ = 0;
 };
 
 } // namespace cdc::ui

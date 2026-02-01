@@ -19,6 +19,11 @@
 static log_level_t s_log_level = CDC_LOG_LEVEL_DEBUG;
 static bool s_initialized = false;
 
+// Console hooks for additional I/O transports (e.g., BLE)
+static console_output_hook_t s_output_hook = nullptr;
+static console_input_available_hook_t s_input_avail_hook = nullptr;
+static console_input_getchar_hook_t s_input_getchar_hook = nullptr;
+
 static const char* level_str[] = {
     "",      // NONE
     "E",     // ERROR
@@ -191,6 +196,12 @@ bool console_available(void) {
         return true;
     }
 #endif
+
+    // Check input hook (e.g., BLE)
+    if (s_input_avail_hook && s_input_avail_hook()) {
+        return true;
+    }
+
     return false;
 }
 
@@ -198,10 +209,19 @@ int console_getchar(void) {
     if (!s_initialized) return -1;
 
 #if CONFIG_TINYUSB_CDC_ENABLED
+    // Priority 1: USB CDC
     if (tud_cdc_connected() && tud_cdc_available()) {
         return tud_cdc_read_char();
     }
 #endif
+
+    // Priority 2: Input hook (e.g., BLE)
+    if (s_input_getchar_hook) {
+        int c = s_input_getchar_hook();
+        if (c >= 0) {
+            return c;
+        }
+    }
 
     // Fallback: UART via stdin
     int c = getchar();
@@ -236,6 +256,11 @@ void console_print(const char* str) {
         tud_cdc_write_flush();
     }
 #endif
+
+    // Also send to output hook (e.g., BLE)
+    if (s_output_hook) {
+        s_output_hook(str, len);
+    }
 }
 
 void console_printf(const char* fmt, ...) {
@@ -259,6 +284,11 @@ void console_putchar(char c) {
         tud_cdc_write_flush();  // Immediate echo for USB CDC
     }
 #endif
+
+    // Also send to output hook (e.g., BLE)
+    if (s_output_hook) {
+        s_output_hook(&c, 1);
+    }
 }
 
 void console_flush(void) {
@@ -268,4 +298,18 @@ void console_flush(void) {
     }
 #endif
     fflush(stdout);
+}
+
+// ============================================================================
+// Console Hooks
+// ============================================================================
+
+void console_register_output_hook(console_output_hook_t hook) {
+    s_output_hook = hook;
+}
+
+void console_register_input_hook(console_input_available_hook_t avail_hook,
+                                  console_input_getchar_hook_t getchar_hook) {
+    s_input_avail_hook = avail_hook;
+    s_input_getchar_hook = getchar_hook;
 }

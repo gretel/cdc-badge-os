@@ -8,13 +8,20 @@
 #include "cdc_ui/I18n.h"
 #include "cdc_views/ContextMenuView.h"
 #include "cdc_hal/IDisplay.h"
+#include "cdc_hal/IKeypad.h"
+#include "cdc_hal/ISleepController.h"
 #include "cdc_core/ModuleRegistry.h"
+#include "cdc_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <goodisplay/gdey029T94.h>
 #include <Fonts/FreeMonoBold9pt7b.h>
 #include <Fonts/FreeMonoBold12pt7b.h>
 #include <Fonts/FreeMonoBold18pt7b.h>
 #include <Fonts/FreeMonoBold24pt7b.h>
 #include <cstring>
+
+static const char* TAG = "LockScreen";
 
 // Display layout constants
 static constexpr int CLOCK_Y = 5;
@@ -53,6 +60,7 @@ void LockScreenView::init() {
     memset(date_, 0, sizeof(date_));
     batteryPercent_ = 0;
     statusIcons_ = StatusIcon::NONE;
+    nPressStartMs_ = 0;
     dirty_ = true;
 }
 
@@ -137,6 +145,7 @@ static LockScreenView* s_lockScreenInstance = nullptr;
 void LockScreenView::onEnter(void* context) {
     (void)context;
     s_lockScreenInstance = this;
+    nPressStartMs_ = 0;  // Reset deep sleep trigger
 
     // Turn off backlight when entering lock screen (unless persistent light is on)
     if ((statusIcons_ & StatusIcon::BACKLIGHT) == StatusIcon::NONE) {
@@ -150,6 +159,8 @@ void LockScreenView::onEnter(void* context) {
 
 void LockScreenView::onResume() {
     // Called when returning to lock screen (e.g., via N from main menu)
+    nPressStartMs_ = 0;  // Reset deep sleep trigger
+
     // Turn off backlight (unless persistent light is on)
     if ((statusIcons_ & StatusIcon::BACKLIGHT) == StatusIcon::NONE) {
         hal::IDisplay* display = hal::getDisplayInstance();
@@ -232,8 +243,54 @@ InputResult LockScreenView::onKey(char key) {
 }
 
 void LockScreenView::onTick(uint32_t nowMs) {
-    (void)nowMs;
-    // Could update clock here if needed
+    // Check for long-press N -> deep sleep (flight mode)
+    checkDeepSleepTrigger(nowMs);
+}
+
+void LockScreenView::checkDeepSleepTrigger(uint32_t nowMs) {
+    auto* keypad = hal::getKeypadInstance();
+    if (!keypad) return;
+
+    bool nPressed = keypad->isKeyPressed(hal::Key::KEY_NO);
+
+    if (nPressed) {
+        if (nPressStartMs_ == 0) {
+            // N key just pressed, start timing
+            nPressStartMs_ = nowMs;
+        } else {
+            // Check if held long enough
+            uint32_t elapsed = nowMs - nPressStartMs_;
+            if (elapsed >= DEEP_SLEEP_HOLD_MS) {
+                // Enter flight mode (deep sleep)
+                LOG_I(TAG, "Long-press N detected, entering deep sleep...");
+
+                // Show deep sleep icon
+                addStatusIcon(StatusIcon::DEEP_SLEEP);
+                render(false);
+
+                // Wait for display to refresh
+                vTaskDelay(pdMS_TO_TICKS(500));
+
+                // Turn off backlight
+                auto* display = hal::getDisplayInstance();
+                if (display) {
+                    display->backlightOff();
+                }
+
+                // Enter deep sleep (does not return - causes reset on wake)
+                auto* sleep = hal::getSleepControllerInstance();
+                if (sleep) {
+                    sleep->enterDeepSleep();
+                }
+
+                // Should not reach here
+                nPressStartMs_ = 0;
+            }
+        }
+    } else {
+        // N released, reset timer
+        nPressStartMs_ = 0;
+    }
 }
 
 const char* LockScreenView::getFooterHint() const {
@@ -358,6 +415,23 @@ void LockScreenView::renderStatusIcons(void* gfxPtr, int x, int y) {
     } else if ((statusIcons_ & StatusIcon::LIGHT_SLEEP) != StatusIcon::NONE) {
         gfx->setCursor(iconX, y + 2);
         gfx->print("z");
+        iconX -= iconSpacing;
+    }
+
+    // Caffeinated icon (sleep inhibited) - coffee cup
+    if ((statusIcons_ & StatusIcon::CAFFEINATED) != StatusIcon::NONE) {
+        int cx = iconX, cy = y;
+        // Cup body
+        gfx->drawRect(cx, cy + 3, 8, 7, EPD_BLACK);
+        // Cup handle
+        gfx->drawLine(cx + 8, cy + 4, cx + 10, cy + 4, EPD_BLACK);
+        gfx->drawLine(cx + 10, cy + 4, cx + 10, cy + 8, EPD_BLACK);
+        gfx->drawLine(cx + 8, cy + 8, cx + 10, cy + 8, EPD_BLACK);
+        // Steam (wavy lines)
+        gfx->drawPixel(cx + 2, cy + 1, EPD_BLACK);
+        gfx->drawPixel(cx + 3, cy, EPD_BLACK);
+        gfx->drawPixel(cx + 5, cy + 1, EPD_BLACK);
+        gfx->drawPixel(cx + 6, cy, EPD_BLACK);
         iconX -= iconSpacing;
     }
     (void)iconX;

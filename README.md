@@ -17,9 +17,9 @@ Modular firmware for the CDC Badge v1.0 hardware security key featuring TROPIC01
 | **U2F** | Working | Legacy two-factor authentication |
 | **TOTP Authenticator** | Working | Time-based OTP (100 accounts, Google Authenticator compatible) |
 | **Password Vault** | Working | Secure password storage (362 entries) |
-| **GPG Key Management** | WIP | GPG key storage via TROPIC01 |
+| **GPG/CCID** | WIP | OpenPGP smartcard via USB CCID with TROPIC01 key storage |
 | **WiFi + NTP** | Working | Time synchronization over WiFi |
-| **BLE Serial** | Basic | Bluetooth serial console (Nordic UART Service) |
+| **BLE Serial** | Framework | Bluetooth serial console (Nordic UART Service) - GATT pending |
 | **E-Paper Display** | Working | 2.9" low-power display with backlight |
 | **12-Button Keypad** | Working | Phone-style T9 input |
 | **Multi-Language** | Working | English and German UI |
@@ -50,7 +50,8 @@ components/
   mod_fido2/      FIDO2/WebAuthn/U2F module
   mod_totp/       TOTP authenticator module
   mod_password/   Password vault module
-  mod_gpg/        GPG key management module
+  mod_gpg/        OpenPGP smartcard (CCID) module
+  mod_ble_serial/ BLE Serial console (Nordic UART Service)
 ```
 
 Modules are self-contained and can be enabled/disabled in `main/CMakeLists.txt`.
@@ -231,7 +232,7 @@ Connect at 115200 baud via USB CDC. Use `HELP` to list all commands.
 |------|---------|------|
 | Active | Normal use | - |
 | Light Sleep | Lock screen idle | Any key |
-| Deep Sleep | Hold N 5s on lock | Y key only |
+| Deep Sleep | Hold N 5s on lock | Any key (reset) |
 | Shipping | Hold BOOT 3s | USB power |
 
 ## License

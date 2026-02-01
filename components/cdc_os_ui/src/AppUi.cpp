@@ -114,6 +114,13 @@ enum WifiIpModeIdx {
     WIFI_IP_COUNT
 };
 
+enum BluetoothMenuIdx {
+    BT_IDX_ENABLE = 0,      // BLE: On/Off
+    BT_IDX_STATUS,          // BLE Status
+    BT_IDX_SCAN,            // BT Scan
+    BT_IDX_FIXED_COUNT      // Module items start here
+};
+
 // ============================================================================
 // Static State
 // ============================================================================
@@ -165,7 +172,11 @@ static ListItem s_modulesItems[MODULES_VIEW_MAX];
 static char s_moduleLabels[MODULES_VIEW_MAX][48];
 
 // WiFi menu items
-static ListItem s_wifiMainItems[WIFI_IDX_COUNT];
+static constexpr uint8_t WIFI_MENU_MAX_ITEMS = 16;
+static constexpr uint8_t WIFI_MENU_FIXED_COUNT = WIFI_IDX_COUNT;  // Connect, Setup, Details, NTP
+static ListItem s_wifiMainItems[WIFI_MENU_MAX_ITEMS];
+static core::ModuleMenuItem s_wifiModuleItems[12];
+static uint8_t s_wifiModuleCount = 0;
 static ListItem s_wifiAuthItems[WIFI_AUTH_COUNT];
 static ListItem s_wifiIpItems[WIFI_IP_COUNT];
 static WifiItem s_wifiScanResults[WIFI_MAX_NETWORKS];
@@ -173,6 +184,13 @@ static uint8_t s_wifiScanCount = 0;
 static const char* s_wifiAuthLabels[WIFI_AUTH_COUNT] = {
     "WPA2", "WPA/WPA2", "WPA3", "WPA", "Open", "WEP"
 };
+
+// Bluetooth menu items
+static constexpr uint8_t BT_MENU_MAX_ITEMS = 16;
+static ListView* s_bluetoothMenu = nullptr;
+static ListItem s_bluetoothItems[BT_MENU_MAX_ITEMS];
+static core::ModuleMenuItem s_bluetoothModuleItems[12];
+static uint8_t s_bluetoothModuleCount = 0;
 
 // RTC update tracking
 static int8_t s_lastMinute = -1;
@@ -234,7 +252,12 @@ static void onWifiGatewayEntered(const char* gateway);
 static void onWifiNetmaskEntered(const char* netmask);
 static void wifiFinishSetup();
 static void rebuildWifiMainMenu();
-static void toggleBluetooth();
+static void showBluetoothMenu();
+static void rebuildBluetoothMenu();
+static void onBluetoothMenuSelect(uint16_t index, void* userData);
+static void toggleBluetoothEnable();
+static void showBluetoothStatus();
+static void startBluetoothScan();
 static void showExpertMenu();
 static void runSystemTest();
 static void runTropicCacheRebuild();
@@ -392,13 +415,9 @@ static void rebuildToolsMenu() {
     s_toolsItems[0] = {tr(StringId::MODULES), 0, false, nullptr};
     s_toolsItems[1] = {tr(StringId::WIFI_MENU), 0, false, nullptr};
 
-    // Bluetooth status indicator
+    // Bluetooth - shows status indicator if enabled
     auto* ble = hal::getBluetoothControllerInstance();
-    if (ble && ble->isEnabled()) {
-        s_toolsItems[2] = {tr(StringId::BLUETOOTH_ON), '*', false, nullptr};
-    } else {
-        s_toolsItems[2] = {tr(StringId::BLUETOOTH_OFF), 0, false, nullptr};
-    }
+    s_toolsItems[2] = {tr(StringId::BLUETOOTH), (ble && ble->isEnabled()) ? '*' : '\0', false, nullptr};
 
     s_toolsItems[3] = {tr(StringId::EXPERT), 0, false, nullptr};
 
@@ -499,7 +518,7 @@ static void onToolsSelect(uint16_t index, void* userData) {
             showWifiMainMenu();
             return;
         case 2:  // Bluetooth
-            toggleBluetooth();
+            showBluetoothMenu();
             return;
         case 3:  // Expert
             showExpertMenu();
@@ -731,6 +750,7 @@ static void rebuildWifiMainMenu() {
     auto& wifiHandlers = WifiHandlers::instance();
     bool hasConfig = wifiHandlers.config().valid;
 
+    // Fixed items
     if (connected) {
         s_wifiMainItems[WIFI_IDX_CONNECT] = {tr(StringId::WIFI_DISCONNECT), '*', false, nullptr};
     } else if (hasConfig) {
@@ -743,8 +763,21 @@ static void rebuildWifiMainMenu() {
     s_wifiMainItems[WIFI_IDX_DETAILS] = {tr(StringId::WIFI_DETAILS), 0, false, nullptr};
     s_wifiMainItems[WIFI_IDX_NTP_SYNC] = {tr(StringId::NTP_SYNC), 0, !connected && !hasConfig, nullptr};
 
+    // Get module items for WiFi menu
+    auto& moduleReg = core::ModuleRegistry::instance();
+    s_wifiModuleCount = moduleReg.getMenuItems(
+        core::MenuLocation::WIFI_MENU,
+        s_wifiModuleItems,
+        WIFI_MENU_MAX_ITEMS - WIFI_MENU_FIXED_COUNT
+    );
+
+    // Add module items after fixed items
+    for (uint8_t i = 0; i < s_wifiModuleCount; i++) {
+        s_wifiMainItems[WIFI_MENU_FIXED_COUNT + i] = {s_wifiModuleItems[i].label, 0, false, nullptr};
+    }
+
     if (s_wifiMainMenu) {
-        s_wifiMainMenu->init(tr(StringId::WIFI_MENU), s_wifiMainItems, WIFI_IDX_COUNT);
+        s_wifiMainMenu->init(tr(StringId::WIFI_MENU), s_wifiMainItems, WIFI_MENU_FIXED_COUNT + s_wifiModuleCount);
     }
 }
 
@@ -763,6 +796,7 @@ static void showWifiMainMenu() {
 static void onWifiMainSelect(uint16_t index, void* userData) {
     (void)userData;
 
+    // Fixed items
     switch (index) {
         case WIFI_IDX_CONNECT: {
             auto* wifi = hal::getWifiControllerInstance();
@@ -771,17 +805,31 @@ static void onWifiMainSelect(uint16_t index, void* userData) {
             } else {
                 wifiConnect();
             }
-            break;
+            return;
         }
         case WIFI_IDX_SETUP:
             wifiSetup();
-            break;
+            return;
         case WIFI_IDX_DETAILS:
             wifiShowDetails();
-            break;
+            return;
         case WIFI_IDX_NTP_SYNC:
             wifiNtpSync();
-            break;
+            return;
+    }
+
+    // Module items
+    uint8_t moduleIdx = index - WIFI_MENU_FIXED_COUNT;
+    if (moduleIdx < s_wifiModuleCount) {
+        auto& item = s_wifiModuleItems[moduleIdx];
+        if (item.getView) {
+            ui::IView* view = item.getView();
+            if (view) {
+                ViewStack::instance().push(view);
+            }
+        }
+        // Rebuild menu in case module toggle changed state
+        rebuildWifiMainMenu();
     }
 }
 
@@ -1128,10 +1176,41 @@ static void wifiNtpSync() {
 }
 
 // ============================================================================
-// Bluetooth Toggle
+// Bluetooth Menu
 // ============================================================================
 
-static void toggleBluetooth() {
+static void rebuildBluetoothMenu() {
+    auto* ble = hal::getBluetoothControllerInstance();
+    bool enabled = ble && ble->isEnabled();
+
+    // Fixed items
+    if (enabled) {
+        s_bluetoothItems[BT_IDX_ENABLE] = {tr(StringId::BLUETOOTH_ON), '*', false, nullptr};
+    } else {
+        s_bluetoothItems[BT_IDX_ENABLE] = {tr(StringId::BLUETOOTH_OFF), 0, false, nullptr};
+    }
+    s_bluetoothItems[BT_IDX_STATUS] = {tr(StringId::BLE_STATUS), 0, false, nullptr};
+    s_bluetoothItems[BT_IDX_SCAN] = {tr(StringId::BLE_SCAN), 0, !enabled, nullptr};
+
+    // Get module items for Bluetooth menu
+    auto& moduleReg = core::ModuleRegistry::instance();
+    s_bluetoothModuleCount = moduleReg.getMenuItems(
+        core::MenuLocation::BLUETOOTH_MENU,
+        s_bluetoothModuleItems,
+        BT_MENU_MAX_ITEMS - BT_IDX_FIXED_COUNT
+    );
+
+    // Add module items after fixed items
+    for (uint8_t i = 0; i < s_bluetoothModuleCount; i++) {
+        s_bluetoothItems[BT_IDX_FIXED_COUNT + i] = {s_bluetoothModuleItems[i].label, 0, false, nullptr};
+    }
+
+    if (s_bluetoothMenu) {
+        s_bluetoothMenu->init(tr(StringId::BLUETOOTH), s_bluetoothItems, BT_IDX_FIXED_COUNT + s_bluetoothModuleCount);
+    }
+}
+
+static void toggleBluetoothEnable() {
     auto* ble = hal::getBluetoothControllerInstance();
     if (!ble) {
         showToastError(tr(StringId::HW_NOT_AVAILABLE));
@@ -1149,7 +1228,107 @@ static void toggleBluetooth() {
         }
     }
 
+    rebuildBluetoothMenu();
     rebuildToolsMenu();
+}
+
+// Static buffer for BLE status (PSRAM)
+static constexpr size_t BLE_STATUS_BUF_SIZE = 512;
+static EXT_RAM_BSS_ATTR char s_bleStatusBuf[BLE_STATUS_BUF_SIZE];
+
+static void showBluetoothStatus() {
+    auto* ble = hal::getBluetoothControllerInstance();
+    char* info = s_bleStatusBuf;
+    memset(info, 0, BLE_STATUS_BUF_SIZE);
+    size_t pos = 0;
+
+    auto append = [&](const char* fmt, ...) {
+        if (pos >= BLE_STATUS_BUF_SIZE) return;
+        va_list args;
+        va_start(args, fmt);
+        int written = vsnprintf(info + pos, BLE_STATUS_BUF_SIZE - pos, fmt, args);
+        va_end(args);
+        if (written > 0) {
+            size_t w = static_cast<size_t>(written);
+            pos += (w < (BLE_STATUS_BUF_SIZE - pos)) ? w : (BLE_STATUS_BUF_SIZE - pos - 1);
+        }
+    };
+
+    if (!ble) {
+        append("%s", tr(StringId::HW_NOT_AVAILABLE));
+    } else {
+        append("Status: %s\n\n", ble->isEnabled() ? tr(StringId::ON) : tr(StringId::OFF));
+
+        uint8_t mac[6] = {};
+        if (ble->getMacAddress(mac)) {
+            append("%s: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                   tr(StringId::BLE_MAC_ADDRESS),
+                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        }
+
+        if (ble->isConnected()) {
+            append("\n%s\n", tr(StringId::BLE_CONNECTED_TO));
+            append("%s: %d dBm\n", tr(StringId::BLE_SIGNAL), ble->getRssi());
+        } else {
+            append("\n%s\n", tr(StringId::BLE_NOT_CONNECTED));
+        }
+
+        append("\nName: %s\n", ble->getDeviceName());
+    }
+
+    showInfo(tr(StringId::BLE_STATUS), info);
+}
+
+static void startBluetoothScan() {
+    auto* ble = hal::getBluetoothControllerInstance();
+    if (!ble || !ble->isEnabled()) {
+        showToastError(tr(StringId::HW_NOT_AVAILABLE));
+        return;
+    }
+
+    // Placeholder - BLE scan not yet implemented in BluetoothController
+    showToastInfo("BLE Scan not yet implemented", TOAST_DURATION_MEDIUM_MS);
+}
+
+static void onBluetoothMenuSelect(uint16_t index, void* userData) {
+    (void)userData;
+
+    // Fixed items
+    switch (index) {
+        case BT_IDX_ENABLE:
+            toggleBluetoothEnable();
+            return;
+        case BT_IDX_STATUS:
+            showBluetoothStatus();
+            return;
+        case BT_IDX_SCAN:
+            startBluetoothScan();
+            return;
+    }
+
+    // Module items
+    uint8_t moduleIdx = index - BT_IDX_FIXED_COUNT;
+    if (moduleIdx < s_bluetoothModuleCount) {
+        auto& item = s_bluetoothModuleItems[moduleIdx];
+        if (item.getView) {
+            ui::IView* view = item.getView();
+            if (view) {
+                ViewStack::instance().push(view);
+            }
+        }
+        // Rebuild menu in case module toggle changed state
+        rebuildBluetoothMenu();
+    }
+}
+
+static void showBluetoothMenu() {
+    if (!s_bluetoothMenu) {
+        s_bluetoothMenu = new ListView();
+        s_bluetoothMenu->setOnSelect(onBluetoothMenuSelect);
+    }
+
+    rebuildBluetoothMenu();
+    ViewStack::instance().push(s_bluetoothMenu);
 }
 
 // ============================================================================

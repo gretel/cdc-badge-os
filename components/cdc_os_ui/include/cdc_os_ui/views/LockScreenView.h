@@ -3,7 +3,16 @@
 #include "cdc_ui/IView.h"
 #include <cstdint>
 
+namespace cdc {
+namespace hal {
+class ISleepController;
+}
+}
+
 namespace cdc::ui {
+
+// Deep sleep hold threshold (5 seconds)
+static constexpr uint32_t DEEP_SLEEP_HOLD_MS = 5000;
 
 /**
  * Status icons for lock screen
@@ -20,6 +29,7 @@ enum class StatusIcon : uint16_t {
     SAO          = (1 << 7),   // SAO detected
     CHARGING     = (1 << 8),   // Battery charging
     NO_BATTERY   = (1 << 9),   // No battery connected
+    CAFFEINATED  = (1 << 10),  // Sleep inhibited (coffee cup)
 };
 
 // Allow bitwise operations
@@ -121,8 +131,12 @@ private:
     StatusIcon statusIcons_ = StatusIcon::NONE;
     UnlockCallback onUnlock_ = nullptr;
 
+    // Long-press N for deep sleep (flight mode)
+    uint32_t nPressStartMs_ = 0;
+
     void renderStatusIcons(void* gfx, int x, int y);
     void renderBattery(void* gfx, int x, int y);
+    void checkDeepSleepTrigger(uint32_t nowMs);
 };
 
 } // namespace cdc::ui

@@ -13,9 +13,11 @@ namespace cdc::core {
  * Menu location for module registration
  */
 enum class MenuLocation : uint8_t {
-    MAIN_MENU,      // Top-level main menu
-    TOOLS_MENU,     // Under Tools submenu
-    SETTINGS_MENU   // Under Settings submenu
+    MAIN_MENU,       // Top-level main menu
+    TOOLS_MENU,      // Under Tools submenu
+    SETTINGS_MENU,   // Under Settings submenu
+    BLUETOOTH_MENU,  // Under Bluetooth submenu (for BLE services)
+    WIFI_MENU        // Under WiFi submenu (for WiFi-related features)
 };
 
 /**
