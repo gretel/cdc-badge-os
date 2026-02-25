@@ -1,6 +1,8 @@
 # UI Flows Reference
 
-> **FOSDEM 2026 Demo** - This documentation was created for demonstration purposes at FOSDEM 2026. UI flows and functionality are subject to change.
+User interface navigation and interaction patterns for the CDC Badge.
+
+> **Note:** This document shows representative UI flows and may not reflect all current screens. It is maintained for illustration purposes only.
 
 ## Navigation
 

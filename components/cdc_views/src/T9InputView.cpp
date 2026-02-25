@@ -6,6 +6,7 @@
  */
 
 #include "cdc_views/T9InputView.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_hal/IDisplay.h"
@@ -16,7 +17,9 @@
 
 static const char* TAG = "T9InputView";
 
-// T9 Character Mappings
+/**
+ * \brief T9 digit-to-character mapping table.
+ */
 static const char* t9_chars[] = {
     " 0",                           // 0 - space, 0
     ".?!,;:'\"()-_@#$%&*+=/\\1",   // 1 - symbols, 1
@@ -30,14 +33,22 @@ static const char* t9_chars[] = {
     "wxyz9WXYZ"                     // 9
 };
 
-// Display layout constants
+/**
+ * \brief Display layout constants.
+ */
 static constexpr int TITLE_Y = 5;
 static constexpr int TEXT_Y = 50;
-static constexpr int FOOTER_HEIGHT = 16;
 static constexpr int TEXT_MARGIN = 10;
 
 namespace cdc::ui {
 
+/**
+ * \brief Initializes T9 input state and optional initial text.
+ * \param title View title text.
+ * \param initialText Initial text value.
+ * \param maxLen Maximum input length.
+ * \return void
+ */
 void T9InputView::init(const char* title, const char* initialText, uint16_t maxLen) {
     title_ = title;
     maxLen_ = maxLen > MAX_TEXT_LEN ? MAX_TEXT_LEN : maxLen;
@@ -63,6 +74,12 @@ void T9InputView::init(const char* title, const char* initialText, uint16_t maxL
     LOG_D(TAG, "init: title='%s', maxLen=%d", title ? title : "(null)", maxLen_);
 }
 
+/**
+ * \brief Returns the character for a key/index in the T9 mapping.
+ * \param key Numeric key (`'0'`..`'9'`).
+ * \param index Character index within that key map.
+ * \return Mapped character or `\\0` if key is invalid.
+ */
 char T9InputView::getChar(char key, uint8_t index) {
     if (key < '0' || key > '9') return '\0';
     const char* chars = t9_chars[key - '0'];
@@ -70,11 +87,21 @@ char T9InputView::getChar(char key, uint8_t index) {
     return chars[index % count];
 }
 
+/**
+ * \brief Returns the number of mapped characters for a key.
+ * \param key Numeric key (`'0'`..`'9'`).
+ * \return Number of mapped characters.
+ */
 uint8_t T9InputView::getCharCount(char key) {
     if (key < '0' || key > '9') return 0;
     return strlen(t9_chars[key - '0']);
 }
 
+/**
+ * \brief Processes a numeric key press using multi-tap logic.
+ * \param key Numeric key (`'0'`..`'9'`).
+ * \return `true` if key was processed, otherwise `false`.
+ */
 bool T9InputView::processKey(char key) {
     if (key < '0' || key > '9') return false;
 
@@ -109,6 +136,10 @@ bool T9InputView::processKey(char key) {
     return true;
 }
 
+/**
+ * \brief Removes the last character from the input buffer.
+ * \return void
+ */
 void T9InputView::backspace() {
     if (len_ > 0) {
         len_--;
@@ -120,6 +151,11 @@ void T9InputView::backspace() {
     }
 }
 
+/**
+ * \brief Inserts a numeric digit literally, bypassing multi-tap mapping.
+ * \param key Numeric key (`'0'`..`'9'`).
+ * \return void
+ */
 void T9InputView::forceDigit(char key) {
     if (key < '0' || key > '9') return;
 
@@ -134,6 +170,10 @@ void T9InputView::forceDigit(char key) {
     }
 }
 
+/**
+ * \brief Commits the currently active multi-tap character.
+ * \return void
+ */
 void T9InputView::commitCharacter() {
     if (lastKey_ != 0) {
         lastKey_ = 0;
@@ -142,6 +182,11 @@ void T9InputView::commitCharacter() {
     }
 }
 
+/**
+ * \brief Handles timeout-based commit for active multi-tap input.
+ * \param nowMs Current monotonic time in milliseconds.
+ * \return void
+ */
 void T9InputView::onTick(uint32_t nowMs) {
     (void)nowMs;  // Use own timestamp for consistent timing
 
@@ -155,6 +200,11 @@ void T9InputView::onTick(uint32_t nowMs) {
     }
 }
 
+/**
+ * \brief Handles key input for save, backspace, and digit entry.
+ * \param key Pressed key code.
+ * \return Input handling result for the view stack.
+ */
 InputResult T9InputView::onKey(char key) {
     switch (key) {
         case 'Y':  // Confirm
@@ -180,6 +230,11 @@ InputResult T9InputView::onKey(char key) {
     }
 }
 
+/**
+ * \brief Handles long-press actions for clear and forced digit insertion.
+ * \param key Long-pressed key code.
+ * \return Input handling result for the view stack.
+ */
 InputResult T9InputView::onLongPress(char key) {
     if (key == 'N') {
         // Clear all text
@@ -200,10 +255,19 @@ InputResult T9InputView::onLongPress(char key) {
     return InputResult::IGNORED;
 }
 
+/**
+ * \brief Returns localized footer hint text.
+ * \return Footer hint string.
+ */
 const char* T9InputView::getFooterHint() const {
     return tr(StringId::HINT_T9_INPUT);
 }
 
+/**
+ * \brief Renders title, text entry box, cursor state, and footer.
+ * \param partial Indicates partial/full redraw mode.
+ * \return void
+ */
 void T9InputView::render(bool partial) {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;
@@ -221,12 +285,8 @@ void T9InputView::render(bool partial) {
     gfx->setTextColor(EPD_BLACK);
     gfx->setTextSize(1);
 
-    // Title
-    gfx->setCursor(TEXT_MARGIN, TITLE_Y);
-    if (title_) {
-        gfx->print(title_);
-    }
-    gfx->drawFastHLine(0, TITLE_Y + 18, width, EPD_BLACK);
+    // Title + underline
+    render::drawHeaderLeft(gfx, title_, TEXT_MARGIN, TITLE_Y, width);
 
     // Text input area
     gfx->fillRect(TEXT_MARGIN, TEXT_Y - 5, width - TEXT_MARGIN * 2, 30, EPD_WHITE);
@@ -262,29 +322,28 @@ void T9InputView::render(bool partial) {
     }
 
     // Footer with hint
-    gfx->fillRect(0, height - FOOTER_HEIGHT, width, FOOTER_HEIGHT, EPD_BLACK);
-    gfx->setTextColor(EPD_WHITE);
-    gfx->setCursor(4, height - 12);
-
-    // Show character count
     char countStr[16];
     snprintf(countStr, sizeof(countStr), "%u/%u  ", len_, maxLen_);
-    gfx->print(countStr);
-
     const char* hint = getFooterHint();
-    if (hint) {
-        gfx->print(hint);
-    }
+    render::drawFooterBar(gfx, width, height, countStr, hint, true);
 
     dirty_ = false;
 }
 
-// ============================================================================
-// Convenience Function
-// ============================================================================
+/**
+ * \brief Convenience factory/helper function.
+ */
 
 static T9InputView s_sharedT9Input;
 
+/**
+ * \brief Shows a shared T9 input view instance.
+ * \param title View title text.
+ * \param initialText Initial text value.
+ * \param onSave Save callback invoked on confirm.
+ * \param maxLen Maximum input length.
+ * \return Pointer to the shared `T9InputView` instance.
+ */
 T9InputView* showT9Input(const char* title, const char* initialText,
                          T9InputView::SaveCallback onSave, uint16_t maxLen) {
     s_sharedT9Input.init(title, initialText, maxLen);

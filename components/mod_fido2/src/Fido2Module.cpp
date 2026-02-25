@@ -16,8 +16,7 @@ static const char* TAG = "FIDO2";
 
 namespace cdc::mod_fido2 {
 
-// FIDO U2F HID Report Descriptor (CTAPHID standard)
-// See FIDO U2F HID Protocol Specification
+/** \brief FIDO U2F HID report descriptor (CTAPHID standard). */
 static const uint8_t s_fido_report_desc[] = {
     0x06, 0xD0, 0xF1,  // Usage Page (FIDO Alliance)
     0x09, 0x01,        // Usage (U2F HID Authenticator Device)
@@ -37,7 +36,7 @@ static const uint8_t s_fido_report_desc[] = {
     0xC0               // End Collection
 };
 
-// Internal packet queue for incoming HID reports
+/** \brief Queue for incoming HID reports. */
 static constexpr size_t FIDO_QUEUE_SIZE = 8;
 static QueueHandle_t s_rx_queue = nullptr;
 
@@ -45,10 +44,18 @@ struct FidoPacket {
     uint8_t data[CTAPHID_PACKET_SIZE];
 };
 
-// HID instance index (set after registration)
+/** \brief HID interface instance index assigned at registration time. */
 static uint8_t s_hid_instance = 0;
 
-// Callbacks for USB HID
+/** \brief USB HID callbacks for FIDO transport. */
+/**
+ * \brief HID GET_REPORT callback (unused for FIDO).
+ * \param report_id Report id.
+ * \param report_type Report type.
+ * \param buffer Output buffer.
+ * \param reqlen Requested length.
+ * \return Always `0`.
+ */
 static uint16_t onFidoGetReport(uint8_t report_id, uint8_t report_type,
                                  uint8_t* buffer, uint16_t reqlen) {
     (void)report_id;
@@ -58,6 +65,13 @@ static uint16_t onFidoGetReport(uint8_t report_id, uint8_t report_type,
     return 0;  // FIDO doesn't use GET_REPORT
 }
 
+/**
+ * \brief HID SET_REPORT callback queuing incoming CTAPHID packets.
+ * \param report_id Report id.
+ * \param report_type Report type.
+ * \param buffer Input packet buffer.
+ * \param bufsize Packet size.
+ */
 static void onFidoSetReport(uint8_t report_id, uint8_t report_type,
                             uint8_t const* buffer, uint16_t bufsize) {
     (void)report_id;
@@ -76,17 +90,29 @@ static void onFidoSetReport(uint8_t report_id, uint8_t report_type,
     }
 }
 
+/**
+ * \brief HID transfer-complete callback (currently unused).
+ * \param report Completed report payload.
+ * \param len Payload length.
+ */
 static void onFidoReportComplete(uint8_t const* report, uint16_t len) {
     (void)report;
     (void)len;
 }
 
-// Module implementation
+/**
+ * \brief Returns the singleton instance of the FIDO2 module.
+ * \return Reference to the singleton `Fido2Module`.
+ */
 Fido2Module& Fido2Module::instance() {
     static Fido2Module inst;
     return inst;
 }
 
+/**
+ * \brief Initializes FIDO2 module resources and slot mapping.
+ * \return `true` if initialization succeeded.
+ */
 bool Fido2Module::init() {
     LOG_I(TAG, "Initializing FIDO2 module");
 
@@ -124,6 +150,10 @@ bool Fido2Module::init() {
     return true;
 }
 
+/**
+ * \brief Starts FIDO2 module, USB HID interface, and core stack.
+ * \return `true` if start sequence succeeded.
+ */
 bool Fido2Module::start() {
     if (state_ != core::ServiceState::INITIALIZED &&
         state_ != core::ServiceState::STOPPED) {
@@ -165,15 +195,26 @@ bool Fido2Module::start() {
     return true;
 }
 
+/**
+ * \brief Stops FIDO2 module and unregisters USB interface.
+ */
 void Fido2Module::stop() {
     core::UsbManager::instance().unregisterInterface(core::UsbHidInterface::Fido, getName());
     state_ = core::ServiceState::STOPPED;
 }
 
+/**
+ * \brief Stores slot range assignment.
+ * \param range Slot assignment from registry.
+ */
 void Fido2Module::setSlotRange(const core::IModule::SlotRange& range) {
     slotRange_ = range;
 }
 
+/**
+ * \brief Declares slot requirements for FIDO2 module.
+ * \return Slot-request descriptor.
+ */
 core::IModule::SlotRequest Fido2Module::getSlotRequest() const {
     core::IModule::SlotRequest req = {};
     req.mapName = getName();
@@ -182,26 +223,44 @@ core::IModule::SlotRequest Fido2Module::getSlotRequest() const {
     return req;
 }
 
+/**
+ * \brief Provides main-menu entry for FIDO2 credential list.
+ * \param items Output menu item array.
+ * \param maxItems Maximum writable entries.
+ * \return Number of populated menu items.
+ */
 uint8_t Fido2Module::getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems) {
     if (!items || maxItems == 0) return 0;
 
     items[0] = {fido2_ui_get_label(), 50, []() -> ui::IView* {
         return fido2_ui_get_list_view();
-    }, nullptr, getName(), core::MenuLocation::MAIN_MENU};
+    }, nullptr, getName(), core::MenuLocation::MAIN_MENU, nullptr};
 
     return 1;
 }
 
-// USB transport functions for fido2.cpp
+/**
+ * \brief Indicates whether at least one USB HID packet is queued for FIDO2.
+ * \return `true` if queued input is available, otherwise `false`.
+ */
 bool fido2_usb_available() {
     if (!s_rx_queue) return false;
     return uxQueueMessagesWaiting(s_rx_queue) > 0;
 }
 
+/**
+ * \brief Reports whether USB HID endpoint is ready for transmission.
+ * \return `true` if endpoint is ready, otherwise `false`.
+ */
 bool fido2_usb_ready() {
     return usb_hid_instance_ready(s_hid_instance);
 }
 
+/**
+ * \brief Reads one queued CTAPHID packet from USB RX queue.
+ * \param buffer Output packet buffer.
+ * \return Packet size (`CTAPHID_PACKET_SIZE`) or `0` when queue is empty.
+ */
 uint16_t fido2_usb_read(uint8_t* buffer) {
     if (!s_rx_queue || !buffer) return 0;
 
@@ -213,6 +272,11 @@ uint16_t fido2_usb_read(uint8_t* buffer) {
     return 0;
 }
 
+/**
+ * \brief Sends one CTAPHID packet over USB HID.
+ * \param buffer Packet data buffer.
+ * \return `true` if report submission succeeded.
+ */
 bool fido2_usb_write(const uint8_t* buffer) {
     if (!buffer) return false;
     return usb_hid_send_report(s_hid_instance, 0, buffer, CTAPHID_PACKET_SIZE);
@@ -220,6 +284,9 @@ bool fido2_usb_write(const uint8_t* buffer) {
 
 } // namespace cdc::mod_fido2
 
+/**
+ * \brief Registers FIDO2 module initializer.
+ */
 extern "C" void mod_fido2_register() {
     cdc::core::ModuleRegistry::instance().registerInitializer([]() {
         auto& module = cdc::mod_fido2::Fido2Module::instance();

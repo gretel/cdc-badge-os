@@ -13,7 +13,9 @@
 
 static const char* TAG = "RgbInputView";
 
-// Display constants
+/**
+ * \brief Layout constants for RGB input rendering.
+ */
 static constexpr int TITLE_Y = 20;
 static constexpr int RGB_Y = 55;
 static constexpr int UNDERLINE_Y = RGB_Y + 20;
@@ -22,6 +24,13 @@ static constexpr int HINT_Y = 115;
 
 namespace cdc::grove_led {
 
+/**
+ * \brief Initializes RGB input view state.
+ * \param title View title.
+ * \param r Initial red value.
+ * \param g Initial green value.
+ * \param b Initial blue value.
+ */
 void RgbInputView::init(const char* title, uint8_t r, uint8_t g, uint8_t b) {
     title_ = title;
     r_ = r;
@@ -32,6 +41,9 @@ void RgbInputView::init(const char* title, uint8_t r, uint8_t g, uint8_t b) {
     dirty_ = true;
 }
 
+/**
+ * \brief Moves selection to next RGB field.
+ */
 void RgbInputView::nextField() {
     if (currentField_ == Field::RED) {
         currentField_ = Field::GREEN;
@@ -42,6 +54,9 @@ void RgbInputView::nextField() {
     dirty_ = true;
 }
 
+/**
+ * \brief Moves selection to previous RGB field.
+ */
 void RgbInputView::prevField() {
     if (currentField_ == Field::BLUE) {
         currentField_ = Field::GREEN;
@@ -52,6 +67,9 @@ void RgbInputView::prevField() {
     dirty_ = true;
 }
 
+/**
+ * \brief Clears currently selected RGB field.
+ */
 void RgbInputView::clearField() {
     switch (currentField_) {
         case Field::RED:
@@ -68,6 +86,10 @@ void RgbInputView::clearField() {
     dirty_ = true;
 }
 
+/**
+ * \brief Processes one numeric digit for current RGB field.
+ * \param digit ASCII digit character.
+ */
 void RgbInputView::enterDigit(char digit) {
     uint8_t d = digit - '0';
     uint8_t* value = nullptr;
@@ -98,10 +120,18 @@ void RgbInputView::enterDigit(char digit) {
     dirty_ = true;
 }
 
+/**
+ * \brief Clamps RGB values to supported range (kept for API symmetry).
+ */
 void RgbInputView::clampValues() {
     // uint8_t values cannot exceed 255, function kept for API consistency
 }
 
+/**
+ * \brief Handles keypad input for RGB editor workflow.
+ * \param key Pressed key.
+ * \return Input processing result.
+ */
 ui::InputResult RgbInputView::onKey(char key) {
     // Digit input
     if (key >= '0' && key <= '9') {
@@ -141,10 +171,18 @@ ui::InputResult RgbInputView::onKey(char key) {
     }
 }
 
+/**
+ * \brief Returns footer hint text for RGB editor.
+ * \return Hint string.
+ */
 const char* RgbInputView::getFooterHint() const {
     return "0-9:Input 4/6:Field Y:OK";
 }
 
+/**
+ * \brief Renders RGB editor layout and preview box.
+ * \param partial `true` for partial redraw, `false` for full redraw.
+ */
 void RgbInputView::render(bool partial) {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;

@@ -15,19 +15,40 @@ namespace cdc::hal {
  */
 class SecureElementStub : public ISecureElement {
 public:
+    /**
+     * \brief Initializes stub secure element service.
+     * \return Always `true`.
+     */
     bool init() override {
         LOG_W(TAG, "SecureElement STUB - TROPIC01 not implemented yet");
         state_ = core::ServiceState::INITIALIZED;
         return true;
     }
+    /**
+     * \brief Starts stub service state.
+     * \return Always `true`.
+     */
     bool start() override { state_ = core::ServiceState::STARTED; return true; }
+    /**
+     * \brief Stops stub service state.
+     */
     void stop() override { state_ = core::ServiceState::STOPPED; }
     core::ServiceState getState() const override { return state_; }
     const char* getName() const override { return "secure_element"; }
 
     bool sessionStart() override { return false; }
+    /**
+     * \brief Ends secure-element session (stub no-op).
+     */
     void sessionEnd() override {}
+    /**
+     * \brief Returns secure-element session state.
+     * \return Always `false` in stub.
+     */
     bool isSessionActive() const override { return false; }
+    /**
+     * \brief Requests secure element sleep (stub no-op).
+     */
     void sleep() override {}
 
     SeResult eccGenerate(uint8_t, EccCurve) override { return SeResult::NOT_SUPPORTED; }
@@ -62,6 +83,10 @@ private:
 
 static SecureElementStub g_secureElementStub;
 
+/**
+ * \brief Returns singleton secure-element stub instance.
+ * \return Pointer to stub implementation.
+ */
 ISecureElement* getSecureElementInstance() {
     return &g_secureElementStub;
 }

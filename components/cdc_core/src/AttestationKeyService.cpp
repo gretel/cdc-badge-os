@@ -12,6 +12,10 @@ static constexpr uint32_t RETRY_INTERVAL_MS = 3000;
 
 namespace cdc::core {
 
+/**
+ * \brief Initializes service state.
+ * \return `true` if service is initialized.
+ */
 bool AttestationKeyService::init() {
     if (state_ != ServiceState::UNINITIALIZED) {
         return state_ == ServiceState::INITIALIZED || state_ == ServiceState::STARTED;
@@ -20,6 +24,10 @@ bool AttestationKeyService::init() {
     return true;
 }
 
+/**
+ * \brief Starts service and ensures initialized state.
+ * \return `true` if service is started.
+ */
 bool AttestationKeyService::start() {
     if (state_ == ServiceState::UNINITIALIZED) {
         if (!init()) return false;
@@ -28,10 +36,17 @@ bool AttestationKeyService::start() {
     return true;
 }
 
+/**
+ * \brief Stops attestation-key background processing.
+ */
 void AttestationKeyService::stop() {
     state_ = ServiceState::STOPPED;
 }
 
+/**
+ * \brief Periodically attempts to ensure attestation key exists and is valid.
+ * \param nowMs Current uptime in milliseconds.
+ */
 void AttestationKeyService::onTick(uint32_t nowMs) {
     if (state_ != ServiceState::STARTED || ready_) return;
     if (nowMs - lastAttemptMs_ < RETRY_INTERVAL_MS) return;
@@ -42,6 +57,12 @@ void AttestationKeyService::onTick(uint32_t nowMs) {
     }
 }
 
+/**
+ * \brief Loads stored public-key hash from NVS.
+ * \param out Output hash buffer.
+ * \param outLen Expected hash length.
+ * \return `true` on successful load.
+ */
 bool AttestationKeyService::loadStoredHash(uint8_t* out, size_t outLen) {
     if (!out || outLen == 0) return false;
     nvs_handle_t nvs;
@@ -54,6 +75,12 @@ bool AttestationKeyService::loadStoredHash(uint8_t* out, size_t outLen) {
     return err == ESP_OK && len == outLen;
 }
 
+/**
+ * \brief Stores public-key hash to NVS.
+ * \param data Hash bytes.
+ * \param len Hash length.
+ * \return `true` on successful save.
+ */
 bool AttestationKeyService::saveStoredHash(const uint8_t* data, size_t len) {
     if (!data || len == 0) return false;
     nvs_handle_t nvs;
@@ -68,6 +95,10 @@ bool AttestationKeyService::saveStoredHash(const uint8_t* data, size_t len) {
     return err == ESP_OK;
 }
 
+/**
+ * \brief Ensures valid P-256 attestation key exists and matches persisted hash.
+ * \return `true` when key is ready and consistent.
+ */
 bool AttestationKeyService::ensureKey() {
     if (!secureElement_) {
         LOG_W(TAG, "Secure element not set");

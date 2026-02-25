@@ -6,6 +6,7 @@
  */
 
 #include "cdc_views/MessageBox.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_hal/IDisplay.h"
 #include "cdc_log.h"
@@ -14,7 +15,9 @@
 
 static const char* TAG = "MessageBox";
 
-// Display layout constants
+/**
+ * \brief Display layout constants.
+ */
 static constexpr int BOX_PADDING = 12;
 static constexpr int ICON_SIZE = 16;
 static constexpr int ICON_MARGIN = 8;
@@ -23,6 +26,13 @@ static constexpr int MAX_BOX_WIDTH = 260;
 
 namespace cdc::ui {
 
+/**
+ * \brief Initializes message box state.
+ * \param message Message text to display.
+ * \param icon Icon type for the message.
+ * \param timeoutMs Auto-close timeout in milliseconds.
+ * \return void
+ */
 void MessageBox::init(const char* message, MessageIcon icon, uint32_t timeoutMs) {
     message_ = message;
     icon_ = icon;
@@ -35,6 +45,11 @@ void MessageBox::init(const char* message, MessageIcon icon, uint32_t timeoutMs)
              message ? message : "(null)", static_cast<int>(icon), timeoutMs);
 }
 
+/**
+ * \brief Updates timeout-based auto-dismiss behavior.
+ * \param nowMs Current monotonic time in milliseconds.
+ * \return void
+ */
 void MessageBox::onTick(uint32_t nowMs) {
     // Initialize start time on first tick
     if (startTimeMs_ == 0) {
@@ -51,6 +66,11 @@ void MessageBox::onTick(uint32_t nowMs) {
     }
 }
 
+/**
+ * \brief Handles key input for manual dismissal.
+ * \param key Pressed key code.
+ * \return Input handling result for the view stack.
+ */
 InputResult MessageBox::onKey(char key) {
     // Any key dismisses (Y or N)
     if (key == 'Y' || key == 'N') {
@@ -64,6 +84,11 @@ InputResult MessageBox::onKey(char key) {
     return InputResult::IGNORED;
 }
 
+/**
+ * \brief Renders the modal message box.
+ * \param partial Indicates partial/full redraw mode.
+ * \return void
+ */
 void MessageBox::render(bool partial) {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;
@@ -104,9 +129,7 @@ void MessageBox::render(bool partial) {
     int boxY = (screenHeight - boxHeight) / 2;
 
     // Draw box background (white with black border)
-    gfx->fillRect(boxX, boxY, boxWidth, boxHeight, EPD_WHITE);
-    gfx->drawRect(boxX, boxY, boxWidth, boxHeight, EPD_BLACK);
-    gfx->drawRect(boxX + 1, boxY + 1, boxWidth - 2, boxHeight - 2, EPD_BLACK);
+    render::drawDialogFrame(gfx, boxX, boxY, boxWidth, boxHeight);
 
     // Calculate content position
     int contentX = boxX + BOX_PADDING;
@@ -170,12 +193,20 @@ void MessageBox::render(bool partial) {
     dirty_ = false;
 }
 
-// ============================================================================
-// Convenience Functions
-// ============================================================================
+/**
+ * \brief Convenience helper functions.
+ */
 
 static MessageBox s_sharedMessageBox;
 
+/**
+ * \brief Shows the shared modal message box.
+ * \param message Message text.
+ * \param icon Icon type.
+ * \param timeoutMs Auto-close timeout in milliseconds.
+ * \param onClose Optional close callback.
+ * \return void
+ */
 void showMessage(const char* message, MessageIcon icon,
                  uint32_t timeoutMs, MessageBox::CloseCallback onClose) {
     s_sharedMessageBox.init(message, icon, timeoutMs);
@@ -183,6 +214,10 @@ void showMessage(const char* message, MessageIcon icon,
     ViewStack::instance().showModal(&s_sharedMessageBox);
 }
 
+/**
+ * \brief Hides the currently shown modal message box.
+ * \return void
+ */
 void hideMessage() {
     ViewStack::instance().hideModal();
 }

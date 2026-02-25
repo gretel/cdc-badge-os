@@ -1,0 +1,112 @@
+name: Deploy GitHub Pages
+
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main, release]
+    paths:
+      - 'components/**'
+      - 'main/**'
+      - 'Doxyfile'
+      - 'web-flasher/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install Doxygen
+        run: sudo apt-get install -y doxygen
+
+      - name: Build Doxygen documentation
+        run: doxygen Doxyfile
+
+      - name: Get latest release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ "$EVENT_NAME" = "release" ]; then
+            echo "tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          else
+            TAG=$(gh api repos/${{ github.repository }}/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Assemble site
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          mkdir -p _site/docs
+
+          # Web Flasher at root
+          cp web-flasher/index.html _site/
+          cp web-flasher/badge.jpg _site/
+
+          # Doxygen docs
+          cp -r doxygen_output/html/* _site/docs/
+
+          # Download firmware binaries (skip if no release exists)
+          if [ -n "$TAG" ]; then
+            gh release download "$TAG" \
+              --repo "${{ github.repository }}" \
+              --dir _site \
+              --pattern "*.bin"
+
+            mv "_site/cdc-badge-bootloader-${TAG}.bin" _site/bootloader.bin
+            mv "_site/cdc-badge-partitions-${TAG}.bin" _site/partitions.bin
+            mv "_site/cdc-badge-firmware-${TAG}.bin" _site/firmware.bin
+
+            cat > _site/manifest.json << MANIFEST
+          {
+            "name": "CDC Badge OS",
+            "version": "${TAG}",
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [
+                  { "path": "bootloader.bin", "offset": 0 },
+                  { "path": "partitions.bin", "offset": 32768 },
+                  { "path": "firmware.bin", "offset": 65536 }
+                ]
+              }
+            ]
+          }
+          MANIFEST
+          else
+            echo "No release found, skipping firmware binaries"
+          fi
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

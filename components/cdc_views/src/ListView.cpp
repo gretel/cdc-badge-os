@@ -6,28 +6,40 @@
  */
 
 #include "cdc_views/ListView.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_hal/IDisplay.h"
 #include "cdc_log.h"
 #include <goodisplay/gdey029T94.h>
-#include <algorithm>
 
 static const char* TAG = "ListView";
 
-// Display layout constants (fixed for 296x128 display)
+/**
+ * \brief Display layout constants for 296x128 panels.
+ */
 static constexpr int TITLE_Y = 5;
 static constexpr int LIST_START_Y = 30;
-static constexpr int FOOTER_HEIGHT = 16;
 static constexpr int ITEM_PADDING_X = 10;
 static constexpr int SCROLL_INDICATOR_WIDTH = 8;
 
-// Available height: 128 - 30 (header) - 16 (footer) = 82px
-// With itemHeight_=18: 82/18 = 4 items visible
+/**
+ * \brief Visible item count derived from available list area.
+ *
+ * Available height: 128 - 30 (header) - 16 (footer) = 82px.
+ * With `itemHeight_=18`: 82 / 18 = 4 visible rows.
+ */
 static constexpr uint8_t VISIBLE_ITEMS = 4;
 
 namespace cdc::ui {
 
+/**
+ * \brief Initializes list data and selection state.
+ * \param title List title text.
+ * \param items Item array pointer.
+ * \param count Number of items in `items`.
+ * \return void
+ */
 void ListView::init(const char* title, const ListItem* items, uint16_t count) {
     title_ = title;
     items_ = items;
@@ -50,6 +62,11 @@ void ListView::init(const char* title, const ListItem* items, uint16_t count) {
     LOG_D(TAG, "init: title='%s', items=%d, visible=%d", title, itemCount_, visibleItems_);
 }
 
+/**
+ * \brief Sets the selected item index.
+ * \param index Target selection index.
+ * \return void
+ */
 void ListView::setSelection(uint16_t index) {
     if (index < itemCount_ && index != selection_) {
         selection_ = index;
@@ -58,6 +75,10 @@ void ListView::setSelection(uint16_t index) {
     }
 }
 
+/**
+ * \brief Returns the currently selected item.
+ * \return Pointer to selected item or `nullptr`.
+ */
 const ListItem* ListView::getSelectedItem() const {
     if (items_ && selection_ < itemCount_) {
         return &items_[selection_];
@@ -65,6 +86,11 @@ const ListItem* ListView::getSelectedItem() const {
     return nullptr;
 }
 
+/**
+ * \brief Navigates the selection up or down.
+ * \param down `true` to move down, `false` to move up.
+ * \return void
+ */
 void ListView::navigate(bool down) {
     if (itemCount_ == 0) return;
 
@@ -91,6 +117,10 @@ void ListView::navigate(bool down) {
     LOG_D(TAG, "navigate: sel=%d, scroll=%d", selection_, scrollPos_);
 }
 
+/**
+ * \brief Adjusts scroll position so the selected item is visible.
+ * \return void
+ */
 void ListView::ensureVisible() {
     if (selection_ >= scrollPos_ + visibleItems_) {
         scrollPos_ = selection_ - visibleItems_ + 1;
@@ -100,6 +130,11 @@ void ListView::ensureVisible() {
     }
 }
 
+/**
+ * \brief Handles key input for list navigation and actions.
+ * \param key Pressed key code.
+ * \return Input handling result for the view stack.
+ */
 InputResult ListView::onKey(char key) {
     switch (key) {
         case '2': // Up
@@ -131,6 +166,10 @@ InputResult ListView::onKey(char key) {
     }
 }
 
+/**
+ * \brief Returns footer hint text for this list.
+ * \return Footer hint string.
+ */
 const char* ListView::getFooterHint() const {
     if (customHint_) {
         return customHint_;
@@ -138,6 +177,11 @@ const char* ListView::getFooterHint() const {
     return tr(StringId::HINT_OK_BACK);
 }
 
+/**
+ * \brief Renders list rows, selection, scroll indicators, and footer.
+ * \param partial Indicates partial/full redraw mode.
+ * \return void
+ */
 void ListView::render(bool partial) {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;
@@ -155,35 +199,54 @@ void ListView::render(bool partial) {
     gfx->setTextColor(EPD_BLACK);
     gfx->setTextSize(1);
 
-    // Title
-    gfx->setCursor(ITEM_PADDING_X, TITLE_Y);
-    if (title_) {
-        gfx->print(title_);
-    }
-    gfx->drawFastHLine(0, TITLE_Y + 18, width, EPD_BLACK);
+    // Title + underline
+    render::drawHeaderLeft(gfx, title_, ITEM_PADDING_X, TITLE_Y, width);
 
     // Items
+    const int rowWidth = width - SCROLL_INDICATOR_WIDTH;
     for (uint8_t i = 0; i < visibleItems_; i++) {
         uint16_t itemIndex = scrollPos_ + i;
         int y = LIST_START_Y + i * itemHeight_;
 
         // Clear item area
-        gfx->fillRect(0, y, width - SCROLL_INDICATOR_WIDTH, itemHeight_, EPD_WHITE);
+        gfx->fillRect(0, y, rowWidth, itemHeight_, EPD_WHITE);
 
         if (itemIndex >= itemCount_) continue;
 
         const ListItem& item = items_[itemIndex];
+        bool isSelected = (itemIndex == selection_);
 
-        if (itemIndex == selection_) {
-            gfx->fillRect(2, y + 1, width - SCROLL_INDICATOR_WIDTH - 4, itemHeight_ - 2, EPD_BLACK);
+        if (isSelected) {
+            gfx->fillRect(2, y + 1, rowWidth - 4, itemHeight_ - 2, EPD_BLACK);
             gfx->setTextColor(EPD_WHITE);
         } else {
             gfx->setTextColor(EPD_BLACK);
         }
 
-        gfx->setCursor(ITEM_PADDING_X, y + 4);
-        if (item.label) {
-            gfx->print(item.label);
+        bool handled = false;
+        if (itemRenderer_) {
+            handled = itemRenderer_(gfx, item, itemIndex,
+                                    0, y, rowWidth, itemHeight_,
+                                    isSelected, itemRendererCtx_);
+        }
+
+        if (!handled) {
+            int textX = ITEM_PADDING_X;
+            if (item.icon) {
+                char iconStr[2] = {static_cast<char>(item.icon), '\0'};
+                gfx->setCursor(textX, y + 4);
+                gfx->print(iconStr);
+                if (item.iconDisabled) {
+                    uint16_t color = isSelected ? EPD_WHITE : EPD_BLACK;
+                    gfx->drawLine(textX, y + 10, textX + 6, y + 10, color);
+                }
+                textX += 10;
+            }
+
+            gfx->setCursor(textX, y + 4);
+            if (item.label) {
+                gfx->print(item.label);
+            }
         }
     }
 
@@ -191,65 +254,38 @@ void ListView::render(bool partial) {
     if (itemCount_ > visibleItems_) {
         int indicatorX = width - SCROLL_INDICATOR_WIDTH;
         int listHeight = visibleItems_ * itemHeight_;
-
-        gfx->fillRect(indicatorX, LIST_START_Y, SCROLL_INDICATOR_WIDTH, listHeight, EPD_WHITE);
-
-        // Up arrow
-        if (scrollPos_ > 0) {
-            gfx->fillTriangle(
-                indicatorX + 4, LIST_START_Y + 4,
-                indicatorX + 1, LIST_START_Y + 10,
-                indicatorX + 7, LIST_START_Y + 10,
-                EPD_BLACK
-            );
-        }
-
-        // Down arrow
-        if (scrollPos_ + visibleItems_ < itemCount_) {
-            int arrowY = LIST_START_Y + listHeight - 12;
-            gfx->fillTriangle(
-                indicatorX + 4, arrowY + 8,
-                indicatorX + 1, arrowY + 2,
-                indicatorX + 7, arrowY + 2,
-                EPD_BLACK
-            );
-        }
-
-        // Scroll bar
-        int barHeight = listHeight - 24;
-        int thumbHeight = std::max(10, barHeight * visibleItems_ / itemCount_);
-        int scrollRange = itemCount_ - visibleItems_;
-        int thumbPos = scrollRange > 0 ? (barHeight - thumbHeight) * scrollPos_ / scrollRange : 0;
-
-        gfx->drawRect(indicatorX + 2, LIST_START_Y + 12, 4, barHeight, EPD_BLACK);
-        gfx->fillRect(indicatorX + 2, LIST_START_Y + 12 + thumbPos, 4, thumbHeight, EPD_BLACK);
+        render::drawScrollIndicator(gfx, indicatorX, LIST_START_Y, listHeight,
+                                    itemCount_, visibleItems_, scrollPos_);
     }
 
     // Footer with position counter
-    gfx->fillRect(0, height - FOOTER_HEIGHT, width, FOOTER_HEIGHT, EPD_BLACK);
-    gfx->setTextColor(EPD_WHITE);
-    gfx->setCursor(4, height - 12);
-
+    char positionStr[16];
+    const char* prefix = nullptr;
     if (itemCount_ > 0) {
-        char positionStr[16];
         snprintf(positionStr, sizeof(positionStr), "%u/%u  ", selection_ + 1, itemCount_);
-        gfx->print(positionStr);
+        prefix = positionStr;
     }
-
     const char* hint = getFooterHint();
-    if (hint) {
-        gfx->print(hint);
-    }
+    render::drawFooterBar(gfx, width, height, prefix, hint, true);
 
     dirty_ = false;
 }
 
-// ============================================================================
-// Convenience Function
-// ============================================================================
+/**
+ * \brief Convenience factory/helper function.
+ */
 
 static ListView s_sharedListView;
 
+/**
+ * \brief Shows a shared list view instance with selection callback.
+ * \param title List title text.
+ * \param items Item array pointer.
+ * \param count Number of items.
+ * \param onSelect Selection callback.
+ * \param hint Optional footer hint override.
+ * \return Pointer to the shared `ListView` instance.
+ */
 ListView* showListView(const char* title, const ListItem* items, uint16_t count,
                        ListView::SelectCallback onSelect, const char* hint) {
     s_sharedListView.init(title, items, count);

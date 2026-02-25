@@ -1,8 +1,8 @@
-/*
- * USB CCID (Chip Card Interface Device) for CDC Badge
+/**
+ * \brief USB CCID (Chip Card Interface Device) transport for OpenPGP applet.
  *
- * Based on pico-openpgp (https://github.com/polhenarejos/pico-openpgp)
- * Original: Copyright (c) 2022 Pol Henarejos, AGPLv3
+ * Based on pico-openpgp (https://github.com/polhenarejos/pico-openpgp).
+ * Original project copyright: Pol Henarejos, AGPLv3.
  */
 
 #include "mod_gpg/openpgp/ccid.h"
@@ -14,14 +14,18 @@
 
 static const char *TAG = "CCID";
 
-// CCID logging - uses error_log_add_direct (USB-safe, viewable via ERRLOG command)
-// This writes to both UART and error_log without using console_print
+/**
+ * \brief CCID logging macros routed through USB-safe logger path.
+ *
+ * Output is available on UART and in persistent error log without console_print usage.
+ */
 #define CCID_LOG(tag, fmt, ...) LOG_I(tag, fmt, ##__VA_ARGS__)
 #define CCID_LOG_E(tag, fmt, ...) LOG_E(tag, fmt, ##__VA_ARGS__)
 #define CCID_LOG_W(tag, fmt, ...) LOG_W(tag, fmt, ##__VA_ARGS__)
 
-// CCID Functional Descriptor (54 bytes)
-// From OpenPGP 3.4.1 specification
+/**
+ * \brief CCID functional descriptor (54 bytes) per OpenPGP 3.4.1 profile.
+ */
 const uint8_t CCID_DESCRIPTOR[] = {
     0x36,       // bLength: 54 bytes
     0x21,       // bDescriptorType: Functional Descriptor
@@ -54,8 +58,11 @@ const uint8_t CCID_DESCRIPTOR[] = {
 
 const size_t CCID_DESCRIPTOR_LEN = sizeof(CCID_DESCRIPTOR);
 
-// ATR (Answer To Reset) for CDC Badge OpenPGP card
-// Based on pico-openpgp ATR format (T=1 protocol, OpenPGP 3.x compatible)
+/**
+ * \brief ATR (Answer To Reset) for CDC Badge OpenPGP card.
+ *
+ * Based on pico-openpgp ATR layout (T=1 protocol, OpenPGP 3.x compatible).
+ */
 static const uint8_t ATR[] = {
     0x3B,                   // TS: Direct convention
     0xDA,                   // T0: Y1=D (TA1,TC1,TD1 present), K=10 historical bytes
@@ -76,6 +83,10 @@ static bool initialized = false;
 static uint8_t current_slot = 0;
 static uint8_t current_seq = 0;
 
+/**
+ * \brief Initializes CCID transport and backing OpenPGP applet.
+ * \return `true` if initialization succeeded.
+ */
 bool ccid_init(void) {
     if (!openpgp_init()) {
         CCID_LOG_E(TAG, "Failed to initialize OpenPGP");
@@ -87,6 +98,11 @@ bool ccid_init(void) {
     return true;
 }
 
+/**
+ * \brief Returns pointer and length of ATR bytes.
+ * \param len Optional output receiving ATR length.
+ * \return Pointer to static ATR buffer.
+ */
 const uint8_t* ccid_get_atr(size_t *len) {
     if (len) {
         *len = sizeof(ATR);
@@ -94,11 +110,24 @@ const uint8_t* ccid_get_atr(size_t *len) {
     return ATR;
 }
 
+/**
+ * \brief Returns whether virtual CCID card is available.
+ * \return `true` if CCID/OpenPGP stack is initialized.
+ */
 bool ccid_card_present(void) {
     return initialized;
 }
 
-// Build CCID response header
+/**
+ * \brief Builds a CCID response header in transport byte format.
+ * \param resp Output response buffer.
+ * \param msg_type CCID response message type.
+ * \param data_len Payload length in bytes.
+ * \param slot Slot index.
+ * \param seq Sequence number.
+ * \param status CCID status flags.
+ * \param error CCID error code.
+ */
 static void ccid_build_header(uint8_t *resp, uint8_t msg_type, uint32_t data_len,
                               uint8_t slot, uint8_t seq, uint8_t status, uint8_t error) {
     resp[0] = msg_type;
@@ -113,7 +142,13 @@ static void ccid_build_header(uint8_t *resp, uint8_t msg_type, uint32_t data_len
     resp[9] = 0;  // Chain parameter
 }
 
-// Helper to log hex data
+/**
+ * \brief Logs a hexadecimal preview of CCID payload data.
+ * \param prefix Prefix text printed before the hex dump.
+ * \param data Pointer to the data buffer.
+ * \param len Number of bytes in `data`.
+ * \return void
+ */
 static void ccid_log_hex_data(const char* prefix, const uint8_t* data, size_t len) {
     if (len == 0) return;
     char hex[128];
@@ -128,6 +163,14 @@ static void ccid_log_hex_data(const char* prefix, const uint8_t* data, size_t le
     }
 }
 
+/**
+ * \brief Processes one incoming CCID message and writes corresponding response.
+ * \param msg Incoming CCID message bytes.
+ * \param msg_len Incoming message length.
+ * \param resp Output response buffer.
+ * \param resp_max Output buffer capacity.
+ * \return Response length in bytes, or negative value on fatal parameter errors.
+ */
 int ccid_process_message(const uint8_t *msg, size_t msg_len,
                          uint8_t *resp, size_t resp_max) {
     CCID_LOG(TAG, "========================================");

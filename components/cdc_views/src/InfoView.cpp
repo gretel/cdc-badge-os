@@ -5,6 +5,7 @@
  */
 
 #include "cdc_views/InfoView.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_hal/IDisplay.h"
@@ -14,7 +15,9 @@
 
 static const char* TAG = "InfoView";
 
-// Display layout constants
+/**
+ * \brief Display layout constants.
+ */
 static constexpr int TITLE_Y = 5;
 static constexpr int TEXT_START_Y = 28;
 static constexpr int TEXT_MARGIN = 8;
@@ -23,6 +26,12 @@ static constexpr int SCROLL_INDICATOR_WIDTH = 8;
 
 namespace cdc::ui {
 
+/**
+ * \brief Initializes title/text buffers and resets scrolling state.
+ * \param title Title text for the info view.
+ * \param text Body text content.
+ * \return void
+ */
 void InfoView::init(const char* title, const char* text) {
     // Copy title to internal buffer
     if (title) {
@@ -48,6 +57,10 @@ void InfoView::init(const char* title, const char* text) {
     LOG_D(TAG, "init: title='%s', lines=%d", titleBuf_, totalLines_);
 }
 
+/**
+ * \brief Counts newline-separated lines in the current text buffer.
+ * \return Number of text lines.
+ */
 uint16_t InfoView::countLines() const {
     if (textBuf_[0] == '\0') return 0;
 
@@ -60,6 +73,11 @@ uint16_t InfoView::countLines() const {
     return lines;
 }
 
+/**
+ * \brief Scrolls content up or down with wrap-around behavior.
+ * \param down `true` to scroll down, `false` to scroll up.
+ * \return void
+ */
 void InfoView::scroll(bool down) {
     if (totalLines_ <= VISIBLE_LINES) return;
 
@@ -82,6 +100,11 @@ void InfoView::scroll(bool down) {
     dirty_ = true;
 }
 
+/**
+ * \brief Handles key input for scrolling and optional callbacks.
+ * \param key Pressed key code.
+ * \return Input handling result for the view stack.
+ */
 InputResult InfoView::onKey(char key) {
     if (key == 'Y' && onYes_) {
         onYes_(callbackUserData_);
@@ -110,6 +133,10 @@ InputResult InfoView::onKey(char key) {
     }
 }
 
+/**
+ * \brief Returns the footer hint text.
+ * \return Footer hint string.
+ */
 const char* InfoView::getFooterHint() const {
     if (customHint_) {
         return customHint_;
@@ -117,6 +144,11 @@ const char* InfoView::getFooterHint() const {
     return tr(StringId::HINT_SCROLL_BACK);
 }
 
+/**
+ * \brief Renders the info view including title, body, scroll indicator, and footer.
+ * \param partial Indicates partial/full redraw mode.
+ * \return void
+ */
 void InfoView::render(bool partial) {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;
@@ -134,12 +166,9 @@ void InfoView::render(bool partial) {
     gfx->setTextColor(EPD_BLACK);
     gfx->setTextSize(1);
 
-    // Title
-    gfx->setCursor(TEXT_MARGIN, TITLE_Y);
-    if (titleBuf_[0] != '\0') {
-        gfx->print(titleBuf_);
-    }
-    gfx->drawFastHLine(0, TITLE_Y + 18, width, EPD_BLACK);
+    // Title + underline
+    const char* title = (titleBuf_[0] != '\0') ? titleBuf_ : nullptr;
+    render::drawHeaderLeft(gfx, title, TEXT_MARGIN, TITLE_Y, width);
 
     // Text area dimensions
     int textAreaWidth = width - TEXT_MARGIN * 2 - SCROLL_INDICATOR_WIDTH;
@@ -185,70 +214,39 @@ void InfoView::render(bool partial) {
     if (totalLines_ > VISIBLE_LINES) {
         int indicatorX = width - SCROLL_INDICATOR_WIDTH;
         int listHeight = VISIBLE_LINES * LINE_HEIGHT;
-
-        gfx->fillRect(indicatorX, TEXT_START_Y, SCROLL_INDICATOR_WIDTH, listHeight, EPD_WHITE);
-
-        // Up arrow
-        if (scrollLine_ > 0) {
-            gfx->fillTriangle(
-                indicatorX + 4, TEXT_START_Y + 4,
-                indicatorX + 1, TEXT_START_Y + 10,
-                indicatorX + 7, TEXT_START_Y + 10,
-                EPD_BLACK
-            );
-        }
-
-        // Down arrow
-        if (scrollLine_ + VISIBLE_LINES < totalLines_) {
-            int arrowY = TEXT_START_Y + listHeight - 12;
-            gfx->fillTriangle(
-                indicatorX + 4, arrowY + 8,
-                indicatorX + 1, arrowY + 2,
-                indicatorX + 7, arrowY + 2,
-                EPD_BLACK
-            );
-        }
-
-        // Scroll bar
-        int barHeight = listHeight - 24;
-        int thumbHeight = barHeight * VISIBLE_LINES / totalLines_;
-        if (thumbHeight < 10) thumbHeight = 10;
-        int scrollRange = totalLines_ - VISIBLE_LINES;
-        int thumbPos = scrollRange > 0 ? (barHeight - thumbHeight) * scrollLine_ / scrollRange : 0;
-
-        gfx->drawRect(indicatorX + 2, TEXT_START_Y + 12, 4, barHeight, EPD_BLACK);
-        gfx->fillRect(indicatorX + 2, TEXT_START_Y + 12 + thumbPos, 4, thumbHeight, EPD_BLACK);
+        render::drawScrollIndicator(gfx, indicatorX, TEXT_START_Y, listHeight,
+                                    totalLines_, VISIBLE_LINES, scrollLine_);
     }
 
     // Footer
-    gfx->fillRect(0, height - FOOTER_HEIGHT, width, FOOTER_HEIGHT, EPD_BLACK);
-    gfx->setTextColor(EPD_WHITE);
-    gfx->setCursor(4, height - 12);
-
-    // Line counter
+    char posStr[20];  // Max: "65535-65535/65535  \0"
+    const char* prefix = nullptr;
     if (totalLines_ > VISIBLE_LINES) {
-        char posStr[20];  // Max: "65535-65535/65535  \0"
         snprintf(posStr, sizeof(posStr), "%u-%u/%u  ",
                  scrollLine_ + 1,
                  scrollLine_ + VISIBLE_LINES > totalLines_ ? totalLines_ : scrollLine_ + VISIBLE_LINES,
                  totalLines_);
-        gfx->print(posStr);
+        prefix = posStr;
     }
-
     const char* hint = getFooterHint();
-    if (hint) {
-        gfx->print(hint);
-    }
+    render::drawFooterBar(gfx, width, height, prefix, hint, true);
 
     dirty_ = false;
 }
 
-// ============================================================================
-// Convenience Function
-// ============================================================================
+/**
+ * \brief Convenience factory/helper function.
+ */
 
 static InfoView s_sharedInfoView;
 
+/**
+ * \brief Shows a shared info view instance and pushes it onto the view stack.
+ * \param title Title text.
+ * \param text Body text.
+ * \param hint Optional custom footer hint.
+ * \return Pointer to the shared `InfoView` instance.
+ */
 InfoView* showInfo(const char* title, const char* text, const char* hint) {
     s_sharedInfoView.init(title, text);
     if (hint) {

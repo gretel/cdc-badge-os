@@ -1,30 +1,30 @@
-#include "cdc_os_ui/AppUi.h"
+/**
+ * \file
+ * \brief Core App UI setup including lock flow, menus, and status icon updates.
+ *
+ * Feature-specific menu logic lives in dedicated compilation units:
+ * - WifiMenuUi.cpp
+ * - BluetoothMenuUi.cpp
+ * - ExpertMenuUi.cpp
+ */
 
-#include "cdc_ui/ViewStack.h"
-#include "cdc_ui/I18n.h"
+#include "AppUiInternal.h"
+#include "cdc_os_ui/AppUi.h"
 #include "cdc_os_ui/views/LockScreenView.h"
 #include "cdc_os_ui/views/PinChangeView.h"
-#include "cdc_os_ui/views/WifiListView.h"
 #include "cdc_os_ui/WifiHandlers.h"
 #include "cdc_os_ui/SettingsHandlers.h"
 #include "cdc_os_ui/SleepManager.h"
 #include "cdc_os_ui/HardwareInfo.h"
 #include "cdc_core/PinManager.h"
-#include "cdc_core/ModuleRegistry.h"
-#include "cdc_core/EventBus.h"
 #include "cdc_core/TropicSlotMap.h"
 #include "cdc_core/TropicStorage.h"
 #include "cdc_core/UsbManager.h"
 
-#include "cdc_views/ListView.h"
 #include "cdc_views/SliderView.h"
 #include "cdc_views/PinEntryView.h"
-#include "cdc_views/T9InputView.h"
 #include "cdc_views/DateInputView.h"
 #include "cdc_views/TimeInputView.h"
-#include "cdc_views/InfoView.h"
-#include "cdc_views/ToastView.h"
-#include "cdc_views/ConfirmView.h"
 
 #include "cdc_hal/IDisplay.h"
 #include "cdc_hal/IKeypad.h"
@@ -47,30 +47,16 @@
 
 namespace cdc::ui {
 
-// ============================================================================
-// Constants
-// ============================================================================
+/** \brief Menu sizing and inactivity timeout constants. */
 
-// Menu limits
 static constexpr uint8_t MAIN_MENU_MAX_ITEMS = 16;
 static constexpr uint8_t MAIN_MENU_FIXED_COUNT = 2;  // Tools + Settings
-static constexpr uint8_t TOOLS_FIXED_COUNT = 4;      // Modules, WiFi, Bluetooth, Expert
+static constexpr uint8_t TOOLS_FIXED_COUNT = 4;       // Modules, WiFi, Bluetooth, Expert
 static constexpr uint8_t TOOLS_MAX_ITEMS = 16;
-static constexpr uint8_t EXPERT_COUNT = 3;
-static constexpr uint8_t MODULES_VIEW_MAX = 16;
-static constexpr uint8_t WIFI_MAX_NETWORKS = 20;
 
-// Inactivity timeout (5 minutes)
 static constexpr uint32_t INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 
-// Toast duration constants (milliseconds)
-static constexpr uint32_t TOAST_DURATION_SHORT_MS = 1000;
-static constexpr uint32_t TOAST_DURATION_MEDIUM_MS = 1500;
-static constexpr uint32_t TOAST_DURATION_LONG_MS = 2500;
-
-// ============================================================================
-// Menu Indices
-// ============================================================================
+/** \brief Index enums for fixed settings and language menus. */
 
 enum SettingsMenuIdx {
     SETTINGS_IDX_BRIGHTNESS = 0,
@@ -90,42 +76,7 @@ enum LanguageMenuIdx {
     LANG_IDX_COUNT
 };
 
-enum WifiMainMenuIdx {
-    WIFI_IDX_CONNECT = 0,
-    WIFI_IDX_SETUP,
-    WIFI_IDX_DETAILS,
-    WIFI_IDX_NTP_SYNC,
-    WIFI_IDX_COUNT
-};
-
-enum WifiAuthIdx {
-    WIFI_AUTH_WPA2 = 0,
-    WIFI_AUTH_WPA_WPA2,
-    WIFI_AUTH_WPA3,
-    WIFI_AUTH_WPA,
-    WIFI_AUTH_OPEN,
-    WIFI_AUTH_WEP,
-    WIFI_AUTH_COUNT
-};
-
-enum WifiIpModeIdx {
-    WIFI_IP_DHCP = 0,
-    WIFI_IP_STATIC,
-    WIFI_IP_COUNT
-};
-
-enum BluetoothMenuIdx {
-    BT_IDX_ENABLE = 0,      // BLE: On/Off
-    BT_IDX_STATUS,          // BLE Status
-    BT_IDX_SCAN,            // BT Scan
-    BT_IDX_FIXED_COUNT      // Module items start here
-};
-
-// ============================================================================
-// Static State
-// ============================================================================
-
-// UI views (lazy initialized)
+/** \brief Static UI state and lazily constructed view pointers. */
 static LockScreenView* s_lockScreen = nullptr;
 static PinEntryView* s_pinEntry = nullptr;
 static ListView* s_mainMenu = nullptr;
@@ -138,143 +89,113 @@ static ListView* s_languageMenu = nullptr;
 static DateInputView* s_dateInput = nullptr;
 static TimeInputView* s_timeInput = nullptr;
 static PinChangeView* s_pinChangeView = nullptr;
-static ListView* s_expertMenu = nullptr;
-static ListView* s_modulesView = nullptr;
-static ListView* s_wifiMainMenu = nullptr;
-static WifiListView* s_wifiScanView = nullptr;
-static ListView* s_wifiAuthMenu = nullptr;
-static ListView* s_wifiIpMenu = nullptr;
 
-// Dependencies
+/** \brief Runtime dependencies provided during `ui_init`. */
 static UiDeps s_deps = {};
 
-// Main menu items and module storage
+/** \brief Main-menu backing storage for module and fixed menu entries. */
 static ListItem s_mainMenuItems[MAIN_MENU_MAX_ITEMS];
 static core::ModuleMenuItem s_mainMenuModuleItems[MAIN_MENU_MAX_ITEMS];
 static uint8_t s_mainMenuPluginCount = 0;
 
-// Tools menu items
+/** \brief Tools-menu backing storage for fixed and module entries. */
 static ListItem s_toolsItems[TOOLS_MAX_ITEMS];
 static core::ModuleMenuItem s_toolsModuleItems[TOOLS_MAX_ITEMS];
 static uint8_t s_toolsModuleCount = 0;
 
-// Settings menu items
+/** \brief Settings menu backing storage. */
 static ListItem s_settingsItems[SETTINGS_IDX_COUNT];
 
-// Language menu items
+/** \brief Language menu backing storage. */
 static ListItem s_languageItems[LANG_IDX_COUNT];
 
-// Expert menu items
-static ListItem s_expertItems[EXPERT_COUNT];
-
-// Modules view items
-static ListItem s_modulesItems[MODULES_VIEW_MAX];
-static char s_moduleLabels[MODULES_VIEW_MAX][48];
-
-// WiFi menu items
-static constexpr uint8_t WIFI_MENU_MAX_ITEMS = 16;
-static constexpr uint8_t WIFI_MENU_FIXED_COUNT = WIFI_IDX_COUNT;  // Connect, Setup, Details, NTP
-static ListItem s_wifiMainItems[WIFI_MENU_MAX_ITEMS];
-static core::ModuleMenuItem s_wifiModuleItems[12];
-static uint8_t s_wifiModuleCount = 0;
-static ListItem s_wifiAuthItems[WIFI_AUTH_COUNT];
-static ListItem s_wifiIpItems[WIFI_IP_COUNT];
-static WifiItem s_wifiScanResults[WIFI_MAX_NETWORKS];
-static uint8_t s_wifiScanCount = 0;
-static const char* s_wifiAuthLabels[WIFI_AUTH_COUNT] = {
-    "WPA2", "WPA/WPA2", "WPA3", "WPA", "Open", "WEP"
-};
-
-// Bluetooth menu items
-static constexpr uint8_t BT_MENU_MAX_ITEMS = 16;
-static ListView* s_bluetoothMenu = nullptr;
-static ListItem s_bluetoothItems[BT_MENU_MAX_ITEMS];
-static core::ModuleMenuItem s_bluetoothModuleItems[12];
-static uint8_t s_bluetoothModuleCount = 0;
-
-// RTC update tracking
+/** \brief Last rendered minute for lock-screen clock throttling. */
 static int8_t s_lastMinute = -1;
 
-// USB/charging/WiFi/BLE/battery status tracking
+/** \brief Last known status-icon inputs to avoid redundant updates. */
 static bool s_lastUsbConnected = false;
 static bool s_lastCharging = false;
 static bool s_lastWifiConnected = false;
 static bool s_lastBleEnabled = false;
-static bool s_lastBatteryPresent = true;
+static bool s_lastBatteryPresent = false;
 
-// Key handling
+/** \brief Prevents stale key events directly after unlock transition. */
 static bool s_ignoreKeyUntilRelease = false;
 
-// ============================================================================
-// Helper Functions (Index Calculation)
-// ============================================================================
-
+/** \brief Returns main-menu index of the fixed "Tools" item. */
 static inline uint8_t getToolsIndex() { return s_mainMenuPluginCount; }
+/** \brief Returns main-menu index of the fixed "Settings" item. */
 static inline uint8_t getSettingsIndex() { return s_mainMenuPluginCount + 1; }
+/** \brief Returns effective main-menu item count including fixed entries. */
 static inline uint8_t getMainMenuCount() { return s_mainMenuPluginCount + MAIN_MENU_FIXED_COUNT; }
 
-// ============================================================================
-// Forward Declarations
-// ============================================================================
-
+/** \brief Starts unlock flow from lock screen. */
 static void onUnlockRequested();
+/** \brief Verifies entered PIN via PinManager. */
 static bool onPinVerify(const char* pin);
+/** \brief Handles successful unlock and transitions to main menu. */
 static void onPinSuccess();
+/** \brief Handles main-menu item selection. */
 static void onMainMenuSelect(uint16_t index, void* userData);
+/** \brief Handles tools-menu item selection. */
 static void onToolsSelect(uint16_t index, void* userData);
+/** \brief Handles settings-menu item selection. */
 static void onSettingsSelect(uint16_t index, void* userData);
+/** \brief Handles language-menu item selection. */
 static void onLanguageSelect(uint16_t index, void* userData);
+/** \brief Rebuilds labels for translatable menus after language change. */
 static void rebuildMenuLabels();
-static void rebuildMainMenu();
-static void rebuildToolsMenu();
-static void showModulesView();
+/** \brief Callback invoked when inactivity timeout is reached. */
 static void onInactivityTimeout();
+/** \brief Drains buffered keypad events. */
 static void clearKeypadBuffer();
-static void showWifiMainMenu();
-static void onWifiMainSelect(uint16_t index, void* userData);
-static void wifiConnect();
-static void wifiSetup();
-static void wifiShowDetails();
-static void wifiDisconnect();
-static void wifiNtpSync();
-static void wifiStartScan();
-static void onWifiScanSelect(uint16_t index, const WifiItem* item);
-static void wifiShowAuthMenu();
-static void onWifiAuthSelect(uint16_t index, void* userData);
-static void wifiShowPasswordInput();
-static void onWifiPasswordEntered(const char* password);
-static void wifiShowIpModeMenu();
-static void onWifiIpModeSelect(uint16_t index, void* userData);
-static void wifiShowIpInputField(const char* title, char* target, size_t targetSize,
-                                  T9InputView::SaveCallback onComplete);
-static void onWifiStaticIpEntered(const char* ip);
-static void onWifiGatewayEntered(const char* gateway);
-static void onWifiNetmaskEntered(const char* netmask);
-static void wifiFinishSetup();
-static void rebuildWifiMainMenu();
-static void showBluetoothMenu();
-static void rebuildBluetoothMenu();
-static void onBluetoothMenuSelect(uint16_t index, void* userData);
-static void toggleBluetoothEnable();
-static void showBluetoothStatus();
-static void startBluetoothScan();
-static void showExpertMenu();
-static void runSystemTest();
-static void runTropicCacheRebuild();
-static void runTropicCacheCleanup();
-static void onModuleErrorEvent(const core::Event& evt);
 
-// ============================================================================
-// Status Icon Management
-// ============================================================================
+/**
+ * \brief Draws RSSI signal bars using the shared lock-screen visual style.
+ * \param gfx Display graphics context.
+ * \param x Left position.
+ * \param y Top reference position.
+ * \param rssi Signal strength in dBm.
+ * \param inverted Whether to draw inverted colors.
+ */
+void drawSignalBars(Gdey029T94* gfx, int x, int y, int8_t rssi, bool inverted) {
+    if (!gfx) return;
 
+    int bars;
+    if (rssi > -50) bars = 4;
+    else if (rssi > -60) bars = 3;
+    else if (rssi > -70) bars = 2;
+    else bars = 1;
+
+    uint16_t fg = inverted ? EPD_WHITE : EPD_BLACK;
+
+    int barWidth = 3;
+    int gap = 1;
+    int baseY = y + 13;
+
+    for (int i = 0; i < 4; i++) {
+        int barHeight = 4 + i * 3;
+        int bx = x + i * (barWidth + gap);
+        int by = baseY - barHeight;
+
+        if (i < bars) {
+            gfx->fillRect(bx, by, barWidth, barHeight, fg);
+        } else {
+            gfx->drawRect(bx, by, barWidth, barHeight, fg);
+        }
+    }
+}
+
+/**
+ * \brief Synchronizes lock-screen status icons with current hardware state.
+ */
 void updatePowerStatusIcons() {
     if (!s_lockScreen || !s_deps.power) return;
 
     bool usbConnected = s_deps.power->isUsbConnected();
-    hal::ChargeStatus status = s_deps.power->getChargeStatus();
-    bool charging = (status == hal::ChargeStatus::FAST_CHARGE ||
-                     status == hal::ChargeStatus::PRE_CHARGE);
+    bool charging = (s_deps.power->getChargeStatus() == hal::ChargeStatus::FAST_CHARGE ||
+                     s_deps.power->getChargeStatus() == hal::ChargeStatus::PRE_CHARGE);
+    bool batteryPresent = s_deps.power->isBatteryPresent();
 
     if (usbConnected != s_lastUsbConnected) {
         if (usbConnected) s_lockScreen->addStatusIcon(StatusIcon::USB);
@@ -288,12 +209,11 @@ void updatePowerStatusIcons() {
         s_lastCharging = charging;
     }
 
-    // Battery presence
-    bool batteryPresent = s_deps.power->isBatteryPresent();
     if (batteryPresent != s_lastBatteryPresent) {
-        if (!batteryPresent) s_lockScreen->addStatusIcon(StatusIcon::NO_BATTERY);
-        else s_lockScreen->removeStatusIcon(StatusIcon::NO_BATTERY);
+        s_lockScreen->setBatteryPercent(batteryPresent ? s_deps.power->getBatteryPercent() : -1);
         s_lastBatteryPresent = batteryPresent;
+    } else if (batteryPresent) {
+        s_lockScreen->setBatteryPercent(s_deps.power->getBatteryPercent());
     }
 
     // WiFi status
@@ -315,91 +235,97 @@ void updatePowerStatusIcons() {
     }
 }
 
+/**
+ * \brief Clears pending keypad key events.
+ */
 static void clearKeypadBuffer() {
     if (!s_deps.keypad) return;
     while (s_deps.keypad->getNextKey() != hal::Key::KEY_NONE) {}
 }
 
-// ============================================================================
-// Clock Update
-// ============================================================================
-
+/**
+ * \brief Updates lock-screen clock/date once per minute while lock screen is visible.
+ */
 static void updateLockScreenClock() {
     if (!s_lockScreen) return;
+    if (ViewStack::instance().current() != s_lockScreen) return;
 
     time_t now = time(nullptr);
-    struct tm* tm = localtime(&now);
-    if (tm && tm->tm_min != s_lastMinute) {
-        s_lastMinute = tm->tm_min;
-        char buf[40];
-        snprintf(buf, sizeof(buf), "%02d:%02d", tm->tm_hour, tm->tm_min);
-        s_lockScreen->setClock(buf);
-        snprintf(buf, sizeof(buf), "%02d.%02d.%04d", tm->tm_mday, tm->tm_mon + 1, tm->tm_year + 1900);
-        s_lockScreen->setDate(buf);
-        IView* currentView = ViewStack::instance().current();
-        if (currentView) currentView->markDirty();
-    }
+    struct tm* t = localtime(&now);
+    if (!t || t->tm_min == s_lastMinute) return;
+
+    s_lastMinute = t->tm_min;
+    char buf[40];
+    snprintf(buf, sizeof(buf), "%02d:%02d", t->tm_hour, t->tm_min);
+    s_lockScreen->setClock(buf);
+    snprintf(buf, sizeof(buf), "%02d.%02d.%04d", t->tm_mday, t->tm_mon + 1, t->tm_year + 1900);
+    s_lockScreen->setDate(buf);
 }
 
-// ============================================================================
-// Lock/Unlock Handlers
-// ============================================================================
-
+/**
+ * \brief Handles lock-screen unlock request and opens PIN entry when required.
+ */
 static void onUnlockRequested() {
-    s_ignoreKeyUntilRelease = true;
     clearKeypadBuffer();
-    if (s_deps.display) {
-        s_deps.display->backlightOn();
+    s_ignoreKeyUntilRelease = true;
+
+    if (!core::PinManager::instance().isPinSet()) {
+        onPinSuccess();
+        return;
     }
+
     if (s_pinEntry) {
         s_pinEntry->clear();
         ViewStack::instance().push(s_pinEntry);
     }
 }
 
+/**
+ * \brief Verifies entered badge PIN against secure PinManager state.
+ * \param pin Null-terminated PIN text.
+ * \return `true` if PIN is valid, otherwise `false`.
+ */
 static bool onPinVerify(const char* pin) {
     return core::PinManager::instance().verifyBadgePin(pin);
 }
 
+/**
+ * \brief Handles successful unlock, switches to main menu, and dispatches unlock hooks.
+ */
 static void onPinSuccess() {
-    if (s_deps.display) {
-        s_deps.display->backlightOn();
-    }
-    if (s_mainMenu) {
-        ViewStack::instance().replace(s_mainMenu);
-    } else {
+    ViewStack::instance().replace(s_mainMenu);
+    core::ModuleRegistry::instance().dispatchUnlock();
+    if (s_deps.display) s_deps.display->setBacklight(1000);
+}
+
+/**
+ * \brief Locks UI back to root lock-screen state on inactivity timeout.
+ */
+static void onInactivityTimeout() {
+    // Lock screen
+    while (ViewStack::instance().depth() > 1) {
         ViewStack::instance().pop();
     }
+    s_ignoreKeyUntilRelease = true;
+    clearKeypadBuffer();
 }
 
-static void onInactivityTimeout() {
-    if (s_deps.display) {
-        s_deps.display->backlightOff();
-    }
-    ViewStack::instance().popToRoot();
-    ViewStack::instance().resetInactivityTimer();
-    SleepManager::instance().resetTimer();
-    updatePowerStatusIcons();
-}
-
-// ============================================================================
-// Menu Building
-// ============================================================================
-
-static void rebuildMainMenu() {
+/**
+ * \brief Rebuilds main menu entries including dynamically provided modules.
+ */
+void rebuildMainMenu() {
     auto& moduleReg = core::ModuleRegistry::instance();
 
-    // Get module items for main menu
     s_mainMenuPluginCount = moduleReg.getMenuItems(
         core::MenuLocation::MAIN_MENU,
         s_mainMenuModuleItems,
         MAIN_MENU_MAX_ITEMS - MAIN_MENU_FIXED_COUNT
     );
 
-    // Build menu: Module items first, then Tools, Settings
     for (uint8_t i = 0; i < s_mainMenuPluginCount; i++) {
         s_mainMenuItems[i] = {s_mainMenuModuleItems[i].label, 0, false, nullptr};
     }
+
     s_mainMenuItems[getToolsIndex()] = {tr(StringId::TOOLS), 0, false, nullptr};
     s_mainMenuItems[getSettingsIndex()] = {tr(StringId::SETTINGS), 0, false, nullptr};
 
@@ -408,27 +334,24 @@ static void rebuildMainMenu() {
     }
 }
 
-static void rebuildToolsMenu() {
-    auto& moduleReg = core::ModuleRegistry::instance();
-
-    // Fixed items: Modules, WiFi, Bluetooth, Expert
+/**
+ * \brief Rebuilds tools menu entries including dynamic module tools.
+ */
+void rebuildToolsMenu() {
+    // Fixed items
     s_toolsItems[0] = {tr(StringId::MODULES), 0, false, nullptr};
     s_toolsItems[1] = {tr(StringId::WIFI_MENU), 0, false, nullptr};
-
-    // Bluetooth - shows status indicator if enabled
     auto* ble = hal::getBluetoothControllerInstance();
-    s_toolsItems[2] = {tr(StringId::BLUETOOTH), (ble && ble->isEnabled()) ? '*' : '\0', false, nullptr};
-
+    s_toolsItems[2] = {tr(StringId::BLUETOOTH), static_cast<uint8_t>(ble && ble->isEnabled() ? '*' : 0), false, nullptr};
     s_toolsItems[3] = {tr(StringId::EXPERT), 0, false, nullptr};
 
-    // Get module items for tools menu
+    auto& moduleReg = core::ModuleRegistry::instance();
     s_toolsModuleCount = moduleReg.getMenuItems(
         core::MenuLocation::TOOLS_MENU,
         s_toolsModuleItems,
         TOOLS_MAX_ITEMS - TOOLS_FIXED_COUNT
     );
 
-    // Add module items after fixed items
     for (uint8_t i = 0; i < s_toolsModuleCount; i++) {
         s_toolsItems[TOOLS_FIXED_COUNT + i] = {s_toolsModuleItems[i].label, 0, false, nullptr};
     }
@@ -438,51 +361,33 @@ static void rebuildToolsMenu() {
     }
 }
 
+/**
+ * \brief Rebuilds all translatable menu labels and refreshes visible menus.
+ */
 static void rebuildMenuLabels() {
-    rebuildMainMenu();
-    rebuildToolsMenu();
+    // Settings items
+    s_settingsItems[SETTINGS_IDX_BRIGHTNESS] = {tr(StringId::BRIGHTNESS), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_LANGUAGE] = {tr(StringId::LANGUAGE), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_TIMEZONE] = {tr(StringId::TIMEZONE), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_AUTO_SLEEP] = {tr(StringId::AUTO_SLEEP), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_BADGE_TEXT] = {tr(StringId::BADGE_TEXT), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_SET_DATE] = {tr(StringId::SET_DATE), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_SET_TIME] = {tr(StringId::SET_TIME), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_CHANGE_PIN] = {tr(StringId::CHANGE_PIN), 0, false, nullptr};
 
-    s_settingsItems[SETTINGS_IDX_BRIGHTNESS].label = tr(StringId::BRIGHTNESS);
-    s_settingsItems[SETTINGS_IDX_LANGUAGE].label = tr(StringId::LANGUAGE);
-    s_settingsItems[SETTINGS_IDX_TIMEZONE].label = tr(StringId::TIMEZONE);
-    s_settingsItems[SETTINGS_IDX_AUTO_SLEEP].label = tr(StringId::AUTO_SLEEP);
-    s_settingsItems[SETTINGS_IDX_BADGE_TEXT].label = tr(StringId::BADGE_TEXT);
-    s_settingsItems[SETTINGS_IDX_SET_DATE].label = tr(StringId::SET_DATE);
-    s_settingsItems[SETTINGS_IDX_SET_TIME].label = tr(StringId::SET_TIME);
-    s_settingsItems[SETTINGS_IDX_CHANGE_PIN].label = tr(StringId::CHANGE_PIN);
     if (s_settingsMenu) {
         s_settingsMenu->init(tr(StringId::SETTINGS), s_settingsItems, SETTINGS_IDX_COUNT);
     }
 
-    if (s_brightnessSlider) {
-        uint16_t currentBrightness = s_deps.display ? s_deps.display->getBacklight() / 10 : 50;
-        s_brightnessSlider->init(tr(StringId::BRIGHTNESS), 0, 100, currentBrightness, 1, "%");
-        s_brightnessSlider->setStepCallback(settings::brightnessStepCallback);
-        s_brightnessSlider->setOnSave(settings::onBrightnessSave);
-        s_brightnessSlider->setOnChange(settings::onBrightnessChange);
-    }
-
-    if (s_sleepSlider) {
-        uint16_t currentSleepMin = 0;
-        if (s_deps.sleep) {
-            currentSleepMin = static_cast<uint16_t>(s_deps.sleep->getLightSleepInterval() / 60);
-        }
-        s_sleepSlider->init(tr(StringId::AUTO_SLEEP), 0, 60, currentSleepMin, 1, tr(StringId::MINUTES));
-        s_sleepSlider->setZeroLabel(tr(StringId::NEVER));
-        s_sleepSlider->setOnSave(settings::onSleepIntervalSave);
-    }
-
-    if (s_languageMenu) {
-        s_languageItems[LANG_IDX_ENGLISH].label = I18n::instance().getLanguageName(Language::EN);
-        s_languageItems[LANG_IDX_GERMAN].label = I18n::instance().getLanguageName(Language::DE);
-        s_languageMenu->init(tr(StringId::LANGUAGE), s_languageItems, LANG_IDX_COUNT);
-    }
+    rebuildMainMenu();
+    rebuildToolsMenu();
 }
 
-// ============================================================================
-// Menu Selection Handlers
-// ============================================================================
-
+/**
+ * \brief Handles main-menu selection and dispatches configured destination views.
+ * \param index Selected item index.
+ * \param userData Optional callback user data.
+ */
 static void onMainMenuSelect(uint16_t index, void* userData) {
     (void)userData;
 
@@ -491,115 +396,73 @@ static void onMainMenuSelect(uint16_t index, void* userData) {
         auto& item = s_mainMenuModuleItems[index];
         if (item.getView) {
             IView* view = item.getView();
-            if (view) {
-                ViewStack::instance().push(view);
-            }
+            if (view) ViewStack::instance().push(view);
         }
         return;
     }
 
-    // Fixed items: Tools, Settings
     if (index == getToolsIndex()) {
-        if (s_toolsMenu) ViewStack::instance().push(s_toolsMenu);
+        ViewStack::instance().push(s_toolsMenu);
     } else if (index == getSettingsIndex()) {
-        if (s_settingsMenu) ViewStack::instance().push(s_settingsMenu);
+        ViewStack::instance().push(s_settingsMenu);
     }
 }
 
+/**
+ * \brief Handles tools-menu selection and routes to fixed or module-defined views.
+ * \param index Selected item index.
+ * \param userData Optional callback user data.
+ */
 static void onToolsSelect(uint16_t index, void* userData) {
     (void)userData;
 
-    // Fixed items
     switch (index) {
-        case 0:  // Modules
-            showModulesView();
-            return;
-        case 1:  // WiFi
-            showWifiMainMenu();
-            return;
-        case 2:  // Bluetooth
-            showBluetoothMenu();
-            return;
-        case 3:  // Expert
-            showExpertMenu();
-            return;
+        case 0: showModulesView(); return;
+        case 1: showWifiMainMenu(); return;
+        case 2: showBluetoothMenu(); return;
+        case 3: showExpertMenu(); return;
     }
 
-    // Module items
     uint8_t moduleIdx = index - TOOLS_FIXED_COUNT;
     if (moduleIdx < s_toolsModuleCount) {
         auto& item = s_toolsModuleItems[moduleIdx];
         if (item.getView) {
             IView* view = item.getView();
-            if (view) {
-                ViewStack::instance().push(view);
-            }
+            if (view) ViewStack::instance().push(view);
         }
     }
 }
 
+/**
+ * \brief Handles settings-menu actions.
+ * \param index Selected settings item index.
+ * \param userData Optional callback user data.
+ */
 static void onSettingsSelect(uint16_t index, void* userData) {
     (void)userData;
+
     switch (index) {
         case SETTINGS_IDX_BRIGHTNESS:
-            if (s_brightnessSlider) {
-                uint16_t currentBrightness = s_deps.display ? s_deps.display->getBacklight() / 10 : 50;
-                s_brightnessSlider->setValue(currentBrightness);
-                ViewStack::instance().push(s_brightnessSlider);
-            }
+            ViewStack::instance().push(s_brightnessSlider);
             break;
         case SETTINGS_IDX_LANGUAGE:
-            if (s_languageMenu) {
-                Language currentLang = I18n::instance().getLanguage();
-                s_languageItems[LANG_IDX_ENGLISH].icon = (currentLang == Language::EN) ? '*' : 0;
-                s_languageItems[LANG_IDX_GERMAN].icon = (currentLang == Language::DE) ? '*' : 0;
-                ViewStack::instance().push(s_languageMenu);
-            }
+            ViewStack::instance().push(s_languageMenu);
             break;
         case SETTINGS_IDX_TIMEZONE:
-            if (s_timezoneSlider) {
-                auto* rtc = hal::getRtcInstance();
-                int8_t currentTz = rtc ? rtc->getTimezoneOffset() : 0;
-                uint16_t sliderVal = static_cast<uint16_t>(currentTz + 12);
-                s_timezoneSlider->setValue(sliderVal);
-                ViewStack::instance().push(s_timezoneSlider);
-            }
+            ViewStack::instance().push(s_timezoneSlider);
             break;
         case SETTINGS_IDX_AUTO_SLEEP:
-            if (s_sleepSlider) {
-                uint16_t currentSleepMin = 0;
-                if (s_deps.sleep) {
-                    currentSleepMin = static_cast<uint16_t>(s_deps.sleep->getLightSleepInterval() / 60);
-                }
-                s_sleepSlider->setValue(currentSleepMin);
-                ViewStack::instance().push(s_sleepSlider);
-            }
+            ViewStack::instance().push(s_sleepSlider);
             break;
         case SETTINGS_IDX_BADGE_TEXT:
             settings::startBadgeTextEdit();
             break;
-        case SETTINGS_IDX_SET_DATE: {
-            if (s_dateInput) {
-                time_t now = time(nullptr);
-                struct tm* tm = localtime(&now);
-                if (tm) {
-                    s_dateInput->init(tr(StringId::SET_DATE), tm->tm_mday, tm->tm_mon + 1, tm->tm_year + 1900);
-                }
-                ViewStack::instance().push(s_dateInput);
-            }
+        case SETTINGS_IDX_SET_DATE:
+            ViewStack::instance().push(s_dateInput);
             break;
-        }
-        case SETTINGS_IDX_SET_TIME: {
-            if (s_timeInput) {
-                time_t now = time(nullptr);
-                struct tm* tm = localtime(&now);
-                if (tm) {
-                    s_timeInput->init(tr(StringId::SET_TIME), tm->tm_hour, tm->tm_min);
-                }
-                ViewStack::instance().push(s_timeInput);
-            }
+        case SETTINGS_IDX_SET_TIME:
+            ViewStack::instance().push(s_timeInput);
             break;
-        }
         case SETTINGS_IDX_CHANGE_PIN:
             if (s_pinChangeView) {
                 s_pinChangeView->init(core::PinManager::BADGE_PIN_MIN, core::PinManager::BADGE_PIN_MAX);
@@ -609,8 +472,14 @@ static void onSettingsSelect(uint16_t index, void* userData) {
     }
 }
 
+/**
+ * \brief Applies new UI language and rebuilds translated menus.
+ * \param index Selected language item index.
+ * \param userData Optional callback user data.
+ */
 static void onLanguageSelect(uint16_t index, void* userData) {
     (void)userData;
+
     Language newLang = Language::EN;
     switch (index) {
         case LANG_IDX_ENGLISH: newLang = Language::EN; break;
@@ -621,794 +490,10 @@ static void onLanguageSelect(uint16_t index, void* userData) {
     ViewStack::instance().pop();
 }
 
-// ============================================================================
-// Modules View
-// ============================================================================
-
-static void rebuildModulesView();
-
-static void onModuleRetryConfirm(void* userData) {
-    uint8_t index = static_cast<uint8_t>(reinterpret_cast<uintptr_t>(userData));
-    auto& moduleReg = core::ModuleRegistry::instance();
-
-    if (moduleReg.retryModule(index)) {
-        showToastSuccess("OK", TOAST_DURATION_SHORT_MS);
-    } else {
-        const char* error = moduleReg.getModuleSlotError(index);
-        showToastError(error ? error : tr(StringId::FAILED), TOAST_DURATION_MEDIUM_MS);
-    }
-
-    ui_rebuild_menus();
-    rebuildModulesView();
-}
-
-static void onModuleSelect(uint16_t index, void* userData) {
-    (void)userData;
-
-    auto& moduleReg = core::ModuleRegistry::instance();
-    if (index >= moduleReg.getModuleCount()) return;
-
-    core::IModule* module = moduleReg.getModuleAt(index);
-    if (!module) return;
-
-    uint8_t idx = static_cast<uint8_t>(index);
-
-    // If module has error, show retry dialog
-    if (moduleReg.hasModuleSlotError(idx)) {
-        const char* error = moduleReg.getModuleSlotError(idx);
-
-        static char confirmMsg[128];
-        snprintf(confirmMsg, sizeof(confirmMsg), "%s\n\nNochmal laden?",
-                 error ? error : "Modul-Fehler");
-
-        showConfirm(confirmMsg, onModuleRetryConfirm, nullptr,
-                    ConfirmView::Icon::ERROR, reinterpret_cast<void*>(static_cast<uintptr_t>(idx)));
-        return;
-    }
-
-    // Remember USB state before toggle
-    bool needsReplugBefore = core::UsbManager::instance().needsReplug();
-
-    // Normal toggle: enable/disable module
-    bool nowEnabled = moduleReg.toggleModuleEnabled(idx);
-
-    if (nowEnabled) {
-        if (!moduleReg.startModule(idx)) {
-            const char* error = moduleReg.getModuleSlotError(idx);
-            if (error) {
-                showToastError(error, TOAST_DURATION_MEDIUM_MS);
-            } else {
-                showToastError(tr(StringId::FAILED), TOAST_DURATION_MEDIUM_MS);
-            }
-        }
-    } else {
-        if (module->getState() == core::ServiceState::STARTED) {
-            module->stop();
-        }
-    }
-
-    // If USB config changed by THIS module toggle, show sticky alert
-    bool needsReplugAfter = core::UsbManager::instance().needsReplug();
-    if (!needsReplugBefore && needsReplugAfter) {
-        showToastAlertSticky(tr(StringId::USB_REPLUG_REQUIRED));
-    }
-
-    ui_rebuild_menus();
-    rebuildModulesView();
-}
-
-static void rebuildModulesView() {
-    auto& moduleReg = core::ModuleRegistry::instance();
-    uint8_t count = moduleReg.getModuleCount();
-
-    if (count == 0) {
-        s_modulesItems[0] = {"(none)", 0, false, nullptr};
-        count = 1;
-    } else {
-        for (uint8_t i = 0; i < count && i < MODULES_VIEW_MAX; i++) {
-            core::IModule* module = moduleReg.getModuleAt(i);
-            if (module) {
-                const char* status;
-                if (moduleReg.hasModuleSlotError(i)) {
-                    status = "[FAIL]";
-                } else {
-                    bool enabled = moduleReg.isModuleEnabled(i);
-                    status = enabled
-                        ? (module->getState() == core::ServiceState::STARTED ? "[ON]" : "[--]")
-                        : "[OFF]";
-                }
-                snprintf(s_moduleLabels[i], sizeof(s_moduleLabels[i]),
-                         "%s %s", module->getName(), status);
-                s_modulesItems[i] = {s_moduleLabels[i], 0, false, nullptr};
-            }
-        }
-        if (count > MODULES_VIEW_MAX) count = MODULES_VIEW_MAX;
-    }
-
-    if (s_modulesView) {
-        s_modulesView->init(tr(StringId::MODULES), s_modulesItems, count);
-    }
-}
-
-static void showModulesView() {
-    if (!s_modulesView) {
-        s_modulesView = new ListView();
-    }
-
-    rebuildModulesView();
-    s_modulesView->setOnSelect(onModuleSelect);
-    ViewStack::instance().push(s_modulesView);
-}
-
-// ============================================================================
-// WiFi Management
-// ============================================================================
-
-static void rebuildWifiMainMenu() {
-    auto* wifi = hal::getWifiControllerInstance();
-    bool connected = wifi && wifi->isConnected();
-    auto& wifiHandlers = WifiHandlers::instance();
-    bool hasConfig = wifiHandlers.config().valid;
-
-    // Fixed items
-    if (connected) {
-        s_wifiMainItems[WIFI_IDX_CONNECT] = {tr(StringId::WIFI_DISCONNECT), '*', false, nullptr};
-    } else if (hasConfig) {
-        s_wifiMainItems[WIFI_IDX_CONNECT] = {tr(StringId::WIFI_CONNECT), 0, false, nullptr};
-    } else {
-        s_wifiMainItems[WIFI_IDX_CONNECT] = {tr(StringId::WIFI_NO_CONFIG), 0, true, nullptr};
-    }
-
-    s_wifiMainItems[WIFI_IDX_SETUP] = {tr(StringId::WIFI_SETUP), 0, false, nullptr};
-    s_wifiMainItems[WIFI_IDX_DETAILS] = {tr(StringId::WIFI_DETAILS), 0, false, nullptr};
-    s_wifiMainItems[WIFI_IDX_NTP_SYNC] = {tr(StringId::NTP_SYNC), 0, !connected && !hasConfig, nullptr};
-
-    // Get module items for WiFi menu
-    auto& moduleReg = core::ModuleRegistry::instance();
-    s_wifiModuleCount = moduleReg.getMenuItems(
-        core::MenuLocation::WIFI_MENU,
-        s_wifiModuleItems,
-        WIFI_MENU_MAX_ITEMS - WIFI_MENU_FIXED_COUNT
-    );
-
-    // Add module items after fixed items
-    for (uint8_t i = 0; i < s_wifiModuleCount; i++) {
-        s_wifiMainItems[WIFI_MENU_FIXED_COUNT + i] = {s_wifiModuleItems[i].label, 0, false, nullptr};
-    }
-
-    if (s_wifiMainMenu) {
-        s_wifiMainMenu->init(tr(StringId::WIFI_MENU), s_wifiMainItems, WIFI_MENU_FIXED_COUNT + s_wifiModuleCount);
-    }
-}
-
-static void showWifiMainMenu() {
-    WifiHandlers::instance().loadConfig();
-
-    if (!s_wifiMainMenu) {
-        s_wifiMainMenu = new ListView();
-        s_wifiMainMenu->setOnSelect(onWifiMainSelect);
-    }
-
-    rebuildWifiMainMenu();
-    ViewStack::instance().push(s_wifiMainMenu);
-}
-
-static void onWifiMainSelect(uint16_t index, void* userData) {
-    (void)userData;
-
-    // Fixed items
-    switch (index) {
-        case WIFI_IDX_CONNECT: {
-            auto* wifi = hal::getWifiControllerInstance();
-            if (wifi && wifi->isConnected()) {
-                wifiDisconnect();
-            } else {
-                wifiConnect();
-            }
-            return;
-        }
-        case WIFI_IDX_SETUP:
-            wifiSetup();
-            return;
-        case WIFI_IDX_DETAILS:
-            wifiShowDetails();
-            return;
-        case WIFI_IDX_NTP_SYNC:
-            wifiNtpSync();
-            return;
-    }
-
-    // Module items
-    uint8_t moduleIdx = index - WIFI_MENU_FIXED_COUNT;
-    if (moduleIdx < s_wifiModuleCount) {
-        auto& item = s_wifiModuleItems[moduleIdx];
-        if (item.getView) {
-            ui::IView* view = item.getView();
-            if (view) {
-                ViewStack::instance().push(view);
-            }
-        }
-        // Rebuild menu in case module toggle changed state
-        rebuildWifiMainMenu();
-    }
-}
-
-static void wifiConnect() {
-    auto& wifiHandlers = WifiHandlers::instance();
-
-    if (!wifiHandlers.config().valid) {
-        showToastError(tr(StringId::WIFI_NO_CONFIG));
-        return;
-    }
-
-    char msg[96];
-    snprintf(msg, sizeof(msg), "%s: %s", tr(StringId::WIFI_CONNECTING), wifiHandlers.config().ssid);
-    showToastInfo(msg, 0);
-
-    bool connected = wifiHandlers.connect();
-    ViewStack::instance().hideModal();
-
-    if (connected) {
-        auto* wifi = hal::getWifiControllerInstance();
-        char ipBuf[20] = {};
-        if (wifi) wifi->getIpAddress(ipBuf, sizeof(ipBuf));
-        snprintf(msg, sizeof(msg), "%s (IP: %s)", tr(StringId::WIFI_CONNECTED), ipBuf);
-        showToastSuccess(msg, TOAST_DURATION_LONG_MS);
-    } else {
-        snprintf(msg, sizeof(msg), "%s: %s", tr(StringId::WIFI_FAILED), wifiHandlers.getLastError());
-        showToastError(msg, TOAST_DURATION_LONG_MS);
-    }
-
-    rebuildWifiMainMenu();
-}
-
-static void wifiSetup() {
-    WifiHandlers::instance().wizard().reset();
-    wifiStartScan();
-}
-
-static void wifiStartScan() {
-    auto* wifi = hal::getWifiControllerInstance();
-    if (!wifi) {
-        showToastError(tr(StringId::HW_NOT_AVAILABLE));
-        return;
-    }
-
-    if (!wifi->isEnabled()) {
-        wifi->enable(hal::WifiMode::STA);
-    }
-
-    showToastInfo(tr(StringId::WIFI_SCANNING), 0);
-
-    s_wifiScanCount = 0;
-    if (wifi->startScan()) {
-        uint32_t startMs = esp_timer_get_time() / 1000;
-        while (!wifi->isScanComplete()) {
-            vTaskDelay(pdMS_TO_TICKS(100));
-            if ((esp_timer_get_time() / 1000 - startMs) > WIFI_SCAN_TIMEOUT_MS) break;
-        }
-
-        hal::WifiScanResult rawResults[WIFI_MAX_NETWORKS];
-        uint8_t rawCount = wifi->getScanResults(rawResults, WIFI_MAX_NETWORKS);
-
-        // Convert and deduplicate
-        for (uint8_t i = 0; i < rawCount && s_wifiScanCount < WIFI_MAX_NETWORKS; i++) {
-            if (rawResults[i].ssid[0] == '\0') continue;
-
-            bool found = false;
-            for (uint8_t j = 0; j < s_wifiScanCount; j++) {
-                if (strcmp(s_wifiScanResults[j].ssid, rawResults[i].ssid) == 0) {
-                    if (rawResults[i].rssi > s_wifiScanResults[j].rssi) {
-                        s_wifiScanResults[j].rssi = rawResults[i].rssi;
-                        s_wifiScanResults[j].security = rawResults[i].security;
-                    }
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) {
-                strncpy(s_wifiScanResults[s_wifiScanCount].ssid, rawResults[i].ssid, 32);
-                s_wifiScanResults[s_wifiScanCount].ssid[32] = '\0';
-                s_wifiScanResults[s_wifiScanCount].rssi = rawResults[i].rssi;
-                s_wifiScanResults[s_wifiScanCount].security = rawResults[i].security;
-                s_wifiScanCount++;
-            }
-        }
-    }
-
-    ViewStack::instance().hideModal();
-
-    if (!s_wifiScanView) {
-        s_wifiScanView = new WifiListView();
-        s_wifiScanView->setOnSelect(onWifiScanSelect);
-    }
-
-    s_wifiScanView->init(tr(StringId::WIFI_SETUP), s_wifiScanResults, s_wifiScanCount);
-    ViewStack::instance().push(s_wifiScanView);
-}
-
-static void onWifiScanSelect(uint16_t index, const WifiItem* item) {
-    auto& wizard = WifiHandlers::instance().wizard();
-
-    if (index == 0 || item == nullptr) {
-        wizard.fromScan = false;
-        showT9Input(tr(StringId::WIFI_SSID), "", [](const char* ssid) {
-            strncpy(WifiHandlers::instance().wizard().ssid, ssid,
-                    sizeof(WifiHandlers::instance().wizard().ssid) - 1);
-            wifiShowAuthMenu();
-        }, 32);
-        return;
-    }
-
-    wizard.fromScan = true;
-    strncpy(wizard.ssid, item->ssid, sizeof(wizard.ssid) - 1);
-    wizard.security = item->security;
-
-    if (wizard.security == hal::WifiSecurity::OPEN) {
-        wizard.password[0] = '\0';
-        wifiShowIpModeMenu();
-    } else {
-        wifiShowPasswordInput();
-    }
-}
-
-static void wifiShowAuthMenu() {
-    if (!s_wifiAuthMenu) {
-        s_wifiAuthMenu = new ListView();
-        s_wifiAuthMenu->setOnSelect(onWifiAuthSelect);
-
-        for (uint8_t i = 0; i < WIFI_AUTH_COUNT; i++) {
-            s_wifiAuthItems[i] = {s_wifiAuthLabels[i], 0, false, nullptr};
-        }
-    }
-
-    s_wifiAuthMenu->init(tr(StringId::WIFI_ENCRYPTION), s_wifiAuthItems, WIFI_AUTH_COUNT);
-    ViewStack::instance().push(s_wifiAuthMenu);
-}
-
-static void onWifiAuthSelect(uint16_t index, void* userData) {
-    (void)userData;
-    auto& wizard = WifiHandlers::instance().wizard();
-
-    switch (index) {
-        case WIFI_AUTH_WPA2:     wizard.security = hal::WifiSecurity::WPA2_PSK; break;
-        case WIFI_AUTH_WPA_WPA2: wizard.security = hal::WifiSecurity::WPA2_PSK; break;
-        case WIFI_AUTH_WPA3:     wizard.security = hal::WifiSecurity::WPA3_PSK; break;
-        case WIFI_AUTH_WPA:      wizard.security = hal::WifiSecurity::WPA_PSK; break;
-        case WIFI_AUTH_OPEN:     wizard.security = hal::WifiSecurity::OPEN; break;
-        case WIFI_AUTH_WEP:      wizard.security = hal::WifiSecurity::WEP; break;
-    }
-
-    if (wizard.security == hal::WifiSecurity::OPEN) {
-        wizard.password[0] = '\0';
-        wifiShowIpModeMenu();
-    } else {
-        wifiShowPasswordInput();
-    }
-}
-
-static void wifiShowPasswordInput() {
-    showT9Input(tr(StringId::WIFI_PASSWORD), "", onWifiPasswordEntered, 64);
-}
-
-static void onWifiPasswordEntered(const char* password) {
-    auto& wizard = WifiHandlers::instance().wizard();
-    strncpy(wizard.password, password, sizeof(wizard.password) - 1);
-    wifiShowIpModeMenu();
-}
-
-static void wifiShowIpModeMenu() {
-    if (!s_wifiIpMenu) {
-        s_wifiIpMenu = new ListView();
-        s_wifiIpMenu->setOnSelect(onWifiIpModeSelect);
-    }
-
-    s_wifiIpItems[WIFI_IP_DHCP] = {tr(StringId::WIFI_DHCP), 0, false, nullptr};
-    s_wifiIpItems[WIFI_IP_STATIC] = {tr(StringId::WIFI_STATIC), 0, false, nullptr};
-
-    s_wifiIpMenu->init(tr(StringId::WIFI_IP_MODE), s_wifiIpItems, WIFI_IP_COUNT);
-    ViewStack::instance().push(s_wifiIpMenu);
-}
-
-static void onWifiIpModeSelect(uint16_t index, void* userData) {
-    (void)userData;
-    auto& wizard = WifiHandlers::instance().wizard();
-
-    wizard.useDhcp = (index == WIFI_IP_DHCP);
-
-    if (wizard.useDhcp) {
-        wifiFinishSetup();
-    } else {
-        wifiShowIpInputField("IP", wizard.staticIp, sizeof(wizard.staticIp), onWifiStaticIpEntered);
-    }
-}
-
-static void wifiShowIpInputField(const char* title, char* target, size_t targetSize,
-                                  T9InputView::SaveCallback onComplete) {
-    (void)targetSize;
-    showT9Input(title, target, onComplete, 15);
-}
-
-static void onWifiStaticIpEntered(const char* ip) {
-    auto& wizard = WifiHandlers::instance().wizard();
-    if (!WifiHandlers::isValidIpAddress(ip)) {
-        showToastError("Invalid IP", TOAST_DURATION_MEDIUM_MS);
-        wifiShowIpInputField("IP", wizard.staticIp, sizeof(wizard.staticIp), onWifiStaticIpEntered);
-        return;
-    }
-    strncpy(wizard.staticIp, ip, sizeof(wizard.staticIp) - 1);
-    wifiShowIpInputField(tr(StringId::WIFI_GATEWAY), wizard.gateway, sizeof(wizard.gateway), onWifiGatewayEntered);
-}
-
-static void onWifiGatewayEntered(const char* gateway) {
-    auto& wizard = WifiHandlers::instance().wizard();
-    if (!WifiHandlers::isValidIpAddress(gateway)) {
-        showToastError("Invalid IP", TOAST_DURATION_MEDIUM_MS);
-        wifiShowIpInputField(tr(StringId::WIFI_GATEWAY), wizard.gateway, sizeof(wizard.gateway), onWifiGatewayEntered);
-        return;
-    }
-    strncpy(wizard.gateway, gateway, sizeof(wizard.gateway) - 1);
-    wifiShowIpInputField(tr(StringId::WIFI_NETMASK), wizard.netmask, sizeof(wizard.netmask), onWifiNetmaskEntered);
-}
-
-static void onWifiNetmaskEntered(const char* netmask) {
-    auto& wizard = WifiHandlers::instance().wizard();
-    if (!WifiHandlers::isValidIpAddress(netmask)) {
-        showToastError("Invalid IP", TOAST_DURATION_MEDIUM_MS);
-        wifiShowIpInputField(tr(StringId::WIFI_NETMASK), wizard.netmask, sizeof(wizard.netmask), onWifiNetmaskEntered);
-        return;
-    }
-    strncpy(wizard.netmask, netmask, sizeof(wizard.netmask) - 1);
-    wifiFinishSetup();
-}
-
-static void wifiFinishSetup() {
-    WifiHandlers::instance().saveConfig();
-
-    while (ViewStack::instance().current() != s_wifiMainMenu &&
-           ViewStack::instance().depth() > 1) {
-        ViewStack::instance().pop();
-    }
-
-    wifiConnect();
-}
-
-// Static buffer for WiFi details (PSRAM)
-static constexpr size_t WIFI_DETAILS_BUF_SIZE = 512;
-static EXT_RAM_BSS_ATTR char s_wifiDetailsBuf[WIFI_DETAILS_BUF_SIZE];
-
-static void wifiShowDetails() {
-    auto* wifi = hal::getWifiControllerInstance();
-    auto& wifiHandlers = WifiHandlers::instance();
-    char* info = s_wifiDetailsBuf;
-    memset(info, 0, WIFI_DETAILS_BUF_SIZE);
-    size_t pos = 0;
-
-    auto append = [&](const char* fmt, ...) {
-        if (pos >= WIFI_DETAILS_BUF_SIZE) return;
-        va_list args;
-        va_start(args, fmt);
-        int written = vsnprintf(info + pos, WIFI_DETAILS_BUF_SIZE - pos, fmt, args);
-        va_end(args);
-        if (written > 0) {
-            size_t w = static_cast<size_t>(written);
-            pos += (w < (WIFI_DETAILS_BUF_SIZE - pos)) ? w : (WIFI_DETAILS_BUF_SIZE - pos - 1);
-        }
-    };
-
-    if (wifi && wifi->isConnected()) {
-        char ipBuf[20] = {};
-        uint8_t mac[6] = {};
-
-        append("Status: %s\n\n", tr(StringId::WIFI_CONNECTED));
-        append("SSID: %s\n", wifi->getCurrentSsid());
-
-        if (wifi->getMacAddress(mac)) {
-            append("MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        }
-
-        if (wifi->getIpAddress(ipBuf, sizeof(ipBuf))) {
-            append("IP: %s\n", ipBuf);
-        }
-
-        append("%s: %d dBm\n", tr(StringId::WIFI_SIGNAL), wifi->getRssi());
-
-    } else if (wifiHandlers.config().valid) {
-        append("Status: %s\n\n", tr(StringId::WIFI_DISCONNECTED));
-        append("=== %s ===\n", tr(StringId::WIFI_SAVED_CONFIG));
-        append("SSID: %s\n", wifiHandlers.config().ssid);
-        append("IP: %s\n", wifiHandlers.config().useDhcp ? "DHCP" : "Static");
-    } else {
-        append("%s", tr(StringId::WIFI_NO_CONFIG));
-    }
-
-    showInfo(tr(StringId::WIFI_DETAILS), info);
-}
-
-static void wifiDisconnect() {
-    WifiHandlers::instance().disconnect();
-    showToastInfo(tr(StringId::WIFI_DISCONNECTED));
-    rebuildWifiMainMenu();
-}
-
-static void wifiNtpSync() {
-    auto& wifiHandlers = WifiHandlers::instance();
-
-    if (!wifiHandlers.config().valid && !wifiHandlers.isConnected()) {
-        showToastError(tr(StringId::WIFI_NO_CONFIG));
-        return;
-    }
-
-    bool wasConnected = wifiHandlers.isConnected();
-
-    if (!wasConnected) {
-        showToastTask(tr(StringId::WIFI_CONNECTING), 0);
-        if (!wifiHandlers.connect()) {
-            ViewStack::instance().hideModal();
-            showToastError(tr(StringId::WIFI_FAILED));
-            return;
-        }
-        ViewStack::instance().hideModal();
-    }
-
-    showToastTask(tr(StringId::NTP_SYNCING), 0);
-
-    bool synced = wifiHandlers.syncNtp();
-    ViewStack::instance().hideModal();
-
-    if (synced) {
-        // Update lock screen clock
-        time_t now = time(nullptr);
-        struct tm* tm = localtime(&now);
-        if (tm && s_lockScreen) {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "%02d:%02d", tm->tm_hour, tm->tm_min);
-            s_lockScreen->setClock(buf);
-            snprintf(buf, sizeof(buf), "%02d.%02d.%04d", tm->tm_mday, tm->tm_mon + 1, tm->tm_year + 1900);
-            s_lockScreen->setDate(buf);
-        }
-        showToastSuccess(tr(StringId::NTP_SUCCESS));
-    } else {
-        showToastError(tr(StringId::NTP_TIMEOUT));
-    }
-}
-
-// ============================================================================
-// Bluetooth Menu
-// ============================================================================
-
-static void rebuildBluetoothMenu() {
-    auto* ble = hal::getBluetoothControllerInstance();
-    bool enabled = ble && ble->isEnabled();
-
-    // Fixed items
-    if (enabled) {
-        s_bluetoothItems[BT_IDX_ENABLE] = {tr(StringId::BLUETOOTH_ON), '*', false, nullptr};
-    } else {
-        s_bluetoothItems[BT_IDX_ENABLE] = {tr(StringId::BLUETOOTH_OFF), 0, false, nullptr};
-    }
-    s_bluetoothItems[BT_IDX_STATUS] = {tr(StringId::BLE_STATUS), 0, false, nullptr};
-    s_bluetoothItems[BT_IDX_SCAN] = {tr(StringId::BLE_SCAN), 0, !enabled, nullptr};
-
-    // Get module items for Bluetooth menu
-    auto& moduleReg = core::ModuleRegistry::instance();
-    s_bluetoothModuleCount = moduleReg.getMenuItems(
-        core::MenuLocation::BLUETOOTH_MENU,
-        s_bluetoothModuleItems,
-        BT_MENU_MAX_ITEMS - BT_IDX_FIXED_COUNT
-    );
-
-    // Add module items after fixed items
-    for (uint8_t i = 0; i < s_bluetoothModuleCount; i++) {
-        s_bluetoothItems[BT_IDX_FIXED_COUNT + i] = {s_bluetoothModuleItems[i].label, 0, false, nullptr};
-    }
-
-    if (s_bluetoothMenu) {
-        s_bluetoothMenu->init(tr(StringId::BLUETOOTH), s_bluetoothItems, BT_IDX_FIXED_COUNT + s_bluetoothModuleCount);
-    }
-}
-
-static void toggleBluetoothEnable() {
-    auto* ble = hal::getBluetoothControllerInstance();
-    if (!ble) {
-        showToastError(tr(StringId::HW_NOT_AVAILABLE));
-        return;
-    }
-
-    if (ble->isEnabled()) {
-        ble->disable();
-        showToastInfo(tr(StringId::BLUETOOTH_OFF));
-    } else {
-        if (ble->enable()) {
-            showToastSuccess(tr(StringId::BLUETOOTH_ON));
-        } else {
-            showToastError(tr(StringId::FAILED));
-        }
-    }
-
-    rebuildBluetoothMenu();
-    rebuildToolsMenu();
-}
-
-// Static buffer for BLE status (PSRAM)
-static constexpr size_t BLE_STATUS_BUF_SIZE = 512;
-static EXT_RAM_BSS_ATTR char s_bleStatusBuf[BLE_STATUS_BUF_SIZE];
-
-static void showBluetoothStatus() {
-    auto* ble = hal::getBluetoothControllerInstance();
-    char* info = s_bleStatusBuf;
-    memset(info, 0, BLE_STATUS_BUF_SIZE);
-    size_t pos = 0;
-
-    auto append = [&](const char* fmt, ...) {
-        if (pos >= BLE_STATUS_BUF_SIZE) return;
-        va_list args;
-        va_start(args, fmt);
-        int written = vsnprintf(info + pos, BLE_STATUS_BUF_SIZE - pos, fmt, args);
-        va_end(args);
-        if (written > 0) {
-            size_t w = static_cast<size_t>(written);
-            pos += (w < (BLE_STATUS_BUF_SIZE - pos)) ? w : (BLE_STATUS_BUF_SIZE - pos - 1);
-        }
-    };
-
-    if (!ble) {
-        append("%s", tr(StringId::HW_NOT_AVAILABLE));
-    } else {
-        append("Status: %s\n\n", ble->isEnabled() ? tr(StringId::ON) : tr(StringId::OFF));
-
-        uint8_t mac[6] = {};
-        if (ble->getMacAddress(mac)) {
-            append("%s: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                   tr(StringId::BLE_MAC_ADDRESS),
-                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        }
-
-        if (ble->isConnected()) {
-            append("\n%s\n", tr(StringId::BLE_CONNECTED_TO));
-            append("%s: %d dBm\n", tr(StringId::BLE_SIGNAL), ble->getRssi());
-        } else {
-            append("\n%s\n", tr(StringId::BLE_NOT_CONNECTED));
-        }
-
-        append("\nName: %s\n", ble->getDeviceName());
-    }
-
-    showInfo(tr(StringId::BLE_STATUS), info);
-}
-
-static void startBluetoothScan() {
-    auto* ble = hal::getBluetoothControllerInstance();
-    if (!ble || !ble->isEnabled()) {
-        showToastError(tr(StringId::HW_NOT_AVAILABLE));
-        return;
-    }
-
-    // Placeholder - BLE scan not yet implemented in BluetoothController
-    showToastInfo("BLE Scan not yet implemented", TOAST_DURATION_MEDIUM_MS);
-}
-
-static void onBluetoothMenuSelect(uint16_t index, void* userData) {
-    (void)userData;
-
-    // Fixed items
-    switch (index) {
-        case BT_IDX_ENABLE:
-            toggleBluetoothEnable();
-            return;
-        case BT_IDX_STATUS:
-            showBluetoothStatus();
-            return;
-        case BT_IDX_SCAN:
-            startBluetoothScan();
-            return;
-    }
-
-    // Module items
-    uint8_t moduleIdx = index - BT_IDX_FIXED_COUNT;
-    if (moduleIdx < s_bluetoothModuleCount) {
-        auto& item = s_bluetoothModuleItems[moduleIdx];
-        if (item.getView) {
-            ui::IView* view = item.getView();
-            if (view) {
-                ViewStack::instance().push(view);
-            }
-        }
-        // Rebuild menu in case module toggle changed state
-        rebuildBluetoothMenu();
-    }
-}
-
-static void showBluetoothMenu() {
-    if (!s_bluetoothMenu) {
-        s_bluetoothMenu = new ListView();
-        s_bluetoothMenu->setOnSelect(onBluetoothMenuSelect);
-    }
-
-    rebuildBluetoothMenu();
-    ViewStack::instance().push(s_bluetoothMenu);
-}
-
-// ============================================================================
-// Expert Menu
-// ============================================================================
-
-static void runSystemTest() {
-    showHardwareInfo();
-}
-
-static void runTropicCacheRebuild() {
-    showToastTask(tr(StringId::TASK_WORKING), 0);
-    bool ok = core::TropicStorage::instance().rebuild();
-    ViewStack::instance().hideModal();
-    if (ok) {
-        showToastSuccess(tr(StringId::OK));
-    } else {
-        showToastError(tr(StringId::FAILED));
-    }
-}
-
-static void runTropicCacheCleanup() {
-    showToastTask(tr(StringId::TASK_WORKING), 0);
-    bool ok = core::TropicStorage::instance().cleanup();
-    ViewStack::instance().hideModal();
-    if (ok) {
-        showToastSuccess(tr(StringId::OK));
-    } else {
-        showToastError(tr(StringId::FAILED));
-    }
-}
-
-static void showExpertMenu() {
-    showToastInfo(tr(StringId::EXPERT_WARNING), TOAST_DURATION_MEDIUM_MS);
-    if (!s_expertMenu) {
-        s_expertMenu = new ListView();
-        s_expertMenu->setOnSelect([](uint16_t index, void* userData) {
-            (void)userData;
-            switch (index) {
-                case 0: runSystemTest(); break;
-                case 1: runTropicCacheRebuild(); break;
-                case 2: runTropicCacheCleanup(); break;
-            }
-        });
-    }
-
-    s_expertItems[0] = {tr(StringId::HARDWARE_INFO), 0, false, nullptr};
-    s_expertItems[1] = {tr(StringId::TR01_CACHE_REBUILD), 0, false, nullptr};
-    s_expertItems[2] = {tr(StringId::TR01_CACHE_CLEANUP), 0, false, nullptr};
-
-    s_expertMenu->init(tr(StringId::EXPERT), s_expertItems, EXPERT_COUNT);
-    ViewStack::instance().push(s_expertMenu);
-}
-
-// ============================================================================
-// Module Error Event Handler
-// ============================================================================
-
-static void onModuleErrorEvent(const core::Event& evt) {
-    if (evt.type != core::EventType::MODULE_ERROR) return;
-
-    auto& moduleReg = core::ModuleRegistry::instance();
-    uint8_t index = static_cast<uint8_t>(evt.data.value);
-
-    if (index >= moduleReg.getModuleCount()) return;
-
-    const char* error = moduleReg.getModuleSlotError(index);
-    core::IModule* module = moduleReg.getModuleAt(index);
-    const char* name = module ? module->getName() : "?";
-
-    static char errMsg[96];
-    snprintf(errMsg, sizeof(errMsg), "%s: %s", name, error ? error : "Fehler");
-
-    showToastError(errMsg, TOAST_DURATION_LONG_MS);
-}
-
-// ============================================================================
-// Public API Implementation
-// ============================================================================
-
+/**
+ * \brief Initializes App UI, builds all core views, and wires callbacks.
+ * \param deps Hardware/service dependencies used by the UI runtime.
+ */
 void ui_init(const UiDeps& deps) {
     s_deps = deps;
 
@@ -1631,16 +716,26 @@ void ui_init(const UiDeps& deps) {
     });
 }
 
+/**
+ * \brief Refreshes module-backed menus once module startup is complete.
+ */
 void ui_on_modules_ready() {
     rebuildToolsMenu();
     rebuildMainMenu();
 }
 
+/**
+ * \brief Rebuilds dynamic UI menus.
+ */
 void ui_rebuild_menus() {
     rebuildToolsMenu();
     rebuildMainMenu();
 }
 
+/**
+ * \brief Main UI tick: input processing, timeouts, status updates, and rendering.
+ * \param nowMs Current monotonic time in milliseconds.
+ */
 void ui_process(uint32_t nowMs) {
     // Update status icons when on lock screen
     if (s_lockScreen && ViewStack::instance().current() == s_lockScreen) {

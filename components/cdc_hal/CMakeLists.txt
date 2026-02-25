@@ -14,6 +14,7 @@ idf_component_register(
         "src/libtropic_port_esp32.cpp"
         "src/WifiController.cpp"
         "src/BluetoothController.cpp"
+        "src/BleAdvParser.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES

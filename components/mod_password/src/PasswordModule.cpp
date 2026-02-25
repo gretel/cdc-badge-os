@@ -2,6 +2,7 @@
 #include "mod_password/PasswordStore.h"
 #include "cdc_core/ModuleRegistry.h"
 #include "cdc_core/TropicStorage.h"
+#include "cdc_core/IKeyboardProvider.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_views/ListView.h"
@@ -23,7 +24,7 @@ static const char* TAG = "PASSWORD";
 
 namespace cdc::mod_password {
 
-// Module-specific string IDs
+/** \brief Module-specific i18n string offsets. */
 static uint16_t s_strIdBase = 0;
 static constexpr uint16_t STR_PASSWORDS = 0;
 static constexpr uint16_t STR_NEW_ENTRY = 1;
@@ -44,12 +45,22 @@ static constexpr uint16_t STR_SLOT_ERROR = 15;
 static constexpr uint16_t STR_DETAILS = 16;
 static constexpr uint16_t STR_HINT_LIST = 17;
 static constexpr uint16_t STR_CONFIRM_DELETE = 18;
-static constexpr uint16_t STR_COUNT = 19;
+static constexpr uint16_t STR_HINT_TYPE = 19;
+static constexpr uint16_t STR_NO_KEYBOARD = 20;
+static constexpr uint16_t STR_COUNT = 21;
 
+/**
+ * \brief Resolves a module-localized string by offset.
+ * \param offset Module string-table offset.
+ * \return Translated string pointer.
+ */
 static const char* mstr(uint16_t offset) {
     return ui::tr(s_strIdBase + offset);
 }
 
+/**
+ * \brief Registers all password-module translations for supported languages.
+ */
 static void registerStrings() {
     auto& i18n = ui::I18n::instance();
     s_strIdBase = i18n.registerModule("mod_password", STR_COUNT);
@@ -77,6 +88,8 @@ static void registerStrings() {
     i18n.registerTranslation(s_strIdBase + STR_DETAILS, ui::Language::EN, "Details");
     i18n.registerTranslation(s_strIdBase + STR_HINT_LIST, ui::Language::EN, "[Y] View  [3] Menu  [N] Back");
     i18n.registerTranslation(s_strIdBase + STR_CONFIRM_DELETE, ui::Language::EN, "Delete entry?");
+    i18n.registerTranslation(s_strIdBase + STR_HINT_TYPE, ui::Language::EN, "[Y] Type  [2/8] Scroll  [N] Back");
+    i18n.registerTranslation(s_strIdBase + STR_NO_KEYBOARD, ui::Language::EN, "No keyboard connected");
 
     i18n.registerTranslation(s_strIdBase + STR_PASSWORDS, ui::Language::DE, "Passwoerter");
     i18n.registerTranslation(s_strIdBase + STR_NEW_ENTRY, ui::Language::DE, "Neuer Eintrag");
@@ -97,15 +110,22 @@ static void registerStrings() {
     i18n.registerTranslation(s_strIdBase + STR_DETAILS, ui::Language::DE, "Details");
     i18n.registerTranslation(s_strIdBase + STR_HINT_LIST, ui::Language::DE, "[Y] Ansehen  [3] Menu  [N] Zurueck");
     i18n.registerTranslation(s_strIdBase + STR_CONFIRM_DELETE, ui::Language::DE, "Eintrag loeschen?");
+    i18n.registerTranslation(s_strIdBase + STR_HINT_TYPE, ui::Language::DE, "[Y] Tippen  [2/8] Scrollen  [N] Zurueck");
+    i18n.registerTranslation(s_strIdBase + STR_NO_KEYBOARD, ui::Language::DE, "Keine Tastatur verbunden");
 
     LOG_I(TAG, "Registered i18n strings (base=%d)", s_strIdBase);
 }
 
-// === Serial Commands ===
+/** \brief Serial command handlers for password module. */
 
 static constexpr const char* CMD_MODULE = "password";
 static bool s_commandsRegistered = false;
 
+/**
+ * \brief Advances over leading ASCII whitespace in a C string.
+ * \param s Input string pointer.
+ * \return Pointer to first non-whitespace character.
+ */
 static const char* skipSpaces(const char* s) {
     while (s && *s && std::isspace(static_cast<unsigned char>(*s))) {
         s++;
@@ -113,6 +133,13 @@ static const char* skipSpaces(const char* s) {
     return s;
 }
 
+/**
+ * \brief Extracts one whitespace-delimited token from a string.
+ * \param s Input cursor position.
+ * \param out Output token buffer.
+ * \param outSize Output buffer size.
+ * \return Pointer to the next unread input position or `nullptr` if no token exists.
+ */
 static const char* nextToken(const char* s, char* out, size_t outSize) {
     if (!out || outSize == 0) return nullptr;
     s = skipSpaces(s);
@@ -125,6 +152,12 @@ static const char* nextToken(const char* s, char* out, size_t outSize) {
     return s;
 }
 
+/**
+ * \brief Resolves list index to logical password slot.
+ * \param index UI index in sorted list.
+ * \param slotOut Output slot number.
+ * \return `true` if index could be resolved.
+ */
 static bool findSlotByIndex(uint16_t index, uint16_t* slotOut) {
     if (!slotOut) return false;
     auto& store = PasswordStore::instance();
@@ -143,6 +176,10 @@ static bool findSlotByIndex(uint16_t index, uint16_t* slotOut) {
     return true;
 }
 
+/**
+ * \brief Serial command handler listing all password entries.
+ * \param args Unused command arguments.
+ */
 static void cmd_password_list(const char* args) {
     (void)args;
     auto& store = PasswordStore::instance();
@@ -174,6 +211,10 @@ static void cmd_password_list(const char* args) {
     }
 }
 
+/**
+ * \brief Serial command handler printing one password entry by index.
+ * \param args Command arguments (`<index>`).
+ */
 static void cmd_password_get(const char* args) {
     char indexBuf[8] = {};
     const char* p = nextToken(args, indexBuf, sizeof(indexBuf));
@@ -204,6 +245,10 @@ static void cmd_password_get(const char* args) {
     cdc::serial::Console::printf("Notes: %s\r\n", entry.notes);
 }
 
+/**
+ * \brief Serial command handler adding one password entry.
+ * \param args Command arguments (`<title> <username|- > <password> <url|- > [totpSlot] [notes]`).
+ */
 static void cmd_password_add(const char* args) {
     PasswordEntry entry = {};
     entry.totpSlot = PasswordStore::TOTP_SLOT_NONE;
@@ -254,6 +299,10 @@ static void cmd_password_add(const char* args) {
     cdc::serial::Console::printf(ok ? "OK\r\n" : "ERROR\r\n");
 }
 
+/**
+ * \brief Serial command handler deleting one password entry by index.
+ * \param args Command arguments (`<index>`).
+ */
 static void cmd_password_del(const char* args) {
     char indexBuf[8] = {};
     const char* p = nextToken(args, indexBuf, sizeof(indexBuf));
@@ -271,6 +320,9 @@ static void cmd_password_del(const char* args) {
     cdc::serial::Console::printf(ok ? "OK\r\n" : "ERROR\r\n");
 }
 
+/**
+ * \brief Registers serial commands exposed by the password module.
+ */
 static void registerCommands() {
     if (s_commandsRegistered) return;
     s_commandsRegistered = true;
@@ -282,7 +334,7 @@ static void registerCommands() {
     reg.registerCommand({"PASSWORD_DEL", "Delete password entry", cmd_password_del, CMD_MODULE, true});
 }
 
-// === UI State ===
+/** \brief Password module UI state and reusable view instances. */
 
 static ui::ListView s_listView;
 static ui::T9InputView s_t9Input;
@@ -309,6 +361,9 @@ static constexpr uint16_t NOTES_INPUT_MAX =
         ? static_cast<uint16_t>(PasswordStore::NOTES_LEN)
         : static_cast<uint16_t>(ui::T9InputView::MAX_TEXT_LEN);
 
+/**
+ * \brief Releases dynamic buffers used by the password list view.
+ */
 static void freeListBuffers() {
     delete[] s_listItems;
     delete[] s_entries;
@@ -318,6 +373,10 @@ static void freeListBuffers() {
     s_entryCount = 0;
 }
 
+/**
+ * \brief Ensures list and entry buffers are allocated for current store capacity.
+ * \return `true` when buffers are ready for use.
+ */
 static bool ensureListBuffers() {
     uint16_t cap = PasswordStore::instance().capacity();
     if (cap == 0) return false;
@@ -343,6 +402,9 @@ static bool ensureListBuffers() {
     return true;
 }
 
+/**
+ * \brief Rebuilds password list items from sorted store entries.
+ */
 static void rebuildList() {
     if (!PasswordStore::instance().hasSlotRange()) {
         ui::showToastError(mstr(STR_SLOT_ERROR));
@@ -369,15 +431,43 @@ static void rebuildList() {
     }
 
     s_listView.init(mstr(STR_PASSWORDS), s_listItems, static_cast<uint16_t>(s_entryCount + 1));
-    s_listView.setHint(mstr(STR_HINT_LIST));
+s_listView.setHint(mstr(STR_HINT_LIST));
 }
 
+/** \brief Shared output buffer used for keyboard typing callback payload. */
+static char s_passwordToType[PasswordStore::PASSWORD_LEN + 1] = {};
+
+/**
+ * \brief Types currently selected password through attached keyboard provider.
+ * \param userData Optional user pointer (unused).
+ */
+static void onTypePassword(void* userData) {
+    (void)userData;
+    auto* kb = core::getKeyboard();
+    if (kb && kb->isConnected()) {
+        if (s_passwordToType[0]) {
+            kb->typeString(s_passwordToType);
+            ui::showToastSuccess("Typed");
+        }
+    } else {
+        ui::showToastError(mstr(STR_NO_KEYBOARD));
+    }
+}
+
+/**
+ * \brief Shows full entry details in the info view for a slot.
+ * \param slot Logical password slot.
+ */
 static void showDetails(uint16_t slot) {
     PasswordEntry entry = {};
     if (!PasswordStore::instance().readEntry(slot, &entry)) {
         ui::showToastError(ui::tr(ui::StringId::FAILED));
         return;
     }
+
+    // Store password for type callback
+    strncpy(s_passwordToType, entry.password, sizeof(s_passwordToType) - 1);
+    s_passwordToType[sizeof(s_passwordToType) - 1] = '\0';
 
     static char detailText[ui::InfoView::MAX_TEXT_LEN];
     char totpBuf[16] = {};
@@ -409,9 +499,23 @@ static void showDetails(uint16_t slot) {
              notesText);
 
     s_infoView.init(mstr(STR_DETAILS), detailText);
+
+    // Set up Type callback if keyboard is available
+    auto* kb = core::getKeyboard();
+    if (kb && kb->isConnected() && s_passwordToType[0]) {
+        s_infoView.setYesNoCallbacks(onTypePassword, nullptr, nullptr);
+        s_infoView.setHint(mstr(STR_HINT_TYPE));
+    } else {
+        s_infoView.setYesNoCallbacks(nullptr, nullptr, nullptr);
+        s_infoView.setHint(nullptr);
+    }
+
     ui::ViewStack::instance().push(&s_infoView);
 }
 
+/**
+ * \brief Persists wizard add/edit changes and returns to list view.
+ */
 static void wizardFinish() {
     bool ok = false;
     if (s_wizard.editMode) {
@@ -433,6 +537,13 @@ static void wizardFinish() {
     }
 }
 
+/**
+ * \brief Pushes a configured T9 input step for wizard flow.
+ * \param title Step title.
+ * \param initialText Initial input text.
+ * \param maxLen Maximum accepted text length.
+ * \param onSave Save callback for this step.
+ */
 static void pushT9WizardStep(const char* title, const char* initialText,
                              uint16_t maxLen, ui::T9InputView::SaveCallback onSave) {
     s_t9Input.init(title, initialText, maxLen);
@@ -447,6 +558,9 @@ static void onWizardUrl(const char* text);
 static void onWizardTotp(const char* text);
 static void onWizardNotes(const char* text);
 
+/**
+ * \brief Starts add-entry wizard with empty fields.
+ */
 static void wizardStart() {
     memset(&s_wizard, 0, sizeof(s_wizard));
     s_wizard.entry.totpSlot = PasswordStore::TOTP_SLOT_NONE;
@@ -456,6 +570,10 @@ static void wizardStart() {
     pushT9WizardStep(mstr(STR_TITLE), nullptr, PasswordStore::TITLE_LEN, onWizardTitle);
 }
 
+/**
+ * \brief Starts edit-entry wizard prefilled with existing slot data.
+ * \param slot Logical slot to edit.
+ */
 static void wizardEdit(uint16_t slot) {
     PasswordEntry entry = {};
     if (!PasswordStore::instance().readEntry(slot, &entry)) {
@@ -471,21 +589,37 @@ static void wizardEdit(uint16_t slot) {
     pushT9WizardStep(mstr(STR_TITLE), s_wizard.entry.title, PasswordStore::TITLE_LEN, onWizardTitle);
 }
 
+/**
+ * \brief Saves title field and advances to username step.
+ * \param text Entered title text.
+ */
 static void onWizardTitle(const char* text) {
     strncpy(s_wizard.entry.title, text ? text : "", sizeof(s_wizard.entry.title) - 1);
     pushT9WizardStep(mstr(STR_USERNAME), s_wizard.entry.username, PasswordStore::USERNAME_LEN, onWizardUsername);
 }
 
+/**
+ * \brief Saves username field and advances to password step.
+ * \param text Entered username text.
+ */
 static void onWizardUsername(const char* text) {
     strncpy(s_wizard.entry.username, text ? text : "", sizeof(s_wizard.entry.username) - 1);
     pushT9WizardStep(mstr(STR_PASSWORD), s_wizard.entry.password, PasswordStore::PASSWORD_LEN, onWizardPassword);
 }
 
+/**
+ * \brief Saves password field and advances to URL step.
+ * \param text Entered password text.
+ */
 static void onWizardPassword(const char* text) {
     strncpy(s_wizard.entry.password, text ? text : "", sizeof(s_wizard.entry.password) - 1);
     pushT9WizardStep(mstr(STR_URL), s_wizard.entry.url, PasswordStore::URL_LEN, onWizardUrl);
 }
 
+/**
+ * \brief Saves URL field and advances to optional TOTP slot step.
+ * \param text Entered URL text.
+ */
 static void onWizardUrl(const char* text) {
     strncpy(s_wizard.entry.url, text ? text : "", sizeof(s_wizard.entry.url) - 1);
 
@@ -496,6 +630,10 @@ static void onWizardUrl(const char* text) {
     pushT9WizardStep(mstr(STR_TOTP_SLOT), totpBuf, 3, onWizardTotp);
 }
 
+/**
+ * \brief Validates and saves optional TOTP slot, then advances to notes step.
+ * \param text Entered TOTP slot text.
+ */
 static void onWizardTotp(const char* text) {
     if (!text || !text[0]) {
         s_wizard.entry.totpSlot = PasswordStore::TOTP_SLOT_NONE;
@@ -512,19 +650,33 @@ static void onWizardTotp(const char* text) {
     pushT9WizardStep(mstr(STR_NOTES), s_wizard.entry.notes, NOTES_INPUT_MAX, onWizardNotes);
 }
 
+/**
+ * \brief Saves notes field and completes wizard persistence.
+ * \param text Entered notes text.
+ */
 static void onWizardNotes(const char* text) {
     strncpy(s_wizard.entry.notes, text ? text : "", sizeof(s_wizard.entry.notes) - 1);
     wizardFinish();
 }
 
+/**
+ * \brief Opens details view for currently active entry.
+ */
 static void onMenuView() {
     showDetails(s_activeSlot);
 }
 
+/**
+ * \brief Opens edit wizard for currently active entry.
+ */
 static void onMenuEdit() {
     wizardEdit(s_activeSlot);
 }
 
+/**
+ * \brief Confirmation callback deleting selected entry slot.
+ * \param userData Pointer to selected slot value.
+ */
 static void onMenuDeleteConfirm(void* userData) {
     uint16_t slot = *static_cast<uint16_t*>(userData);
     bool ok = PasswordStore::instance().deleteEntry(slot);
@@ -541,6 +693,9 @@ static void onMenuDeleteConfirm(void* userData) {
     }
 }
 
+/**
+ * \brief Opens delete confirmation dialog for currently active entry.
+ */
 static void onMenuDelete() {
     static uint16_t slot = 0;
     slot = s_activeSlot;
@@ -548,6 +703,11 @@ static void onMenuDelete() {
                     ui::ConfirmView::Icon::WARNING, &slot);
 }
 
+/**
+ * \brief Opens contextual action menu for selected list entry.
+ * \param index Selected row index.
+ * \param userData Optional user pointer (unused).
+ */
 static void onListMenu(uint16_t index, void* userData) {
     (void)userData;
     if (index == 0) {
@@ -568,6 +728,11 @@ static void onListMenu(uint16_t index, void* userData) {
     ui::showContextMenu(mstr(STR_ACTIONS), items, 3);
 }
 
+/**
+ * \brief Handles direct selection from list view (view existing or add new).
+ * \param index Selected row index.
+ * \param userData Optional user pointer (unused).
+ */
 static void onListSelect(uint16_t index, void* userData) {
     (void)userData;
     if (index == 0) {
@@ -579,11 +744,19 @@ static void onListSelect(uint16_t index, void* userData) {
     showDetails(s_activeSlot);
 }
 
+/**
+ * \brief Returns singleton password module instance.
+ * \return Module singleton reference.
+ */
 PasswordModule& PasswordModule::instance() {
     static PasswordModule inst;
     return inst;
 }
 
+/**
+ * \brief Initializes module resources, translations, commands, and slot mapping.
+ * \return `true` if module initialization succeeded.
+ */
 bool PasswordModule::init() {
     LOG_I(TAG, "Initializing Password module");
     registerStrings();
@@ -602,6 +775,10 @@ bool PasswordModule::init() {
     return true;
 }
 
+/**
+ * \brief Starts the password module service.
+ * \return `true` if start transition succeeded.
+ */
 bool PasswordModule::start() {
     if (state_ != core::ServiceState::INITIALIZED &&
         state_ != core::ServiceState::STOPPED) {
@@ -611,15 +788,26 @@ bool PasswordModule::start() {
     return true;
 }
 
+/**
+ * \brief Stops the password module and frees list resources.
+ */
 void PasswordModule::stop() {
     freeListBuffers();
     state_ = core::ServiceState::STOPPED;
 }
 
+/**
+ * \brief Stores assigned Tropic slot range for this module.
+ * \param range Slot assignment provided by registry.
+ */
 void PasswordModule::setSlotRange(const core::IModule::SlotRange& range) {
     slotRange_ = range;
 }
 
+/**
+ * \brief Declares slot requirements for password storage.
+ * \return Slot request structure.
+ */
 core::IModule::SlotRequest PasswordModule::getSlotRequest() const {
     core::IModule::SlotRequest req = {};
     req.mapName = getName();
@@ -627,6 +815,12 @@ core::IModule::SlotRequest PasswordModule::getSlotRequest() const {
     return req;
 }
 
+/**
+ * \brief Provides main-menu entry for password module UI.
+ * \param items Output array for menu items.
+ * \param maxItems Maximum writable entries in `items`.
+ * \return Number of populated menu items.
+ */
 uint8_t PasswordModule::getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems) {
     if (!items || maxItems == 0) return 0;
 
@@ -642,13 +836,16 @@ uint8_t PasswordModule::getMenuItems(core::ModuleMenuItem* items, uint8_t maxIte
         }
         rebuildList();
         return &s_listView;
-    }, nullptr, getName(), core::MenuLocation::MAIN_MENU};
+    }, nullptr, getName(), core::MenuLocation::MAIN_MENU, nullptr};
 
     return 1;
 }
 
 } // namespace cdc::mod_password
 
+/**
+ * \brief Registers password module initializer in global module registry.
+ */
 extern "C" void mod_password_register() {
     cdc::core::ModuleRegistry::instance().registerInitializer([]() {
         auto& module = cdc::mod_password::PasswordModule::instance();

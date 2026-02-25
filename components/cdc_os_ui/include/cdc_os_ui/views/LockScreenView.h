@@ -133,9 +133,11 @@ private:
 
     // Long-press N for deep sleep (flight mode)
     uint32_t nPressStartMs_ = 0;
+    bool deepSleepMode_ = false;
 
     void renderStatusIcons(void* gfx, int x, int y);
     void renderBattery(void* gfx, int x, int y);
+    void renderDeepSleepScreen();
     void checkDeepSleepTrigger(uint32_t nowMs);
 };
 

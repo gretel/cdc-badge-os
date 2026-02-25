@@ -3,6 +3,8 @@
 #include "cdc_ui/IView.h"
 #include <cstdint>
 
+class Gdey029T94;
+
 namespace cdc::ui {
 
 /**
@@ -49,6 +51,17 @@ public:
     using MenuCallback = void(*)(uint16_t index, void* userData);
 
     /**
+     * Optional per-row renderer.
+     * Return true if the row is fully rendered, false to fall back to default.
+     */
+    using ItemRenderCallback = bool(*)(Gdey029T94* gfx,
+                                       const ListItem& item,
+                                       uint16_t index,
+                                       int x, int y, int w, int h,
+                                       bool selected,
+                                       void* userCtx);
+
+    /**
      * Initialize list view
      * @param title List title
      * @param items Array of items (pointer is stored, not copied)
@@ -65,6 +78,14 @@ public:
      * Set context menu callback (key '3')
      */
     void setOnMenu(MenuCallback callback) { onMenu_ = callback; }
+
+    /**
+     * Set optional row renderer
+     */
+    void setItemRenderer(ItemRenderCallback callback, void* userCtx = nullptr) {
+        itemRenderer_ = callback;
+        itemRendererCtx_ = userCtx;
+    }
 
     /**
      * Set custom footer hint text (nullptr = default)
@@ -117,6 +138,8 @@ private:
     uint16_t scrollPos_ = 0;
     SelectCallback onSelect_ = nullptr;
     MenuCallback onMenu_ = nullptr;
+    ItemRenderCallback itemRenderer_ = nullptr;
+    void* itemRendererCtx_ = nullptr;
     bool preservePosition_ = false;
     uint8_t itemHeight_ = DEFAULT_ITEM_HEIGHT;
 

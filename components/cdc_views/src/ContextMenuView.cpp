@@ -5,6 +5,7 @@
  */
 
 #include "cdc_views/ContextMenuView.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_hal/IDisplay.h"
 #include "cdc_log.h"
@@ -14,7 +15,9 @@
 
 static const char* TAG = "ContextMenuView";
 
-// Layout constants
+/**
+ * \brief Layout constants.
+ */
 static constexpr int BOX_PADDING = 8;
 static constexpr int TITLE_HEIGHT = 18;
 static constexpr int ITEM_HEIGHT = 16;
@@ -23,6 +26,13 @@ static constexpr int MAX_BOX_WIDTH = 200;
 
 namespace cdc::ui {
 
+/**
+ * \brief Initializes context menu content and selection state.
+ * \param title Menu title text.
+ * \param items Menu item array.
+ * \param count Number of menu items.
+ * \return void
+ */
 void ContextMenuView::init(const char* title, const ContextMenuItem* items, uint8_t count) {
     title_ = title;
     items_ = items;
@@ -34,6 +44,11 @@ void ContextMenuView::init(const char* title, const ContextMenuItem* items, uint
     LOG_D(TAG, "init: title='%s', items=%d", title ? title : "(null)", itemCount_);
 }
 
+/**
+ * \brief Moves menu selection up or down with wrap-around.
+ * \param down `true` to move down, `false` to move up.
+ * \return void
+ */
 void ContextMenuView::navigate(bool down) {
     if (itemCount_ == 0) return;
 
@@ -64,6 +79,10 @@ void ContextMenuView::navigate(bool down) {
     LOG_D(TAG, "navigate: sel=%d, scroll=%d", selection_, scrollPos_);
 }
 
+/**
+ * \brief Executes the currently selected context-menu item.
+ * \return void
+ */
 void ContextMenuView::select() {
     if (items_ && selection_ < itemCount_) {
         const ContextMenuItem& item = items_[selection_];
@@ -79,6 +98,11 @@ void ContextMenuView::select() {
     }
 }
 
+/**
+ * \brief Handles key input for context menu navigation and actions.
+ * \param key Pressed key code.
+ * \return Input handling result for the view stack.
+ */
 InputResult ContextMenuView::onKey(char key) {
     switch (key) {
         case '2': // Up
@@ -102,6 +126,11 @@ InputResult ContextMenuView::onKey(char key) {
     }
 }
 
+/**
+ * \brief Renders the context menu popup.
+ * \param partial Indicates partial/full redraw mode.
+ * \return void
+ */
 void ContextMenuView::render(bool partial) {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;
@@ -146,9 +175,7 @@ void ContextMenuView::render(bool partial) {
     int boxY = (screenHeight - boxHeight) / 2;
 
     // Draw box background
-    gfx->fillRect(boxX, boxY, boxWidth, boxHeight, EPD_WHITE);
-    gfx->drawRect(boxX, boxY, boxWidth, boxHeight, EPD_BLACK);
-    gfx->drawRect(boxX + 1, boxY + 1, boxWidth - 2, boxHeight - 2, EPD_BLACK);
+    render::drawDialogFrame(gfx, boxX, boxY, boxWidth, boxHeight);
 
     // Draw title
     gfx->setTextColor(EPD_WHITE);
@@ -215,18 +242,29 @@ void ContextMenuView::render(bool partial) {
     dirty_ = false;
 }
 
-// ============================================================================
-// Convenience Functions
-// ============================================================================
+/**
+ * \brief Convenience helper functions.
+ */
 
 static ContextMenuView s_sharedContextMenu;
 
+/**
+ * \brief Shows the shared context menu instance as modal.
+ * \param title Menu title text.
+ * \param items Menu item array.
+ * \param count Number of menu items.
+ * \return Pointer to the shared `ContextMenuView` instance.
+ */
 ContextMenuView* showContextMenu(const char* title, const ContextMenuItem* items, uint8_t count) {
     s_sharedContextMenu.init(title, items, count);
     ViewStack::instance().showModal(&s_sharedContextMenu);
     return &s_sharedContextMenu;
 }
 
+/**
+ * \brief Hides the active context menu modal.
+ * \return void
+ */
 void hideContextMenu() {
     ViewStack::instance().hideModal();
 }

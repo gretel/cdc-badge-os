@@ -15,6 +15,7 @@ idf_component_register(
         "src/ContextMenuView.cpp"
         "src/QRCodeView.cpp"
         "src/ConfirmView.cpp"
+        "src/RenderHelpers.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES

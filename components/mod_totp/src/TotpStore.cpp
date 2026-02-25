@@ -24,6 +24,11 @@ struct TotpPayload {
 };
 #pragma pack(pop)
 
+/**
+ * \brief Converts one Base32 character into 5-bit value.
+ * \param c Input character.
+ * \return Value in range 0..31, or `-1` if invalid.
+ */
 static int base32CharValue(char c) {
     if (c >= 'A' && c <= 'Z') return c - 'A';
     if (c >= 'a' && c <= 'z') return c - 'a';
@@ -31,6 +36,13 @@ static int base32CharValue(char c) {
     return -1;
 }
 
+/**
+ * \brief Decodes Base32 secret into raw bytes.
+ * \param encoded Base32 input string.
+ * \param out Output byte buffer.
+ * \param outMax Output capacity.
+ * \return Number of decoded bytes, or `-1` on error.
+ */
 static int base32Decode(const char* encoded, uint8_t* out, size_t outMax) {
     if (!encoded || !out) return -1;
 
@@ -64,11 +76,21 @@ static const uint32_t POWERS_10[] = {
     1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000
 };
 
+/**
+ * \brief Returns singleton TOTP store instance.
+ * \return Store singleton reference.
+ */
 TotpStore& TotpStore::instance() {
     static TotpStore inst;
     return inst;
 }
 
+/**
+ * \brief Configures logical-to-physical slot mapping for TOTP accounts.
+ * \param start First RMEM slot.
+ * \param end Last RMEM slot.
+ * \param moduleId Owning module id.
+ */
 void TotpStore::setSlotRange(uint16_t start, uint16_t end, uint8_t moduleId) {
     if (start > end || start == 0 || end == 0) {
         hasSlotRange_ = false;
@@ -83,11 +105,21 @@ void TotpStore::setSlotRange(uint16_t start, uint16_t end, uint8_t moduleId) {
     moduleId_ = moduleId;
 }
 
+/**
+ * \brief Returns account capacity derived from slot range.
+ * \return Number of logical slots.
+ */
 uint16_t TotpStore::capacity() const {
     if (!hasSlotRange_) return 0;
     return static_cast<uint16_t>(rmemEnd_ - rmemStart_ + 1);
 }
 
+/**
+ * \brief Converts logical account index to physical slot.
+ * \param logicalIndex Logical index.
+ * \param slotOut Output physical slot.
+ * \return `true` on valid mapping.
+ */
 bool TotpStore::toPhysicalSlot(uint16_t logicalIndex, uint16_t* slotOut) const {
     if (!slotOut) return false;
     if (!hasSlotRange_) return false;
@@ -97,6 +129,12 @@ bool TotpStore::toPhysicalSlot(uint16_t logicalIndex, uint16_t* slotOut) const {
     return true;
 }
 
+/**
+ * \brief Converts physical slot to logical account index.
+ * \param slot Physical slot.
+ * \param logicalIndexOut Output logical index.
+ * \return `true` on valid mapping.
+ */
 bool TotpStore::toLogicalSlot(uint16_t slot, uint16_t* logicalIndexOut) const {
     if (!logicalIndexOut) return false;
     if (!hasSlotRange_) return false;
@@ -105,6 +143,12 @@ bool TotpStore::toLogicalSlot(uint16_t slot, uint16_t* logicalIndexOut) const {
     return true;
 }
 
+/**
+ * \brief Reads one TOTP account from secure-element storage.
+ * \param slot Logical slot index.
+ * \param out Output account structure.
+ * \return `true` on successful read.
+ */
 bool TotpStore::readAccount(uint16_t slot, TotpAccount* out) {
     if (!out) return false;
     if (!hasSlotRange_) return false;
@@ -143,6 +187,11 @@ bool TotpStore::readAccount(uint16_t slot, TotpAccount* out) {
     return true;
 }
 
+/**
+ * \brief Finds first free physical slot in configured range.
+ * \param slotOut Output physical slot.
+ * \return `true` if free slot was found.
+ */
 bool TotpStore::findFreeSlot(uint16_t* slotOut) {
     if (!slotOut) return false;
     if (!hasSlotRange_) return false;
@@ -185,6 +234,16 @@ bool TotpStore::findFreeSlot(uint16_t* slotOut) {
     return false;
 }
 
+/**
+ * \brief Adds a new TOTP account from Base32 secret.
+ * \param name Account label.
+ * \param issuer Optional issuer text.
+ * \param secretBase32 Base32 secret.
+ * \param digits Desired output digits.
+ * \param period TOTP period in seconds.
+ * \param algorithm Hash algorithm identifier.
+ * \return `true` on successful write.
+ */
 bool TotpStore::addAccount(const char* name, const char* issuer, const char* secretBase32,
                            uint8_t digits, uint32_t period, uint8_t algorithm) {
     if (!name || !secretBase32) return false;
@@ -236,6 +295,17 @@ bool TotpStore::addAccount(const char* name, const char* issuer, const char* sec
     return true;
 }
 
+/**
+ * \brief Updates an existing TOTP account.
+ * \param slot Logical slot index.
+ * \param name Account label.
+ * \param issuer Optional issuer text.
+ * \param secretBase32 Base32 secret.
+ * \param digits Desired output digits.
+ * \param period TOTP period in seconds.
+ * \param algorithm Hash algorithm identifier.
+ * \return `true` on successful update.
+ */
 bool TotpStore::updateAccount(uint16_t slot, const char* name, const char* issuer, const char* secretBase32,
                               uint8_t digits, uint32_t period, uint8_t algorithm) {
     if (!name || !secretBase32) return false;
@@ -283,6 +353,11 @@ bool TotpStore::updateAccount(uint16_t slot, const char* name, const char* issue
     return true;
 }
 
+/**
+ * \brief Deletes account in logical slot.
+ * \param slot Logical slot index.
+ * \return `true` on successful erase.
+ */
 bool TotpStore::deleteAccount(uint16_t slot) {
     if (!hasSlotRange_) return false;
     uint16_t physSlot = 0;
@@ -300,6 +375,16 @@ bool TotpStore::deleteAccount(uint16_t slot) {
     return true;
 }
 
+/**
+ * \brief Generates numeric TOTP value for given parameters.
+ * \param secret Secret byte buffer.
+ * \param secretLen Secret length.
+ * \param timestamp Unix timestamp.
+ * \param period TOTP period in seconds.
+ * \param digits Number of output digits.
+ * \param algorithm Hash algorithm.
+ * \return TOTP code value.
+ */
 uint32_t TotpStore::generate(const uint8_t* secret, size_t secretLen, time_t timestamp,
                              uint32_t period, uint8_t digits, TotpAlgorithm algorithm) const {
     if (!secret || secretLen == 0 || secretLen > SECRET_LEN) {
@@ -338,6 +423,17 @@ uint32_t TotpStore::generate(const uint8_t* secret, size_t secretLen, time_t tim
     return binary % POWERS_10[digits];
 }
 
+/**
+ * \brief Computes HMAC for selected TOTP algorithm.
+ * \param algo Hash algorithm.
+ * \param key HMAC key.
+ * \param keyLen Key length.
+ * \param data Input data.
+ * \param dataLen Data length.
+ * \param output Output digest buffer.
+ * \param outputLen Optional output length.
+ * \return `true` on success.
+ */
 bool TotpStore::hmacCompute(TotpAlgorithm algo, const uint8_t* key, size_t keyLen,
                             const uint8_t* data, size_t dataLen,
                             uint8_t* output, size_t* outputLen) const {
@@ -375,6 +471,12 @@ bool TotpStore::hmacCompute(TotpAlgorithm algo, const uint8_t* key, size_t keyLe
     return true;
 }
 
+/**
+ * \brief Generates formatted TOTP code string for account slot.
+ * \param slot Logical slot index.
+ * \param codeOut Output text buffer.
+ * \return Remaining seconds for current step, or `-1` on failure.
+ */
 int8_t TotpStore::generateCode(uint16_t slot, char* codeOut) {
     if (!codeOut) return -1;
 
@@ -403,11 +505,20 @@ int8_t TotpStore::generateCode(uint16_t slot, char* codeOut) {
     return static_cast<int8_t>(timeRemaining(account.period));
 }
 
+/**
+ * \brief Returns seconds remaining in current TOTP time step.
+ * \param period TOTP period in seconds.
+ * \return Remaining seconds.
+ */
 uint8_t TotpStore::timeRemaining(uint32_t period) const {
     if (period == 0) period = DEFAULT_PERIOD;
     return static_cast<uint8_t>(period - (time(nullptr) % period));
 }
 
+/**
+ * \brief Returns whether system time is considered valid for TOTP.
+ * \return `true` when date is at least year 2024.
+ */
 bool TotpStore::isTimeValid() const {
     time_t now = time(nullptr);
     struct tm timeinfo;

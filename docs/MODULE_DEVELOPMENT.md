@@ -1,6 +1,8 @@
 # Module Development Guide
 
-This guide explains how to create a new module for CDC Badge OS.
+How to create custom modules for CDC Badge OS.
+
+> **Related:** [Architecture Overview](README.md#architecture) | [Serial Commands](SERIAL_COMMANDS.md)
 
 ## Overview
 
@@ -287,6 +289,10 @@ void ExampleModule::onUnlock() {
     LOG_D(TAG, "Device unlocked");
 }
 
+// NOTE: onUnlock() is dispatched right after a successful PIN unlock
+// (see AppUi onPinSuccess → ModuleRegistry::dispatchUnlock()).
+// Use this hook for actions that must only happen after PIN entry.
+
 void ExampleModule::onLock() {
     LOG_D(TAG, "Device locked");
 }
@@ -503,9 +509,12 @@ The TROPIC01 secure element has two storage types:
 
 ```cpp
 enum class MenuLocation : uint8_t {
-    MAIN_MENU,      // Top-level main menu
-    TOOLS_MENU,     // Under Tools submenu
-    SETTINGS_MENU   // Under Settings submenu
+    MAIN_MENU,       // Top-level main menu
+    TOOLS_MENU,      // Under Tools submenu
+    SETTINGS_MENU,   // Under Settings submenu
+    BLUETOOTH_MENU,  // Under Bluetooth submenu (for BLE services)
+    WIFI_MENU,       // Under WiFi submenu
+    EXPERT_MENU      // Under Expert submenu (for advanced tools)
 };
 ```
 
@@ -598,6 +607,57 @@ static MyCustomView s_customView;
 - Prefer static allocation over dynamic
 - Clean up resources in `stop()`
 
+### Lock Screen Context Items
+
+Modules can add items to the lock screen context menu (accessible without PIN):
+
+```cpp
+uint8_t MyModule::getLockScreenContextItems(LockScreenContextItem* items, uint8_t maxItems) {
+    if (!items || maxItems == 0) return 0;
+
+    items[0] = {
+        []() { return "vCard QR"; },  // Dynamic label getter
+        []() { showVcardQr(); },       // Callback function
+        50,                             // Priority
+        getName()                       // Module name (set automatically)
+    };
+    return 1;
+}
+```
+
+### Typed Service Pattern (IKeyboardProvider)
+
+Modules can provide or consume optional services using the typed service pattern:
+
+**Providing a service (e.g., mod_hid provides keyboard):**
+
+```cpp
+#include "cdc_core/ServiceRegistry.h"
+#include "cdc_core/IKeyboardProvider.h"
+
+// In module init/start:
+ServiceRegistry::instance().provide<IKeyboardProvider>(
+    ServiceType::KEYBOARD, &myKeyboardImpl);
+```
+
+**Consuming a service (e.g., mod_totp uses keyboard for auto-type):**
+
+```cpp
+#include "cdc_core/IKeyboardProvider.h"
+
+// When user wants to type a TOTP code:
+auto* keyboard = cdc::core::getKeyboard();
+if (keyboard && keyboard->isConnected()) {
+    keyboard->typeString(totpCode);
+}
+```
+
+**Available service types:**
+
+| ServiceType | Interface | Description |
+|-------------|-----------|-------------|
+| `KEYBOARD` | `IKeyboardProvider` | BLE/USB HID keyboard for auto-type |
+
 ## Best Practices
 
 1. **Self-contained**: All module code stays in the module directory
@@ -614,7 +674,10 @@ Reference existing modules for patterns:
 - `mod_totp` - Simple module with list view and wizard
 - `mod_fido2` - Complex module with USB HID integration
 - `mod_password` - Module with TROPIC01 storage
-- `grove_led` - Minimal demo module
+- `mod_vcard` - BLE service module with lock screen context items
+- `mod_hid` - Service provider module (IKeyboardProvider)
+- `mod_sao` - Minimal hardware detection module
+- `grove_led` - Minimal demo module (Grove I2C LED)
 
 ## Troubleshooting
 

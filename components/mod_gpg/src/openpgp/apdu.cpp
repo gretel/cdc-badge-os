@@ -1,13 +1,19 @@
-/*
- * ISO 7816 APDU Parser for CDC Badge
+/**
+ * \brief ISO 7816 APDU parsing/building helpers for CDC Badge OpenPGP stack.
  *
- * Based on pico-openpgp (https://github.com/polhenarejos/pico-openpgp)
- * Original: Copyright (c) 2022 Pol Henarejos, AGPLv3
+ * Based on pico-openpgp (https://github.com/polhenarejos/pico-openpgp).
  */
 
 #include "mod_gpg/openpgp/apdu.h"
 #include <string.h>
 
+/**
+ * \brief Parses raw APDU bytes into structured representation.
+ * \param raw Raw APDU buffer.
+ * \param raw_len Length of `raw`.
+ * \param apdu Output APDU structure.
+ * \return `true` if APDU framing is valid and parsing succeeded.
+ */
 bool apdu_parse(const uint8_t *raw, size_t raw_len, apdu_t *apdu) {
     if (!raw || !apdu || raw_len < 4) {
         return false;
@@ -81,6 +87,15 @@ bool apdu_parse(const uint8_t *raw, size_t raw_len, apdu_t *apdu) {
     return true;
 }
 
+/**
+ * \brief Builds APDU response payload with status word trailer.
+ * \param buf Output response buffer.
+ * \param buf_max Capacity of `buf`.
+ * \param data Optional payload bytes.
+ * \param data_len Payload length.
+ * \param sw ISO7816 status word.
+ * \return Total bytes written to `buf`.
+ */
 size_t apdu_build_response(uint8_t *buf, size_t buf_max,
                            const uint8_t *data, size_t data_len,
                            uint16_t sw) {

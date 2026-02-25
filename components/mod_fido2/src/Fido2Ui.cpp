@@ -1,4 +1,7 @@
-// FIDO2 UI and user presence flow
+/**
+ * \file
+ * \brief FIDO2 UI views and user-presence approval workflow.
+ */
 
 #include "mod_fido2/Fido2Ui.h"
 #include "mod_fido2/fido2.h"
@@ -25,7 +28,7 @@ static const char* TAG = "FIDO2_UI";
 
 namespace cdc::mod_fido2 {
 
-// Module-specific i18n strings
+/** \brief Module-specific i18n string offsets. */
 static uint16_t s_strIdBase = 0;
 static constexpr uint16_t STR_WEB_AUTHN = 0;
 static constexpr uint16_t STR_DETAILS = 1;
@@ -37,10 +40,18 @@ static constexpr uint16_t STR_USE_DEVICE = 6;
 static constexpr uint16_t STR_NO_ENTRIES = 7;
 static constexpr uint16_t STR_COUNT = 8;
 
+/**
+ * \brief Resolves module-localized string by offset.
+ * \param offset Module string-table offset.
+ * \return Translated string pointer.
+ */
 static const char* mstr(uint16_t offset) {
     return ui::tr(s_strIdBase + offset);
 }
 
+/**
+ * \brief Registers FIDO2 UI translations.
+ */
 static void registerStrings() {
     auto& i18n = ui::I18n::instance();
     s_strIdBase = i18n.registerModule("mod_fido2", STR_COUNT);
@@ -70,7 +81,7 @@ static void registerStrings() {
     i18n.registerTranslation(s_strIdBase + STR_NO_ENTRIES, ui::Language::DE, "Keine Eintraege");
 }
 
-// UI state
+/** \brief FIDO2 UI view and list state. */
 static ui::ListView* s_listView = nullptr;
 static ui::InfoView* s_detailView = nullptr;
 static ui::InfoView* s_promptView = nullptr;
@@ -81,7 +92,7 @@ static char s_labels[FIDO2_MAX_CREDENTIALS][100];
 static uint8_t s_sortMap[FIDO2_MAX_CREDENTIALS];
 static uint8_t s_listCount = 0;
 
-// Prompt state (USB task -> UI flow)
+/** \brief User-presence prompt state shared across callback and UI flow. */
 static SemaphoreHandle_t s_promptSem = nullptr;
 static volatile fido2_user_presence_result_t s_promptResult = FIDO2_UP_PENDING;
 static char s_promptRpId[FIDO2_RP_ID_MAX_LEN] = {};
@@ -92,6 +103,12 @@ static bool s_promptWasLocked = false;
 static bool s_promptBacklightWasOn = false;
 static volatile bool s_promptActive = false;  // Race condition guard
 
+/**
+ * \brief Null-safe ASCII case-insensitive comparison.
+ * \param a First string.
+ * \param b Second string.
+ * \return Compare result (`<0`, `0`, `>0`).
+ */
 static int strcasecmp_safe(const char* a, const char* b) {
     if (!a && !b) return 0;
     if (!a) return -1;
@@ -99,6 +116,9 @@ static int strcasecmp_safe(const char* a, const char* b) {
     return strcasecmp(a, b);
 }
 
+/**
+ * \brief Rebuilds credential list view from current storage contents.
+ */
 static void rebuildList() {
     s_listCount = 0;
     uint8_t count = fido2_get_credential_count();
@@ -150,6 +170,10 @@ static void rebuildList() {
     }
 }
 
+/**
+ * \brief Shows detailed view for selected credential.
+ * \param display_index Display-order index.
+ */
 static void showDetail(uint16_t display_index) {
     uint8_t count = fido2_get_credential_count();
     if (display_index >= count) return;
@@ -199,6 +223,10 @@ static void showDetail(uint16_t display_index) {
     ui::ViewStack::instance().push(s_detailView);
 }
 
+/**
+ * \brief Deletes selected credential and refreshes list.
+ * \param display_index Display-order index.
+ */
 static void handleDelete(uint16_t display_index) {
     uint8_t count = fido2_get_credential_count();
     if (display_index >= count) return;
@@ -218,11 +246,21 @@ static void handleDelete(uint16_t display_index) {
     }
 }
 
+/**
+ * \brief List selection callback opening credential detail view.
+ * \param index Selected row index.
+ * \param userData Optional callback context (unused).
+ */
 static void onListSelect(uint16_t index, void* userData) {
     (void)userData;
     showDetail(index);
 }
 
+/**
+ * \brief List menu callback opening context actions for selected credential.
+ * \param index Selected row index.
+ * \param userData Optional callback context (unused).
+ */
 static void onListMenu(uint16_t index, void* userData) {
     (void)userData;
     if (s_listCount == 0) return;
@@ -247,6 +285,9 @@ static void onListMenu(uint16_t index, void* userData) {
     showContextMenu(title, items, 3);
 }
 
+/**
+ * \brief Restores view stack to pre-prompt depth.
+ */
 static void restoreView() {
     auto& stack = ui::ViewStack::instance();
     while (stack.depth() > s_promptReturnDepth) {
@@ -254,6 +295,10 @@ static void restoreView() {
     }
 }
 
+/**
+ * \brief Completes user-presence prompt flow with result handling.
+ * \param result Final user-presence result.
+ */
 static void promptComplete(fido2_user_presence_result_t result) {
     s_promptActive = false;  // Clear race condition guard
 
@@ -284,18 +329,33 @@ static void promptComplete(fido2_user_presence_result_t result) {
     }
 }
 
+/**
+ * \brief PIN verification callback for locked-screen approval flow.
+ * \param pin Entered PIN string.
+ * \return `true` when badge PIN is valid.
+ */
 static bool onPinVerify(const char* pin) {
     return cdc::core::PinManager::instance().verifyBadgePin(pin);
 }
 
+/**
+ * \brief PIN success callback approving user presence.
+ */
 static void onPinSuccess() {
     promptComplete(FIDO2_UP_APPROVED);
 }
 
+/**
+ * \brief PIN cancel callback denying user presence.
+ */
 static void onPinCancel() {
     promptComplete(FIDO2_UP_DENIED);
 }
 
+/**
+ * \brief PIN failure callback handling lockout vs retry messaging.
+ * \param lockedOut `true` when retries are exhausted.
+ */
 static void onPinFailure(bool lockedOut) {
     if (lockedOut) {
         ui::showToastError(ui::tr(ui::StringId::TOO_MANY_ATTEMPTS), 2000);
@@ -305,6 +365,10 @@ static void onPinFailure(bool lockedOut) {
     }
 }
 
+/**
+ * \brief Prompt approve callback; optionally triggers PIN entry on lock screen.
+ * \param userData Optional callback context (unused).
+ */
 static void onPromptApprove(void* userData) {
     (void)userData;
     if (fido2_is_pin_verified()) {
@@ -336,12 +400,19 @@ static void onPromptApprove(void* userData) {
     promptComplete(FIDO2_UP_APPROVED);
 }
 
+/**
+ * \brief Prompt deny callback.
+ * \param userData Optional callback context (unused).
+ */
 static void onPromptDeny(void* userData) {
     (void)userData;
     fido2_set_pin_verified(false);
     promptComplete(FIDO2_UP_DENIED);
 }
 
+/**
+ * \brief Initializes FIDO2 UI resources and list views.
+ */
 void fido2_ui_init() {
     registerStrings();
     if (!s_listView) {
@@ -356,6 +427,10 @@ void fido2_ui_init() {
     }
 }
 
+/**
+ * \brief Returns FIDO2 credential list view.
+ * \return Pointer to list view instance.
+ */
 cdc::ui::IView* fido2_ui_get_list_view() {
     if (!s_listView) {
         fido2_ui_init();
@@ -364,6 +439,10 @@ cdc::ui::IView* fido2_ui_get_list_view() {
     return s_listView;
 }
 
+/**
+ * \brief Returns localized module label for menus.
+ * \return Label string.
+ */
 const char* fido2_ui_get_label() {
     if (s_strIdBase == 0) {
         registerStrings();
@@ -371,6 +450,13 @@ const char* fido2_ui_get_label() {
     return mstr(STR_WEB_AUTHN);
 }
 
+/**
+ * \brief User-presence callback used by FIDO2 core for approval prompts.
+ * \param rp_id Relying-party identifier.
+ * \param action Requested action type.
+ * \param user_name Optional user-name hint.
+ * \return Final presence decision.
+ */
 fido2_user_presence_result_t fido2_ui_user_presence_callback(
     const char* rp_id,
     fido2_action_t action,

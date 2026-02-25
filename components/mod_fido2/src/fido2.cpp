@@ -1,5 +1,7 @@
-// FIDO2/WebAuthn Module
-// Main interface for credential management and user presence
+/**
+ * \file
+ * \brief FIDO2/WebAuthn runtime entry points and processing task.
+ */
 
 #include "mod_fido2/fido2.h"
 #include "mod_fido2/fido2_storage.h"
@@ -11,7 +13,7 @@
 #include <freertos/task.h>
 #include <string.h>
 
-// USB transport functions (defined in Fido2Module.cpp)
+/** \brief USB transport hooks implemented by Fido2Module.cpp. */
 namespace cdc::mod_fido2 {
     bool fido2_usb_available();
     bool fido2_usb_ready();
@@ -21,9 +23,7 @@ namespace cdc::mod_fido2 {
 
 using namespace cdc::mod_fido2;
 
-// ============================================================================
-// State
-// ============================================================================
+/** \brief Global FIDO2 runtime state. */
 
 static struct {
     bool initialized;
@@ -32,10 +32,10 @@ static struct {
     bool pin_verified;  // PIN was verified via ClientPIN protocol
 } g_fido2 = {};
 
-// ============================================================================
-// FIDO Processing Task
-// ============================================================================
-
+/**
+ * \brief Background task that receives CTAPHID packets and sends responses.
+ * \param arg Unused task argument.
+ */
 static void fido2_task(void* arg) {
     (void)arg;
     uint8_t packet[64];
@@ -117,10 +117,10 @@ static void fido2_task(void* arg) {
     }
 }
 
-// ============================================================================
-// Initialization
-// ============================================================================
-
+/**
+ * \brief Initializes storage, CTAP layers, and starts the processing task.
+ * \return `true` on success, otherwise `false`.
+ */
 bool fido2_init(void) {
     LOG_I("FIDO2", "Initializing...");
 
@@ -157,10 +157,21 @@ bool fido2_init(void) {
     return true;
 }
 
+/**
+ * \brief Sets callback used to request user presence for CTAP operations.
+ * \param cb User-presence callback.
+ */
 void fido2_set_user_presence_callback(fido2_user_presence_cb_t cb) {
     g_fido2.user_presence_cb = cb;
 }
 
+/**
+ * \brief Requests user presence from host/application callback.
+ * \param rp_id Relying-party identifier.
+ * \param action Requested user action.
+ * \param user_name Optional user name.
+ * \return User presence decision.
+ */
 fido2_user_presence_result_t fido2_request_user_presence(
     const char *rp_id,
     fido2_action_t action,
@@ -174,6 +185,10 @@ fido2_user_presence_result_t fido2_request_user_presence(
     return FIDO2_UP_APPROVED;
 }
 
+/**
+ * \brief Stores whether PIN verification was completed via ClientPIN.
+ * \param verified PIN verification state.
+ */
 void fido2_set_pin_verified(bool verified) {
     g_fido2.pin_verified = verified;
     if (verified) {
@@ -181,18 +196,28 @@ void fido2_set_pin_verified(bool verified) {
     }
 }
 
+/**
+ * \brief Returns current PIN-verified state.
+ * \return `true` if PIN was verified, otherwise `false`.
+ */
 bool fido2_is_pin_verified(void) {
     return g_fido2.pin_verified;
 }
 
-// ============================================================================
-// Credential Management
-// ============================================================================
-
+/**
+ * \brief Returns number of stored credentials.
+ * \return Credential count.
+ */
 uint8_t fido2_get_credential_count(void) {
     return fido2_storage_count();
 }
 
+/**
+ * \brief Retrieves credential metadata by visible index.
+ * \param index Zero-based visible credential index.
+ * \param info Destination structure.
+ * \return `true` on success, otherwise `false`.
+ */
 bool fido2_get_credential_info(uint8_t index, fido2_credential_info_t *info) {
     if (!info) return false;
 
@@ -210,15 +235,31 @@ bool fido2_get_credential_info(uint8_t index, fido2_credential_info_t *info) {
     return false;
 }
 
+/**
+ * \brief Finds credential slots matching RP ID hash.
+ * \param rp_id_hash 32-byte RP hash.
+ * \param out_indices Destination slot list.
+ * \param max_indices Capacity of `out_indices`.
+ * \return Number of matching credentials.
+ */
 uint8_t fido2_find_credentials_by_rp(const uint8_t *rp_id_hash,
                                       uint8_t *out_indices, uint8_t max_indices) {
     return fido2_storage_find_by_rp(rp_id_hash, out_indices, max_indices);
 }
 
+/**
+ * \brief Deletes credential in given slot.
+ * \param slot Credential slot index.
+ * \return `true` on success, otherwise `false`.
+ */
 bool fido2_delete_credential(uint8_t slot) {
     return fido2_storage_delete_credential(slot);
 }
 
+/**
+ * \brief Removes all credentials and resets FIDO2 data.
+ * \return `true` on success.
+ */
 bool fido2_factory_reset(void) {
     LOG_W("FIDO2", "Factory reset requested");
 
@@ -233,26 +274,33 @@ bool fido2_factory_reset(void) {
     return true;
 }
 
-// ============================================================================
-// Authentication Counter
-// ============================================================================
-
+/**
+ * \brief Returns global authentication counter.
+ * \return Counter value.
+ */
 uint32_t fido2_get_auth_counter(void) {
     return fido2_storage_counter_get();
 }
 
+/**
+ * \brief Increments global authentication counter.
+ */
 void fido2_increment_auth_counter(void) {
     fido2_storage_counter_increment();
 }
 
-// ============================================================================
-// Status
-// ============================================================================
-
+/**
+ * \brief Indicates whether FIDO2 subsystem is initialized.
+ * \return `true` when initialized, otherwise `false`.
+ */
 bool fido2_is_initialized(void) {
     return g_fido2.initialized;
 }
 
+/**
+ * \brief Returns number of free credential slots.
+ * \return Available slot count.
+ */
 uint8_t fido2_get_available_slots(void) {
     uint16_t ecc_start = fido2_storage_ecc_start();
     uint16_t ecc_end = fido2_storage_ecc_end();

@@ -15,15 +15,27 @@ static const char* TAG = "CMDREGS";
 
 namespace cdc::serial {
 
-// Maximum number of registered commands
+/**
+ * \brief Maximum number of commands that can be registered.
+ */
 static constexpr size_t MAX_COMMANDS = 64;
 
 class CommandRegistry : public ICommandRegistry {
 public:
+    /**
+     * \brief Sets external authentication status provider.
+     * \param authCheck Callback returning current authentication state.
+     * \return void
+     */
     void setAuthProvider(bool (*authCheck)()) override {
         authCheck_ = authCheck;
     }
 
+    /**
+     * \brief Registers a command in the dispatch table.
+     * \param cmd Command descriptor.
+     * \return `true` if registration succeeded.
+     */
     bool registerCommand(const Command& cmd) override {
         if (count_ >= MAX_COMMANDS) {
             LOG_W(TAG, "Command limit reached");
@@ -43,6 +55,11 @@ public:
         return true;
     }
 
+    /**
+     * \brief Unregisters all commands belonging to one module.
+     * \param moduleName Module name key.
+     * \return void
+     */
     void unregisterModule(const char* moduleName) override {
         if (!moduleName) return;
 
@@ -61,8 +78,27 @@ public:
         count_ = writeIdx;
     }
 
+    /**
+     * \brief Sets optional line interceptor for multiline modes.
+     * \param interceptor Interceptor callback.
+     * \return void
+     */
+    void setLineInterceptor(LineInterceptor interceptor) override {
+        lineInterceptor_ = interceptor;
+    }
+
+    /**
+     * \brief Parses and executes one command line.
+     * \param line Raw command line.
+     * \return `true` if line was handled by registry/interceptor.
+     */
     bool processCommand(const char* line) override {
         if (!line || !*line) return false;
+
+        // Check line interceptor first (multiline input modes)
+        if (lineInterceptor_ && lineInterceptor_(line)) {
+            return true;
+        }
 
         // Find command name (first word)
         char cmdBuf[64];
@@ -128,6 +164,10 @@ public:
         return false;
     }
 
+    /**
+     * \brief Prints grouped help for all registered commands.
+     * \return void
+     */
     void showHelp() override {
         Console::printf("=== Available Commands ===\r\n");
 
@@ -153,10 +193,19 @@ public:
         Console::flush();
     }
 
+    /**
+     * \brief Returns count of currently registered commands.
+     * \return Number of registered commands.
+     */
     size_t getCommandCount() const override {
         return count_;
     }
 
+    /**
+     * \brief Sets callback fired after successful command execution.
+     * \param callback Completion callback.
+     * \return void
+     */
     void setOnCommandExecuted(void (*callback)()) override {
         onCommandExecuted_ = callback;
     }
@@ -166,11 +215,18 @@ private:
     size_t count_ = 0;
     bool (*authCheck_)() = nullptr;
     void (*onCommandExecuted_)() = nullptr;
+    LineInterceptor lineInterceptor_ = nullptr;
 };
 
-// Singleton instance
+/**
+ * \brief Singleton command registry instance.
+ */
 static CommandRegistry g_commandRegistry;
 
+/**
+ * \brief Returns singleton command-registry interface.
+ * \return Reference to global `ICommandRegistry` implementation.
+ */
 ICommandRegistry& getCommandRegistry() {
     return g_commandRegistry;
 }

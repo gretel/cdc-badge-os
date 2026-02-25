@@ -39,7 +39,7 @@ static const char* TAG = "BOOT";
 
 using namespace cdc::core;
 
-// HAL instances
+/** \brief Cached HAL/service singleton pointers used during boot sequence. */
 static cdc::hal::II2cBus* s_i2cBus = nullptr;
 static cdc::hal::IKeypad* s_keypad = nullptr;
 static cdc::hal::IPowerManager* s_powerManager = nullptr;
@@ -47,6 +47,10 @@ static cdc::hal::ISecureElement* s_secureElement = nullptr;
 static cdc::hal::ISleepController* s_sleepController = nullptr;
 static cdc::core::AttestationKeyService s_attestationService;
 
+/**
+ * \brief Main firmware entry point.
+ * \return void
+ */
 extern "C" void app_main(void)
 {
     // === STAGE 0: Hardware Minimum ===
@@ -193,8 +197,12 @@ extern "C" void app_main(void)
     if (display && display->init() && display->start()) {
         LOG_I(TAG, "Display ready (%ux%u)", display->getWidth(), display->getHeight());
 
-        // Show boot splash screen
-        display->showSplash();
+        // Show boot splash screen (with wakeup text if resuming from deep sleep)
+        if (wakeup_cause == ESP_SLEEP_WAKEUP_EXT1) {
+            display->showSplash("Waking up...");
+        } else {
+            display->showSplash();
+        }
         LOG_I(TAG, "Splash screen done");
     } else {
         LOG_E(TAG, "Display init failed!");

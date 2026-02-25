@@ -1,11 +1,15 @@
-// Alchemical key fingerprints (FIDO/OpenPGP shared)
+/**
+ * \brief Alchemical key fingerprints shared by FIDO and OpenPGP features.
+ */
 
 #include "cdc_core/KeyFingerprint.h"
 #include "cdc_hal/ISecureElement.h"
 #include "mbedtls/sha256.h"
 #include <string.h>
 
-// 32 alchemical elements (5-bit index)
+/**
+ * \brief Lookup table of 32 alchemical element labels (5-bit index space).
+ */
 static const char* const ALCHEMY_WORDS[32] = {
     "Fire",        "Water",      "Earth",      "Air",
     "Aether",      "Sulfur",     "Mercury",    "Salt",
@@ -17,11 +21,24 @@ static const char* const ALCHEMY_WORDS[32] = {
     "Calx",        "Regulus",    "Quintessence","Stone"
 };
 
+/**
+ * \brief Returns alchemical word for 5-bit index.
+ * \param index Word index in range `[0,31]`.
+ * \return Word string or `"?"` for invalid index.
+ */
 const char* key_fingerprint_word(uint8_t index) {
     if (index >= 32) return "?";
     return ALCHEMY_WORDS[index];
 }
 
+/**
+ * \brief Generates human-readable fingerprint from public key bytes.
+ * \param pubkey Public key buffer.
+ * \param pubkey_len Length of `pubkey`.
+ * \param buf Output string buffer.
+ * \param len Size of output buffer.
+ * \return `true` on success.
+ */
 bool key_fingerprint_from_pubkey(const uint8_t* pubkey, size_t pubkey_len,
                                  char* buf, size_t len) {
     if (!pubkey || !buf || len < KEY_FINGERPRINT_MAX_LEN || pubkey_len == 0) {
@@ -49,6 +66,13 @@ bool key_fingerprint_from_pubkey(const uint8_t* pubkey, size_t pubkey_len,
     return true;
 }
 
+/**
+ * \brief Reads public key from secure element slot and generates fingerprint.
+ * \param slot Secure-element slot number.
+ * \param buf Output string buffer.
+ * \param len Size of output buffer.
+ * \return `true` if a key was read and fingerprint generated.
+ */
 bool key_fingerprint_generate(uint8_t slot, char* buf, size_t len) {
     if (!buf || len < KEY_FINGERPRINT_MAX_LEN) {
         return false;
@@ -69,4 +93,3 @@ bool key_fingerprint_generate(uint8_t slot, char* buf, size_t len) {
     size_t pubkey_len = (curve == cdc::hal::EccCurve::ED25519) ? 32 : 64;
     return key_fingerprint_from_pubkey(pubkey, pubkey_len, buf, len);
 }
-

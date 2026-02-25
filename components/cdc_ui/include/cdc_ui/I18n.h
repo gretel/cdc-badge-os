@@ -53,6 +53,7 @@ enum class StringId : uint16_t {
     UNLOCK,
     ENTER_PIN,
     PRESS_ANY_KEY,
+    DEEP_SLEEP,
     WRONG_PIN,
     LOCKED_OUT,
     TOO_MANY_ATTEMPTS,

@@ -1,0 +1,72 @@
+# CDC Badge OS - Doxygen Configuration
+
+PROJECT_NAME           = "CDC Badge OS"
+PROJECT_BRIEF          = "Firmware for the CDC Badge v1.0 hardware security key"
+PROJECT_NUMBER         = ""
+OUTPUT_DIRECTORY       = doxygen_output
+
+# Input sources - only our own components, not third-party
+INPUT                  = components/cdc_core \
+                         components/cdc_hal \
+                         components/cdc_log \
+                         components/cdc_os_ui \
+                         components/cdc_ui \
+                         components/cdc_views \
+                         components/serial_cmd \
+                         components/usb_badge \
+                         components/mod_ble_serial \
+                         components/mod_fido2 \
+                         components/mod_gpg \
+                         components/mod_hid \
+                         components/mod_nvsedit \
+                         components/mod_password \
+                         components/mod_sao \
+                         components/mod_totp \
+                         components/mod_vcard \
+                         components/grove_led \
+                         main
+RECURSIVE              = YES
+FILE_PATTERNS          = *.h *.hpp *.cpp *.c
+
+# Exclude third-party and build artifacts
+EXCLUDE_PATTERNS       = */test/* */third_party/* */managed_components/* */.pio/*
+
+# Extract settings
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+
+# Source browsing
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+
+# Output
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_XML           = NO
+HTML_OUTPUT            = html
+
+# Graphs
+HAVE_DOT               = NO
+CLASS_DIAGRAMS         = YES
+COLLABORATION_GRAPH    = NO
+INCLUDE_GRAPH          = NO
+INCLUDED_BY_GRAPH      = NO
+
+# Warnings
+WARN_IF_UNDOCUMENTED   = NO
+WARN_NO_PARAMDOC       = NO
+
+# Preprocessing for ESP-IDF macros
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+PREDEFINED             = ESP_OK=0 \
+                         ESP_FAIL=-1 \
+                         EXT_RAM_BSS_ATTR= \
+                         IRAM_ATTR= \
+                         CONFIG_TINYUSB_ENABLED=1
+
+# Optimization
+LOOKUP_CACHE_SIZE      = 2

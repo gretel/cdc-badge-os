@@ -1,5 +1,6 @@
-// USB HID Module - Composite Device Implementation
-// CDC + optional HID/CCID interfaces registered by modules
+/**
+ * \brief USB composite descriptor/runtime builder for CDC plus optional HID/CCID interfaces.
+ */
 
 #include "usb_badge/usb_hid.h"
 #include "usb_descriptors.h"
@@ -20,9 +21,9 @@ extern "C" {
 
 static const char* TAG = "USB_HID";
 
-// ============================================================================
-// State
-// ============================================================================
+/**
+ * \brief Global descriptor and interface registration state.
+ */
 
 static bool s_hid_initialized = false;
 
@@ -36,13 +37,15 @@ static size_t s_hid_count = 0;
 static uint8_t s_config_descriptor[256];
 static uint16_t s_config_descriptor_len = 0;
 
-// Dynamic module interface names (built during apply_config)
+/**
+ * \brief Dynamic module interface names generated during configuration apply.
+ */
 static const char* s_dynamic_strings[MAX_INTERFACES] = {};
 static size_t s_dynamic_string_count = 0;
 
-// ============================================================================
-// USB Descriptors (dynamic config based on registered interfaces)
-// ============================================================================
+/**
+ * \brief Descriptor storage used for runtime-generated TinyUSB configuration descriptors.
+ */
 
 static tusb_desc_device_t device_descriptor = {
     .bLength            = sizeof(tusb_desc_device_t),
@@ -61,6 +64,9 @@ static tusb_desc_device_t device_descriptor = {
     .bNumConfigurations = 1
 };
 
+/**
+ * \brief Rebuilds the composite USB configuration descriptor from registered interfaces.
+ */
 static void build_config_descriptor(void) {
     uint8_t* p = s_config_descriptor;
     s_config_descriptor_len = 0;
@@ -157,9 +163,14 @@ static void build_config_descriptor(void) {
     s_config_descriptor_len = static_cast<uint16_t>(p - s_config_descriptor);
 }
 
-// Serial number derived from ESP32 MAC address
+/**
+ * \brief USB serial number derived from ESP32 MAC address.
+ */
 static char s_serial_number[13] = "000000000000";
 
+/**
+ * \brief Initializes the serial-number string once from efuse MAC.
+ */
 static void init_serial_number() {
     static bool inited = false;
     if (inited) return;
@@ -173,7 +184,9 @@ static void init_serial_number() {
     }
 }
 
-// String Descriptors - fixed strings + dynamic module strings
+/**
+ * \brief Fixed USB string descriptors; dynamic interface strings are appended at runtime.
+ */
 static const char* s_fixed_strings[] = {
     (const char[]){0x09, 0x04},  // 0: Language (English US)
     "CDC",                        // 1: Manufacturer
@@ -183,21 +196,36 @@ static const char* s_fixed_strings[] = {
 };
 static constexpr size_t FIXED_STRING_COUNT = sizeof(s_fixed_strings) / sizeof(s_fixed_strings[0]);
 
-// ============================================================================
-// TinyUSB Callbacks
-// ============================================================================
+/**
+ * \brief TinyUSB descriptor and HID report callbacks.
+ */
 
 extern "C" {
 
+/**
+ * \brief Returns the device descriptor used by TinyUSB.
+ * \return Pointer to static device descriptor.
+ */
 uint8_t const* tud_descriptor_device_cb(void) {
     return (uint8_t const*)&device_descriptor;
 }
 
+/**
+ * \brief Returns the active configuration descriptor.
+ * \param index Configuration index (unused; single configuration only).
+ * \return Pointer to descriptor buffer, or `nullptr` if not built.
+ */
 uint8_t const* tud_descriptor_configuration_cb(uint8_t index) {
     (void)index;
     return s_config_descriptor_len ? s_config_descriptor : nullptr;
 }
 
+/**
+ * \brief Returns UTF-16 string descriptors for fixed and dynamic strings.
+ * \param index String descriptor index.
+ * \param langid Requested language ID (unused).
+ * \return Pointer to UTF-16 descriptor buffer, or `nullptr` if index is invalid.
+ */
 uint16_t const* tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
     (void)langid;
     static uint16_t str_desc[32];
@@ -231,6 +259,11 @@ uint16_t const* tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
     return str_desc;
 }
 
+/**
+ * \brief Returns the HID report descriptor for a HID instance.
+ * \param instance HID instance index.
+ * \return Pointer to report descriptor, or `nullptr` if instance is invalid.
+ */
 uint8_t const* tud_hid_descriptor_report_cb(uint8_t instance) {
     if (instance >= s_hid_count) return nullptr;
     int8_t def_idx = s_hid_map[instance];
@@ -239,6 +272,15 @@ uint8_t const* tud_hid_descriptor_report_cb(uint8_t instance) {
     return def.reportDesc;
 }
 
+/**
+ * \brief Handles HID GET_REPORT requests by delegating to interface callbacks.
+ * \param instance HID instance index.
+ * \param report_id Requested report ID.
+ * \param report_type Requested report type.
+ * \param buffer Destination buffer.
+ * \param reqlen Requested report length.
+ * \return Number of bytes written to `buffer`.
+ */
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
                                hid_report_type_t report_type,
                                uint8_t* buffer, uint16_t reqlen) {
@@ -250,6 +292,14 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
     return def.callbacks.onGetReport(report_id, static_cast<uint8_t>(report_type), buffer, reqlen);
 }
 
+/**
+ * \brief Handles HID SET_REPORT requests by delegating to interface callbacks.
+ * \param instance HID instance index.
+ * \param report_id Report ID.
+ * \param report_type Report type.
+ * \param buffer Report payload.
+ * \param bufsize Payload length in bytes.
+ */
 void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
                            hid_report_type_t report_type,
                            uint8_t const* buffer, uint16_t bufsize) {
@@ -261,6 +311,12 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
     def.callbacks.onSetReport(report_id, static_cast<uint8_t>(report_type), buffer, bufsize);
 }
 
+/**
+ * \brief Notifies interface callbacks that a HID report transfer completed.
+ * \param instance HID instance index.
+ * \param report Transmitted report payload.
+ * \param len Report length in bytes.
+ */
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const* report, uint16_t len) {
     if (instance >= s_hid_count) return;
     int8_t def_idx = s_hid_map[instance];
@@ -272,10 +328,14 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const* report, uint16_
 
 } // extern "C"
 
-// ============================================================================
-// Public API
-// ============================================================================
+/**
+ * \brief Public USB HID/composite configuration API implementation.
+ */
 
+/**
+ * \brief Initializes HID descriptor state and builds default descriptors.
+ * \return `true` if initialization is complete.
+ */
 extern "C" bool usb_hid_init(void) {
     if (s_hid_initialized) return true;
     init_serial_number();
@@ -284,6 +344,13 @@ extern "C" bool usb_hid_init(void) {
     return true;
 }
 
+/**
+ * \brief Applies the runtime interface configuration and optionally triggers re-enumeration.
+ * \param defs Interface definition array.
+ * \param count Number of interface definitions.
+ * \param needs_replug Optional out-flag indicating host re-enumeration request.
+ * \return `true` on successful configuration apply.
+ */
 extern "C" bool usb_hid_apply_config(const UsbInterfaceDef* defs, size_t count, bool* needs_replug) {
     if (needs_replug) *needs_replug = false;
     if (!defs && count > 0) return false;
@@ -306,14 +373,31 @@ extern "C" bool usb_hid_apply_config(const UsbInterfaceDef* defs, size_t count, 
     return true;
 }
 
+/**
+ * \brief Returns whether TinyUSB stack is ready.
+ * \return `true` when USB device stack is ready.
+ */
 extern "C" bool usb_hid_ready(void) {
     return tud_ready();
 }
 
+/**
+ * \brief Returns whether a specific HID instance endpoint is ready.
+ * \param instance HID instance index.
+ * \return `true` if that instance is ready for reports.
+ */
 extern "C" bool usb_hid_instance_ready(uint8_t instance) {
     return tud_hid_n_ready(instance);
 }
 
+/**
+ * \brief Sends one HID report on the selected interface instance.
+ * \param instance HID instance index.
+ * \param report_id Report ID.
+ * \param data Report payload.
+ * \param len Payload length in bytes.
+ * \return `true` if TinyUSB accepted the report for transmission.
+ */
 extern "C" bool usb_hid_send_report(uint8_t instance, uint8_t report_id, const uint8_t* data, uint16_t len) {
     if (!data || len == 0) return false;
     return tud_hid_n_report(instance, report_id, data, len);

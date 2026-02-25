@@ -1,5 +1,7 @@
-// U2F/CTAP1 Protocol Implementation
-// Legacy U2F support for Chrome compatibility
+/**
+ * \file
+ * \brief Legacy U2F/CTAP1 protocol implementation for compatibility clients.
+ */
 
 #include "mod_fido2/u2f.h"
 #include "mod_fido2/fido2.h"
@@ -15,7 +17,7 @@
 using cdc::mod_fido2::get_se;
 using cdc::mod_fido2::sha256;
 
-// DER encoding constants
+/** \brief DER encoding helper constants for X.509/signature generation. */
 static constexpr uint8_t DER_SEQUENCE_TAG = 0x30;
 static constexpr uint8_t DER_INTEGER_TAG = 0x02;
 static constexpr uint8_t DER_BIT_STRING_TAG = 0x03;
@@ -23,29 +25,30 @@ static constexpr uint8_t DER_EXPLICIT_TAG_0 = 0xA0;  // [0] EXPLICIT
 static constexpr uint8_t DER_EXPLICIT_TAG_3 = 0xA3;  // [3] EXPLICIT
 static constexpr uint8_t DER_LENGTH_TWO_BYTES = 0x82;  // Length uses 2 following bytes
 
-// ECDSA signature constants
+/** \brief ECDSA and EC-point encoding constants. */
 static constexpr uint8_t EC_POINT_UNCOMPRESSED = 0x04;  // Uncompressed EC point prefix
 static constexpr uint8_t DER_INTEGER_NEGATIVE_MASK = 0x80;  // MSB set = negative in DER
 static constexpr uint8_t DER_ENSURE_POSITIVE_MASK = 0x7F;  // Mask to ensure positive
 static constexpr int RAW_SIGNATURE_COMPONENT_SIZE = 32;  // Size of R or S in raw signature
 
-// ============================================================================
-// Attestation Certificate
-// ============================================================================
+/** \brief Attestation certificate constants and cached buffers. */
 
 #define U2F_ATTEST_SLOT 0  // ECC slot 0 reserved for attestation
 
-// Cached attestation certificate (DER encoded) - in PSRAM
+/** \brief Cached DER attestation certificate and associated state. */
 EXT_RAM_BSS_ATTR static uint8_t g_attest_cert[U2F_MAX_ATT_CERT_SIZE];
 static uint16_t g_attest_cert_len = 0;
 static uint8_t g_attest_pubkey[65];  // 0x04 || X || Y
 static bool g_attest_initialized = false;
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-// Sign with attestation key (ECC slot 0)
+/**
+ * \brief Signs payload hash with attestation key and encodes signature as DER.
+ * \param data Data to hash and sign.
+ * \param data_len Length of `data`.
+ * \param signature Destination buffer for DER signature.
+ * \param sig_len Output DER signature length.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool u2f_attest_sign(const uint8_t *data, size_t data_len,
                              uint8_t *signature, uint8_t *sig_len) {
     auto* se = get_se();
@@ -106,10 +109,10 @@ static bool u2f_attest_sign(const uint8_t *data, size_t data_len,
     return true;
 }
 
-// ============================================================================
-// Attestation Initialization
-// ============================================================================
-
+/**
+ * \brief Initializes attestation key material and builds self-signed attestation certificate.
+ * \return `true` on success, otherwise `false`.
+ */
 bool u2f_init_attestation(void) {
     if (g_attest_initialized) {
         return true;
@@ -319,6 +322,12 @@ bool u2f_init_attestation(void) {
     return true;
 }
 
+/**
+ * \brief Returns cached attestation certificate pointer and length.
+ * \param cert Output pointer to DER certificate.
+ * \param cert_len Output certificate length.
+ * \return `true` on success, otherwise `false`.
+ */
 bool u2f_get_attestation_cert(const uint8_t **cert, uint16_t *cert_len) {
     if (!g_attest_initialized || !cert || !cert_len) {
         return false;
@@ -328,6 +337,14 @@ bool u2f_get_attestation_cert(const uint8_t **cert, uint16_t *cert_len) {
     return true;
 }
 
+/**
+ * \brief Signs payload using initialized attestation key.
+ * \param data Data to sign.
+ * \param data_len Length of `data`.
+ * \param signature Destination signature buffer.
+ * \param sig_len Output signature length.
+ * \return `true` on success, otherwise `false`.
+ */
 bool u2f_attestation_sign(const uint8_t *data, size_t data_len,
                           uint8_t *signature, uint8_t *sig_len) {
     if (!g_attest_initialized) {
@@ -336,20 +353,34 @@ bool u2f_attestation_sign(const uint8_t *data, size_t data_len,
     return u2f_attest_sign(data, data_len, signature, sig_len);
 }
 
+/**
+ * \brief Writes a U2F status word to response buffer.
+ * \param response Destination response buffer.
+ * \param sw Status word.
+ * \return Number of response bytes written.
+ */
 static uint16_t u2f_response_sw(uint8_t *response, uint16_t sw) {
     response[0] = (sw >> 8) & 0xFF;
     response[1] = sw & 0xFF;
     return 2;
 }
 
+/**
+ * \brief Writes a U2F error status word to response buffer.
+ * \param response Destination response buffer.
+ * \param sw Status word.
+ * \return Number of response bytes written.
+ */
 static uint16_t u2f_response_error(uint8_t *response, uint16_t sw) {
     return u2f_response_sw(response, sw);
 }
 
-// ============================================================================
-// U2F Version (INS 0x03)
-// ============================================================================
-
+/**
+ * \brief Handles U2F `VERSION` instruction (`INS=0x03`).
+ * \param response Destination response buffer.
+ * \param response_max Capacity of `response`.
+ * \return Number of response bytes written.
+ */
 static uint16_t u2f_version(uint8_t *response, uint16_t response_max) {
     const char *version = "U2F_V2";
     size_t len = strlen(version);
@@ -366,12 +397,12 @@ static uint16_t u2f_version(uint8_t *response, uint16_t response_max) {
     return len + 2;
 }
 
-// ============================================================================
-// U2F Register (INS 0x01)
-// ============================================================================
-
-// Check if this is a dummy/blink request (Chrome sends these for device selection)
-// Dummy requests have repetitive application hashes like 0x41414141... (AAAA...)
+/** \brief U2F register/authenticate command helpers. */
+/**
+ * \brief Detects Chrome-style dummy application hashes used for blink/device selection.
+ * \param application Pointer to the 32-byte U2F application hash.
+ * \return `true` if the hash matches the repetitive dummy pattern, otherwise `false`.
+ */
 static bool is_dummy_application(const uint8_t *application) {
     uint8_t first = application[0];
     // Check if all 32 bytes are the same (dummy pattern)
@@ -384,6 +415,14 @@ static bool is_dummy_application(const uint8_t *application) {
     return true;
 }
 
+/**
+ * \brief Handles U2F `REGISTER` instruction (`INS=0x01`).
+ * \param challenge 32-byte challenge parameter.
+ * \param application 32-byte application hash parameter.
+ * \param response Destination response buffer.
+ * \param response_max Capacity of `response`.
+ * \return Number of response bytes written.
+ */
 static uint16_t u2f_register(const uint8_t *challenge, const uint8_t *application,
                               uint8_t *response, uint16_t response_max) {
     LOG_I("U2F", "Register request");
@@ -563,10 +602,17 @@ static uint16_t u2f_register(const uint8_t *challenge, const uint8_t *applicatio
     return offset;
 }
 
-// ============================================================================
-// U2F Authenticate (INS 0x02)
-// ============================================================================
-
+/**
+ * \brief Handles U2F `AUTHENTICATE` instruction (`INS=0x02`).
+ * \param p1 U2F authenticate control byte.
+ * \param challenge 32-byte challenge parameter.
+ * \param application 32-byte application hash parameter.
+ * \param key_handle Key-handle bytes.
+ * \param key_handle_len Length of `key_handle`.
+ * \param response Destination response buffer.
+ * \param response_max Capacity of `response`.
+ * \return Number of response bytes written.
+ */
 static uint16_t u2f_authenticate(uint8_t p1, const uint8_t *challenge,
                                   const uint8_t *application,
                                   const uint8_t *key_handle, uint8_t key_handle_len,
@@ -665,10 +711,14 @@ static uint16_t u2f_authenticate(uint8_t p1, const uint8_t *challenge,
     return offset;
 }
 
-// ============================================================================
-// APDU Parser
-// ============================================================================
-
+/**
+ * \brief Parses U2F APDU and dispatches to instruction handlers.
+ * \param apdu Input APDU bytes.
+ * \param apdu_len Length of `apdu`.
+ * \param response Destination response buffer.
+ * \param response_max Capacity of `response`.
+ * \return Number of response bytes written.
+ */
 uint16_t u2f_process_apdu(const uint8_t *apdu, uint16_t apdu_len,
                           uint8_t *response, uint16_t response_max) {
     if (apdu_len < 4) {

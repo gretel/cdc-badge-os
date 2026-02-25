@@ -11,7 +11,11 @@ set(MODULES
     mod_fido2
     mod_password
     mod_gpg
+    mod_sao
+    mod_vcard
     mod_ble_serial
+    mod_nvsedit
+    mod_hid
 )
 # =============================================================================
 

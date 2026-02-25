@@ -1,9 +1,6 @@
 /**
- * TROPIC01 Secure Element HAL Implementation
- * Based on cdc-badge-os-legacy/components/cdc_badge/tropic01.cpp
- *
- * Thread-safe with FreeRTOS recursive mutex
- * Auto-session management for operations
+ * \file
+ * \brief TROPIC01 secure-element HAL implementation with session-managed libtropic access.
  */
 
 #include "cdc_hal/ISecureElement.h"
@@ -16,7 +13,7 @@
 #include "psa/crypto.h"
 #include <cstring>
 
-// libtropic headers (no extern "C" needed - they have internal guards)
+/** \brief libtropic headers (already guarded for C/C++ linkage). */
 #include "libtropic.h"
 #include "libtropic_common.h"
 #include "libtropic_l2.h"
@@ -27,7 +24,7 @@
 static const char* TAG = "TR01";
 static constexpr uint8_t RMEM_HEADER_MAGIC = 0xCD;
 
-// Pairing keys (production slot 0)
+/** \brief Pairing key material references (production slot 0). */
 #define PAIRING_KEY_PRIV sh0priv_prod0
 #define PAIRING_KEY_PUB sh0pub_prod0
 #define PAIRING_KEY_SLOT TR01_PAIRING_KEY_SLOT_INDEX_0
@@ -35,8 +32,7 @@ static constexpr uint8_t RMEM_HEADER_MAGIC = 0xCD;
 namespace cdc::hal {
 
 /**
- * TROPIC01 Secure Element Implementation
- * Uses libtropic for all cryptographic operations.
+ * \brief Secure-element implementation backed by libtropic.
  */
 class Tropic01Element : public ISecureElement {
 public:
@@ -114,6 +110,10 @@ private:
     mutable bool eccCacheValid_ = false;
 };
 
+/**
+ * \brief Initializes PSA crypto, libtropic device context, and synchronization state.
+ * \return `true` on successful initialization, otherwise `false`.
+ */
 bool Tropic01Element::init() {
     if (state_ != core::ServiceState::UNINITIALIZED) {
         return state_ == core::ServiceState::INITIALIZED ||
@@ -159,6 +159,10 @@ bool Tropic01Element::init() {
     return true;
 }
 
+/**
+ * \brief Starts secure-element service when initialized.
+ * \return `true` when started or already started, otherwise `false`.
+ */
 bool Tropic01Element::start() {
     if (state_ == core::ServiceState::INITIALIZED ||
         state_ == core::ServiceState::STOPPED) {
@@ -168,6 +172,9 @@ bool Tropic01Element::start() {
     return state_ == core::ServiceState::STARTED;
 }
 
+/**
+ * \brief Stops secure-element service and closes active session.
+ */
 void Tropic01Element::stop() {
     if (state_ == core::ServiceState::STARTED) {
         lock();
@@ -179,6 +186,10 @@ void Tropic01Element::stop() {
     }
 }
 
+/**
+ * \brief Opens a secure session with the TROPIC01 chip.
+ * \return `true` on success, otherwise `false`.
+ */
 bool Tropic01Element::sessionStart() {
     lock();
 
@@ -218,6 +229,9 @@ bool Tropic01Element::sessionStart() {
     return true;
 }
 
+/**
+ * \brief Aborts active secure session.
+ */
 void Tropic01Element::sessionEnd() {
     lock();
 
@@ -232,6 +246,9 @@ void Tropic01Element::sessionEnd() {
     unlock();
 }
 
+/**
+ * \brief Requests secure-element sleep mode and marks session inactive.
+ */
 void Tropic01Element::sleep() {
     lock();
 
@@ -252,12 +269,21 @@ void Tropic01Element::sleep() {
     unlock();
 }
 
+/**
+ * \brief Ensures an active secure session for an operation.
+ * \param op Operation name used for logs.
+ * \return `true` when session is active, otherwise `false`.
+ */
 bool Tropic01Element::ensureSession(const char* op) {
     if (sessionActive_) return true;
     LOG_W(TAG, "Session inactive for %s - restarting", op);
     return sessionStart();
 }
 
+/**
+ * \brief Invalidates session state for session-related libtropic failures.
+ * \param ret libtropic return code.
+ */
 void Tropic01Element::handleSessionError(lt_ret_t ret) {
     switch (ret) {
         case LT_L1_CHIP_ALARM_MODE:
@@ -271,6 +297,11 @@ void Tropic01Element::handleSessionError(lt_ret_t ret) {
     }
 }
 
+/**
+ * \brief Maps libtropic return codes to generic secure-element results.
+ * \param ret libtropic return code.
+ * \return Mapped `SeResult`.
+ */
 SeResult Tropic01Element::mapResult(lt_ret_t ret) const {
     switch (ret) {
         case LT_OK:
@@ -290,6 +321,12 @@ SeResult Tropic01Element::mapResult(lt_ret_t ret) const {
     }
 }
 
+/**
+ * \brief Generates an ECC key pair in the requested slot.
+ * \param slot ECC slot index.
+ * \param curve Curve type to generate.
+ * \return Operation result.
+ */
 SeResult Tropic01Element::eccGenerate(uint8_t slot, EccCurve curve) {
     if (slot >= ECC_SLOT_COUNT) {
         return SeResult::INVALID_PARAM;
@@ -315,6 +352,13 @@ SeResult Tropic01Element::eccGenerate(uint8_t slot, EccCurve curve) {
     return mapResult(ret);
 }
 
+/**
+ * \brief Imports an ECC private key into the requested slot.
+ * \param slot ECC slot index.
+ * \param privKey Private key bytes.
+ * \param curve Curve type of the key.
+ * \return Operation result.
+ */
 SeResult Tropic01Element::eccImport(uint8_t slot, const uint8_t* privKey, EccCurve curve) {
     if (slot >= ECC_SLOT_COUNT || !privKey) {
         return SeResult::INVALID_PARAM;
@@ -340,6 +384,13 @@ SeResult Tropic01Element::eccImport(uint8_t slot, const uint8_t* privKey, EccCur
     return mapResult(ret);
 }
 
+/**
+ * \brief Reads public key from ECC slot.
+ * \param slot ECC slot index.
+ * \param pubKey Destination buffer for public key bytes.
+ * \param curve Optional destination for detected curve type.
+ * \return Operation result.
+ */
 SeResult Tropic01Element::eccGetPublicKey(uint8_t slot, uint8_t* pubKey, EccCurve* curve) {
     if (slot >= ECC_SLOT_COUNT || !pubKey) {
         return SeResult::INVALID_PARAM;
@@ -373,6 +424,11 @@ SeResult Tropic01Element::eccGetPublicKey(uint8_t slot, uint8_t* pubKey, EccCurv
     return mapResult(ret);
 }
 
+/**
+ * \brief Erases ECC key material from slot.
+ * \param slot ECC slot index.
+ * \return Operation result.
+ */
 SeResult Tropic01Element::eccDelete(uint8_t slot) {
     if (slot >= ECC_SLOT_COUNT) {
         return SeResult::INVALID_PARAM;
@@ -395,6 +451,11 @@ SeResult Tropic01Element::eccDelete(uint8_t slot) {
     return mapResult(ret);
 }
 
+/**
+ * \brief Checks whether ECC slot currently contains a key.
+ * \param slot ECC slot index.
+ * \return `true` when slot appears populated, otherwise `false`.
+ */
 bool Tropic01Element::eccSlotUsed(uint8_t slot) const {
     if (slot >= ECC_SLOT_COUNT) {
         return false;
@@ -411,6 +472,15 @@ bool Tropic01Element::eccSlotUsed(uint8_t slot) const {
     return (res == SeResult::OK);
 }
 
+/**
+ * \brief Signs a 32-byte hash using ECDSA key in slot.
+ * \param slot ECC slot index.
+ * \param hash 32-byte message digest.
+ * \param hashLen Digest length (must be 32).
+ * \param sig Destination buffer for 64-byte raw `(R,S)` signature.
+ * \param sigLen Output signature length.
+ * \return Operation result.
+ */
 SeResult Tropic01Element::ecdsaSign(uint8_t slot, const uint8_t* hash, size_t hashLen,
                                      uint8_t* sig, size_t* sigLen) {
     if (slot >= ECC_SLOT_COUNT || !hash || hashLen != 32 || !sig || !sigLen) {
@@ -437,6 +507,14 @@ SeResult Tropic01Element::ecdsaSign(uint8_t slot, const uint8_t* hash, size_t ha
     return mapResult(ret);
 }
 
+/**
+ * \brief Signs message using EdDSA key in slot.
+ * \param slot ECC slot index.
+ * \param msg Message buffer.
+ * \param msgLen Message length in bytes.
+ * \param sig Destination buffer for signature.
+ * \return Operation result.
+ */
 SeResult Tropic01Element::eddsaSign(uint8_t slot, const uint8_t* msg, size_t msgLen,
                                      uint8_t* sig) {
     if (slot >= ECC_SLOT_COUNT || !msg || msgLen == 0 || !sig) {
@@ -458,6 +536,14 @@ SeResult Tropic01Element::eddsaSign(uint8_t slot, const uint8_t* msg, size_t msg
     return mapResult(ret);
 }
 
+/**
+ * \brief Reads raw R-memory slot data.
+ * \param slot R-memory slot index.
+ * \param data Destination buffer.
+ * \param maxLen Size of `data` in bytes.
+ * \param actualLen Optional destination for bytes read.
+ * \return Operation result.
+ */
 SeResult Tropic01Element::rmemRead(uint16_t slot, uint8_t* data, uint16_t maxLen,
                                     uint16_t* actualLen) {
     if (slot >= RMEM_SLOT_COUNT || !data || maxLen == 0) {
@@ -489,6 +575,13 @@ SeResult Tropic01Element::rmemRead(uint16_t slot, uint8_t* data, uint16_t maxLen
     return mapResult(ret);
 }
 
+/**
+ * \brief Writes raw data to an R-memory slot.
+ * \param slot R-memory slot index.
+ * \param data Source data buffer.
+ * \param len Number of bytes to write.
+ * \return Operation result.
+ */
 SeResult Tropic01Element::rmemWrite(uint16_t slot, const uint8_t* data, uint16_t len) {
     if (slot >= RMEM_SLOT_COUNT || !data || len == 0 || len > RMEM_SLOT_SIZE) {
         return SeResult::INVALID_PARAM;
@@ -508,6 +601,11 @@ SeResult Tropic01Element::rmemWrite(uint16_t slot, const uint8_t* data, uint16_t
     return mapResult(ret);
 }
 
+/**
+ * \brief Erases one R-memory slot.
+ * \param slot R-memory slot index.
+ * \return Operation result.
+ */
 SeResult Tropic01Element::rmemErase(uint16_t slot) {
     if (slot >= RMEM_SLOT_COUNT) {
         return SeResult::INVALID_PARAM;
@@ -527,6 +625,11 @@ SeResult Tropic01Element::rmemErase(uint16_t slot) {
     return mapResult(ret);
 }
 
+/**
+ * \brief Checks whether R-memory slot contains data.
+ * \param slot R-memory slot index.
+ * \return `true` when slot contains data, otherwise `false`.
+ */
 bool Tropic01Element::rmemSlotUsed(uint16_t slot) const {
     if (slot >= RMEM_SLOT_COUNT) {
         return false;
@@ -540,6 +643,11 @@ bool Tropic01Element::rmemSlotUsed(uint16_t slot) const {
     return (res == SeResult::OK && actualLen > 0);
 }
 
+/**
+ * \brief Computes header checksum for structured R-memory payload.
+ * \param header Header to checksum.
+ * \return 8-bit checksum value.
+ */
 uint8_t Tropic01Element::computeHeaderChecksum(const RMemHeader& header) const {
     uint16_t sum = 0;
     sum += header.moduleId;
@@ -552,6 +660,11 @@ uint8_t Tropic01Element::computeHeaderChecksum(const RMemHeader& header) const {
     return static_cast<uint8_t>(sum & 0xFF);
 }
 
+/**
+ * \brief Validates header magic and checksum.
+ * \param header Header to validate.
+ * \return `true` when valid, otherwise `false`.
+ */
 bool Tropic01Element::validateHeader(const RMemHeader& header) const {
     if (header.magic != RMEM_HEADER_MAGIC) {
         return false;
@@ -559,6 +672,16 @@ bool Tropic01Element::validateHeader(const RMemHeader& header) const {
     return header.checksum == computeHeaderChecksum(header);
 }
 
+/**
+ * \brief Writes payload to R-memory slot with metadata header.
+ * \param slot R-memory slot index.
+ * \param moduleId Owning module identifier.
+ * \param name Optional short record name.
+ * \param flags Record flags.
+ * \param payload Payload data pointer.
+ * \param payloadLen Payload length in bytes.
+ * \return Operation result.
+ */
 SeResult Tropic01Element::rmemWriteWithHeader(uint16_t slot, uint8_t moduleId,
                                               const char* name, uint8_t flags,
                                               const uint8_t* payload, uint16_t payloadLen) {
@@ -595,6 +718,15 @@ SeResult Tropic01Element::rmemWriteWithHeader(uint16_t slot, uint8_t moduleId,
     return rmemWrite(slot, buffer, static_cast<uint16_t>(sizeof(header) + payloadLen));
 }
 
+/**
+ * \brief Reads and validates headered R-memory record.
+ * \param slot R-memory slot index.
+ * \param headerOut Optional destination for parsed header.
+ * \param payloadOut Optional destination for payload bytes.
+ * \param payloadMax Capacity of `payloadOut`.
+ * \param payloadLenOut Optional destination for payload length.
+ * \return Operation result.
+ */
 SeResult Tropic01Element::rmemReadWithHeader(uint16_t slot, RMemHeader* headerOut,
                                              uint8_t* payloadOut, uint16_t payloadMax,
                                              uint16_t* payloadLenOut) {
@@ -640,6 +772,12 @@ SeResult Tropic01Element::rmemReadWithHeader(uint16_t slot, RMemHeader* headerOu
     return SeResult::OK;
 }
 
+/**
+ * \brief Fills buffer with random bytes from TROPIC TRNG with ESP fallback.
+ * \param buffer Destination buffer.
+ * \param size Number of random bytes requested.
+ * \return Always `true` when parameters are valid.
+ */
 bool Tropic01Element::getRandom(uint8_t* buffer, uint16_t size) {
     if (!buffer || size == 0) {
         return false;
@@ -668,6 +806,12 @@ bool Tropic01Element::getRandom(uint8_t* buffer, uint16_t size) {
     return true;
 }
 
+/**
+ * \brief Reads chip serial identifier.
+ * \param serialNum Destination buffer.
+ * \param size Size of `serialNum` buffer.
+ * \return `true` on success, otherwise `false`.
+ */
 bool Tropic01Element::getChipId(uint8_t* serialNum, uint8_t size) {
     if (!serialNum || size < 8) {
         return false;
@@ -695,6 +839,12 @@ bool Tropic01Element::getChipId(uint8_t* serialNum, uint8_t size) {
     return ret == LT_OK;
 }
 
+/**
+ * \brief Reads RISC-V and SPECT firmware major version bytes.
+ * \param riscvVer Destination for RISC-V firmware version.
+ * \param spectVer Destination for SPECT firmware version.
+ * \return `true` on success, otherwise `false`.
+ */
 bool Tropic01Element::getFwVersion(uint8_t* riscvVer, uint8_t* spectVer) {
     if (!riscvVer || !spectVer) {
         return false;
@@ -726,10 +876,13 @@ bool Tropic01Element::getFwVersion(uint8_t* riscvVer, uint8_t* spectVer) {
     return ret == LT_OK;
 }
 
-// Singleton instance
+/** \brief Global singleton instance of TROPIC secure-element implementation. */
 static Tropic01Element g_secureElement;
 
-// Factory function
+/**
+ * \brief Returns the singleton secure element service instance.
+ * \return Pointer to the global `ISecureElement` implementation.
+ */
 ISecureElement* getSecureElementInstance() {
     return &g_secureElement;
 }

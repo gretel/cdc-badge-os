@@ -1,11 +1,6 @@
 /**
- * BLE UART Service Implementation
- *
- * Nordic UART Service (NUS) compatible implementation using NimBLE.
- *
- * NOTE: This is a framework implementation. The actual NimBLE GATT
- * service registration requires integration with BluetoothController
- * which needs to be extended to support custom GATT services.
+ * \file
+ * \brief BLE Nordic UART Service implementation via platform Bluetooth abstraction.
  */
 
 #include "mod_ble_serial/BleUartService.h"
@@ -13,53 +8,39 @@
 #include "cdc_log.h"
 #include <cstring>
 
-// NimBLE includes (only when BLE is enabled)
-#if CONFIG_BT_NIMBLE_ENABLED
-#include "host/ble_hs.h"
-#include "host/ble_uuid.h"
-#include "services/gap/ble_svc_gap.h"
-#include "services/gatt/ble_svc_gatt.h"
-#endif
-
 static const char* TAG = "BLE_UART";
 
 namespace cdc::mod_ble_serial {
 
-// Nordic UART Service UUIDs
-// Service: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
-// RX:      6E400002-B5A3-F393-E0A9-E50E24DCCA9E
-// TX:      6E400003-B5A3-F393-E0A9-E50E24DCCA9E
-
-#if CONFIG_BT_NIMBLE_ENABLED
-static const ble_uuid128_t s_nus_svc_uuid = BLE_UUID128_INIT(
+/** \brief NUS UUIDs in little-endian byte order for `BleUuid::from128`. */
+static const uint8_t NUS_SVC_UUID[16] = {
     0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0,
     0x93, 0xf3, 0xa3, 0xb5, 0x01, 0x00, 0x40, 0x6e
-);
-
-static const ble_uuid128_t s_nus_rx_uuid = BLE_UUID128_INIT(
+};
+/** \brief RX characteristic UUID (phone writes to badge). */
+static const uint8_t NUS_RX_UUID[16] = {
     0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0,
     0x93, 0xf3, 0xa3, 0xb5, 0x02, 0x00, 0x40, 0x6e
-);
-
-static const ble_uuid128_t s_nus_tx_uuid = BLE_UUID128_INIT(
+};
+/** \brief TX characteristic UUID (badge notifies phone). */
+static const uint8_t NUS_TX_UUID[16] = {
     0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0,
     0x93, 0xf3, 0xa3, 0xb5, 0x03, 0x00, 0x40, 0x6e
-);
-#endif
+};
 
-// =============================================================================
-// Singleton
-// =============================================================================
-
+/**
+ * \brief Returns singleton BLE UART service instance.
+ * \return Service singleton reference.
+ */
 BleUartService& BleUartService::instance() {
     static BleUartService inst;
     return inst;
 }
 
-// =============================================================================
-// Initialization
-// =============================================================================
-
+/**
+ * \brief Initializes Nordic UART Service over BLE GATT.
+ * \return `true` on successful initialization.
+ */
 bool BleUartService::init() {
     if (initialized_) {
         return true;
@@ -71,43 +52,85 @@ bool BleUartService::init() {
         return false;
     }
 
-#if CONFIG_BT_NIMBLE_ENABLED
-    // TODO: Register GATT service with NimBLE
-    // This requires extending BluetoothController to support
-    // custom GATT service registration.
-    //
-    // For now, we log a placeholder message.
-    LOG_I(TAG, "BLE UART Service initialized (GATT registration pending)");
+    // Define GATT characteristics via API types
+    using namespace cdc::hal;
+
+    static GattCharacteristic chars[2];
+
+    // RX characteristic (phone writes to badge)
+    chars[0].uuid = BleUuid::from128(NUS_RX_UUID);
+    chars[0].properties = GattProp::WRITE | GattProp::WRITE_NO_RSP;
+    chars[0].permissions = GattPerm::WRITE;
+    chars[0].valueHandle = nullptr;
+    chars[0].onWrite = [](uint16_t /*connHandle*/, uint16_t /*attrHandle*/,
+                          const uint8_t* data, uint16_t len) -> int {
+        BleUartService::instance().onRxData(data, len);
+        return 0;
+    };
+    chars[0].onRead = nullptr;
+
+    // TX characteristic (badge notifies phone)
+    chars[1].uuid = BleUuid::from128(NUS_TX_UUID);
+    chars[1].properties = GattProp::NOTIFY;
+    chars[1].permissions = GattPerm::READ;
+    chars[1].valueHandle = &txCharHandle_;
+    chars[1].onWrite = nullptr;
+    chars[1].onRead = nullptr;
+
+    // Register GATT service
+    static GattServiceDef svcDef;
+    svcDef.uuid = BleUuid::from128(NUS_SVC_UUID);
+    svcDef.characteristics = chars;
+    svcDef.numCharacteristics = 2;
+
+    if (!ble->registerGattService(svcDef)) {
+        LOG_E(TAG, "Failed to register NUS GATT service");
+        return false;
+    }
+
+    // Advertise NUS service UUID so scanners can find us
+    ble->addAdvertisingUuid(BleUuid::from128(NUS_SVC_UUID));
+
+    // Register connection callbacks
+    ble->addConnectionCallback([](uint16_t /*connHandle*/) {
+        BleUartService::instance().onConnectionChange(true);
+    });
+    ble->addDisconnectionCallback([](uint16_t /*connHandle*/, int /*reason*/) {
+        BleUartService::instance().onConnectionChange(false);
+    });
 
     // Reset RX buffer
     rxHead_ = 0;
     rxTail_ = 0;
 
     initialized_ = true;
+    LOG_I(TAG, "NUS service registered (txHandle=%d)", txCharHandle_);
     return true;
-#else
-    LOG_E(TAG, "NimBLE not enabled in config");
-    return false;
-#endif
 }
 
+/**
+ * \brief Deinitializes BLE UART service runtime state.
+ */
 void BleUartService::deinit() {
     if (!initialized_) {
         return;
     }
 
-#if CONFIG_BT_NIMBLE_ENABLED
-    // TODO: Unregister GATT service
-    LOG_I(TAG, "BLE UART Service deinitialized");
-#endif
+    auto* ble = cdc::hal::getBluetoothControllerInstance();
+    if (ble) {
+        ble->removeAdvertisingUuid(cdc::hal::BleUuid::from128(NUS_SVC_UUID));
+    }
 
     initialized_ = false;
+    LOG_I(TAG, "NUS service deinitialized");
 }
 
-// =============================================================================
-// TX (Badge -> Phone)
-// =============================================================================
-
+/**
+ * \brief Sends binary payload to connected BLE peer via notifications.
+ * \param data Data buffer.
+ * \param len Data length.
+ * \return Number of bytes sent.
+ */
 size_t BleUartService::send(const uint8_t* data, size_t len) {
     if (!initialized_ || !isConnected() || !data || len == 0) {
         return 0;
@@ -119,34 +142,53 @@ size_t BleUartService::send(const uint8_t* data, size_t len) {
     }
     txInProgress_ = true;
 
-#if CONFIG_BT_NIMBLE_ENABLED
-    // TODO: Send data via BLE notification
-    // This requires the TX characteristic handle and ble_gatts_notify_custom()
-    //
-    // For now, we just return 0 to indicate nothing was sent.
-    // When implemented:
-    // - Split data into MTU-sized chunks
-    // - Send each chunk via notification
-    // - Handle flow control / congestion
-#endif
+    auto* ble = cdc::hal::getBluetoothControllerInstance();
+    if (!ble) {
+        txInProgress_ = false;
+        return 0;
+    }
+
+    uint16_t connHandle = ble->getConnectionHandle();
+    uint16_t mtu = ble->getMtu();
+    if (mtu == 0) mtu = 20;
+
+    size_t sent = 0;
+    while (sent < len) {
+        uint16_t chunkLen = static_cast<uint16_t>(
+            (len - sent > mtu) ? mtu : (len - sent));
+
+        if (!ble->sendNotification(connHandle, txCharHandle_, data + sent, chunkLen)) {
+            break;
+        }
+        sent += chunkLen;
+    }
 
     txInProgress_ = false;
-    return 0;  // Placeholder
+    return sent;
 }
 
+/**
+ * \brief Sends null-terminated string via BLE UART notifications.
+ * \param str String to send.
+ * \return Number of bytes sent.
+ */
 size_t BleUartService::send(const char* str) {
     if (!str) return 0;
     return send(reinterpret_cast<const uint8_t*>(str), strlen(str));
 }
 
+/**
+ * \brief Returns whether TX path is currently ready.
+ * \return `true` when initialized, connected, and uncongested.
+ */
 bool BleUartService::txReady() const {
     return initialized_ && isConnected() && !txCongested_;
 }
 
-// =============================================================================
-// RX (Phone -> Badge)
-// =============================================================================
-
+/**
+ * \brief Returns number of buffered RX bytes.
+ * \return Available byte count.
+ */
 size_t BleUartService::available() const {
     if (!initialized_) return 0;
 
@@ -160,6 +202,10 @@ size_t BleUartService::available() const {
     }
 }
 
+/**
+ * \brief Reads one byte from RX ring buffer.
+ * \return Byte value or `-1` when empty.
+ */
 int BleUartService::getchar() {
     if (!initialized_ || available() == 0) {
         return -1;
@@ -170,6 +216,12 @@ int BleUartService::getchar() {
     return c;
 }
 
+/**
+ * \brief Reads up to `maxLen` bytes from RX ring buffer.
+ * \param buf Output buffer.
+ * \param maxLen Maximum bytes to read.
+ * \return Number of bytes read.
+ */
 size_t BleUartService::read(uint8_t* buf, size_t maxLen) {
     if (!buf || maxLen == 0) return 0;
 
@@ -182,23 +234,23 @@ size_t BleUartService::read(uint8_t* buf, size_t maxLen) {
     return count;
 }
 
-// =============================================================================
-// Connection State
-// =============================================================================
-
+/**
+ * \brief Returns whether BLE link is currently connected.
+ * \return `true` if controller reports active connection.
+ */
 bool BleUartService::isConnected() const {
     auto* ble = cdc::hal::getBluetoothControllerInstance();
     return ble && ble->isConnected();
 }
 
-// =============================================================================
-// Internal Callbacks
-// =============================================================================
-
+/**
+ * \brief Appends received BLE UART data into RX ring buffer.
+ * \param data Received payload.
+ * \param len Payload length.
+ */
 void BleUartService::onRxData(const uint8_t* data, size_t len) {
     if (!data || len == 0) return;
 
-    // Add data to ring buffer
     for (size_t i = 0; i < len; i++) {
         size_t nextHead = (rxHead_ + 1) % RX_BUFFER_SIZE;
         if (nextHead == rxTail_) {
@@ -210,58 +262,20 @@ void BleUartService::onRxData(const uint8_t* data, size_t len) {
     }
 }
 
-void BleUartService::onMtuUpdate(uint16_t mtu) {
-    // MTU includes 3 bytes overhead, so max data is MTU - 3
-    mtu_ = (mtu > 3) ? (mtu - 3) : 20;
-    LOG_I(TAG, "MTU updated: %d (max payload: %d)", mtu, mtu_);
-}
-
+/**
+ * \brief Handles BLE connection state changes.
+ * \param connected New connection state.
+ */
 void BleUartService::onConnectionChange(bool connected) {
     if (connected) {
         LOG_I(TAG, "Device connected");
         if (onConnect_) onConnect_();
     } else {
         LOG_I(TAG, "Device disconnected");
-        // Clear RX buffer on disconnect
         rxHead_ = 0;
         rxTail_ = 0;
         if (onDisconnect_) onDisconnect_();
     }
-}
-
-int BleUartService::gattAccessCallback(uint16_t connHandle, uint16_t attrHandle,
-                                         void* ctxtPtr, void* arg) {
-    (void)connHandle;
-    (void)attrHandle;
-    (void)arg;
-
-#if CONFIG_BT_NIMBLE_ENABLED
-    auto* ctxt = static_cast<struct ble_gatt_access_ctxt*>(ctxtPtr);
-    auto& self = instance();
-
-    switch (ctxt->op) {
-        case BLE_GATT_ACCESS_OP_WRITE_CHR:
-            // RX characteristic - data from phone
-            if (ctxt->om) {
-                uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
-                uint8_t buf[256];
-                if (len > sizeof(buf)) len = sizeof(buf);
-                ble_hs_mbuf_to_flat(ctxt->om, buf, len, nullptr);
-                self.onRxData(buf, len);
-            }
-            return 0;
-
-        case BLE_GATT_ACCESS_OP_READ_CHR:
-            // TX characteristic - should not be read directly
-            return 0;
-
-        default:
-            return BLE_ATT_ERR_UNLIKELY;
-    }
-#else
-    (void)ctxtPtr;
-    return 0;
-#endif
 }
 
 } // namespace cdc::mod_ble_serial

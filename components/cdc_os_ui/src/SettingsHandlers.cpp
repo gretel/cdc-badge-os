@@ -12,32 +12,47 @@
 
 namespace cdc::ui::settings {
 
-// External dependencies (set by AppUi)
+/**
+ * \brief External dependencies injected by `AppUi`.
+ */
 static hal::IDisplay* s_display = nullptr;
 static hal::ISleepController* s_sleep = nullptr;
 static LockScreenView* s_lockScreen = nullptr;
 
-// Badge text editing state
+/**
+ * \brief Badge text editing workflow state.
+ */
 static constexpr uint8_t BADGE_STEP_NONE = 0;
 static constexpr uint8_t BADGE_STEP_NAME = 1;
 static constexpr uint8_t BADGE_STEP_INFO = 2;
 static constexpr uint8_t BADGE_STEP_INFO2 = 3;
 static uint8_t s_badgeTextPendingStep = BADGE_STEP_NONE;
 
-// Forward declarations for internal use
+/**
+ * \brief Forward declarations for internal helper callbacks.
+ */
 static void showBadgeTextStep(uint8_t step);
 static void onBadgeNameSave(const char* text);
 static void onBadgeInfoSave(const char* text);
 static void onBadgeInfo2Save(const char* text);
 
-// Initialize dependencies (called from AppUi)
+/**
+ * \brief Initializes shared dependencies used by the settings handlers.
+ * \param display Display service used for brightness and rendering-related settings.
+ * \param sleep Sleep controller used for auto-sleep configuration.
+ * \param lockScreen Lock screen view used to reflect updated badge text.
+ * \return void
+ */
 void init(hal::IDisplay* display, hal::ISleepController* sleep, LockScreenView* lockScreen) {
     s_display = display;
     s_sleep = sleep;
     s_lockScreen = lockScreen;
 }
 
-// Process pending badge text steps (call from ui_process)
+/**
+ * \brief Processes the next pending badge-text wizard step.
+ * \return void
+ */
 void processPendingBadgeText() {
     if (s_badgeTextPendingStep == BADGE_STEP_NONE) return;
     uint8_t step = s_badgeTextPendingStep;
@@ -45,6 +60,11 @@ void processPendingBadgeText() {
     showBadgeTextStep(step);
 }
 
+/**
+ * \brief Persists and applies selected backlight value.
+ * \param value Slider value in 0..10 scale.
+ * \return void
+ */
 void onBrightnessSave(uint16_t value) {
     if (s_display) {
         s_display->setBacklight(value * 10);
@@ -52,12 +72,23 @@ void onBrightnessSave(uint16_t value) {
     }
 }
 
+/**
+ * \brief Applies backlight preview without persisting.
+ * \param value Slider value in 0..10 scale.
+ * \return void
+ */
 void onBrightnessChange(uint16_t value) {
     if (s_display) {
         s_display->setBacklight(value * 10);
     }
 }
 
+/**
+ * \brief Returns adaptive brightness step size.
+ * \param current Current slider value.
+ * \param increasing Direction flag.
+ * \return Step size for next adjustment.
+ */
 uint16_t brightnessStepCallback(uint16_t current, bool increasing) {
     if (increasing) {
         if (current < 1) return 1;
@@ -69,12 +100,22 @@ uint16_t brightnessStepCallback(uint16_t current, bool increasing) {
     return 10;
 }
 
+/**
+ * \brief Saves lock-screen sleep interval in minutes.
+ * \param value Sleep interval in minutes.
+ * \return void
+ */
 void onSleepIntervalSave(uint16_t value) {
     if (s_sleep) {
         s_sleep->setLightSleepInterval(static_cast<uint32_t>(value) * 60);
     }
 }
 
+/**
+ * \brief Saves timezone offset and refreshes lock-screen clock.
+ * \param value Slider value mapped to UTC offset.
+ * \return void
+ */
 void onTimezoneSave(uint16_t value) {
     auto* rtc = hal::getRtcInstance();
     if (rtc) {
@@ -95,6 +136,13 @@ void onTimezoneSave(uint16_t value) {
     }
 }
 
+/**
+ * \brief Applies confirmed date to system time.
+ * \param day Day value.
+ * \param month Month value.
+ * \param year Year value.
+ * \return void
+ */
 void onDateConfirm(uint8_t day, uint8_t month, uint16_t year) {
     time_t now = time(nullptr);
     struct tm tm = {};
@@ -109,6 +157,12 @@ void onDateConfirm(uint8_t day, uint8_t month, uint16_t year) {
     settimeofday(&tv, nullptr);
 }
 
+/**
+ * \brief Applies confirmed time to system clock.
+ * \param hour Hour value.
+ * \param minute Minute value.
+ * \return void
+ */
 void onTimeConfirm(uint8_t hour, uint8_t minute) {
     time_t now = time(nullptr);
     struct tm tm = {};
@@ -123,15 +177,29 @@ void onTimeConfirm(uint8_t hour, uint8_t minute) {
     settimeofday(&tv, nullptr);
 }
 
+/**
+ * \brief Handles completion of PIN-change flow.
+ * \param success Indicates whether PIN change succeeded.
+ * \return void
+ */
 void onPinChangeComplete(bool success) {
     (void)success;
     ViewStack::instance().pop();
 }
 
+/**
+ * \brief Starts badge-text editing wizard.
+ * \return void
+ */
 void startBadgeTextEdit() {
     showBadgeTextStep(BADGE_STEP_NAME);
 }
 
+/**
+ * \brief Shows one step of badge-text wizard.
+ * \param step Wizard step identifier.
+ * \return void
+ */
 static void showBadgeTextStep(uint8_t step) {
     if (!s_lockScreen) return;
 
@@ -162,24 +230,45 @@ static void showBadgeTextStep(uint8_t step) {
     showT9Input(title, initial, cb, LockScreenView::MAX_TEXT_LEN);
 }
 
+/**
+ * \brief Handles save callback for badge display name.
+ * \param text Saved text value.
+ * \return void
+ */
 static void onBadgeNameSave(const char* text) {
     if (s_lockScreen) s_lockScreen->setDisplayName(text);
     saveDisplayField("name", text);
     s_badgeTextPendingStep = BADGE_STEP_INFO;
 }
 
+/**
+ * \brief Handles save callback for badge info line 1.
+ * \param text Saved text value.
+ * \return void
+ */
 static void onBadgeInfoSave(const char* text) {
     if (s_lockScreen) s_lockScreen->setInfo(text);
     saveDisplayField("info", text);
     s_badgeTextPendingStep = BADGE_STEP_INFO2;
 }
 
+/**
+ * \brief Handles save callback for badge info line 2.
+ * \param text Saved text value.
+ * \return void
+ */
 static void onBadgeInfo2Save(const char* text) {
     if (s_lockScreen) s_lockScreen->setInfo2(text);
     saveDisplayField("info2", text);
     s_badgeTextPendingStep = BADGE_STEP_NONE;
 }
 
+/**
+ * \brief Saves one display text field to NVS.
+ * \param key NVS key for the field.
+ * \param value Field value to persist.
+ * \return void
+ */
 void saveDisplayField(const char* key, const char* value) {
     if (!key) return;
     nvs_handle_t nvs;

@@ -90,7 +90,7 @@ public:
     /**
      * Show boot splash screen
      */
-    virtual void showSplash() = 0;
+    virtual void showSplash(const char* subtitle = nullptr) = 0;
 
     // === GFX Drawing Methods (avoid unsafe casts) ===
 

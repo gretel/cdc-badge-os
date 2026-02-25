@@ -12,16 +12,24 @@ static const char* TAG = "SpiBus";
 
 namespace cdc::hal {
 
-// ESP32-S3 uses SPI2_HOST for user devices
+/** \brief Shared SPI host selection for ESP32-S3 user peripherals. */
 static constexpr spi_host_device_t SPI_BUS_HOST = SPI2_HOST;
 static constexpr uint32_t SPI_DMA_CHAN = SPI_DMA_CH_AUTO;
 
 static std::atomic<bool> g_spiInitialized{false};
 
+/**
+ * \brief Returns shared SPI host identifier.
+ * \return SPI host used by shared bus.
+ */
 spi_host_device_t getSharedSpiHost() {
     return SPI_BUS_HOST;
 }
 
+/**
+ * \brief Initializes shared SPI bus once for all SPI peripherals.
+ * \return ESP-IDF error code.
+ */
 esp_err_t initSharedSpiBus() {
     // Already initialized?
     if (g_spiInitialized.load()) {

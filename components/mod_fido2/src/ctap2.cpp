@@ -1,5 +1,7 @@
-// CTAP2 Protocol Implementation (FIDO2)
-// Based on FIDO2 CTAP2 Specification v2.1
+/**
+ * \file
+ * \brief CTAP2/FIDO2 command processing and ClientPIN implementation.
+ */
 
 #include "mod_fido2/ctap2.h"
 #include "mod_fido2/cbor_helpers.h"
@@ -28,11 +30,7 @@
 using cdc::mod_fido2::sha256;
 using cdc::mod_fido2::sha256_str;
 
-// ============================================================================
-// Configuration
-// ============================================================================
-
-// Debug flags (default off for production, can be overridden via build flags)
+/** \brief Debug configuration flags (overrideable via build flags). */
 #ifndef CTAP2_DEBUG
 #define CTAP2_DEBUG                 0   // Verbose CBOR/response dumps
 #endif
@@ -40,8 +38,7 @@ using cdc::mod_fido2::sha256_str;
 #define CTAP2_DEBUG_COMMANDS        0   // Command logging
 #endif
 
-// AAGUID - Authenticator Attestation GUID (unique per device model)
-// CDC Badge v1 - 39C3: CDCBAD6E-39C3-0001-BAD6-E00100000001
+/** \brief Authenticator Attestation GUID for this authenticator model. */
 static const uint8_t AAGUID[16] = {
     0xCD, 0xCB, 0xAD, 0x6E,  // "CDCBAD6E"
     0x39, 0xC3,              // 39C3
@@ -50,14 +47,12 @@ static const uint8_t AAGUID[16] = {
     0x00, 0x00, 0x00, 0x01   // Device type
 };
 
-// Device info strings
+/** \brief Device info strings reported by `authenticatorGetInfo`. */
 static const char *INFO_TRANSPORTS[] = {"usb"};
 
 #define USER_PRESENCE_TIMEOUT_MS    30000   // 30 seconds for user to respond
 
-// ============================================================================
-// State
-// ============================================================================
+/** \brief Global CTAP2 runtime state. */
 
 static struct {
     bool initialized;
@@ -75,16 +70,14 @@ static struct {
     bool assertion_appid_used;
 } g_ctap2 = {};
 
-// ============================================================================
-// ClientPIN State (Protocol 2)
-// ============================================================================
+/** \brief ClientPIN constants and state for PIN protocol support. */
 
 #define PIN_PROTOCOL_VERSION    2
 #define PIN_TOKEN_SIZE          32
 #define PIN_RETRIES_MAX         8
 #define PIN_UV_RETRIES_MAX      3
 
-// ClientPIN subcommands
+/** \brief ClientPIN subcommand identifiers. */
 #define PIN_CMD_GET_RETRIES         0x01
 #define PIN_CMD_GET_KEY_AGREEMENT   0x02
 #define PIN_CMD_SET_PIN             0x03
@@ -92,7 +85,7 @@ static struct {
 #define PIN_CMD_GET_PIN_TOKEN       0x05
 #define PIN_CMD_GET_PIN_UV_TOKEN    0x09
 
-// pinUvAuthToken permissions (CTAP 2.1)
+/** \brief pinUvAuthToken permission flags (CTAP 2.1). */
 #define PIN_PERM_MAKE_CREDENTIAL    0x01    // mc
 #define PIN_PERM_GET_ASSERTION      0x02    // ga
 #define PIN_PERM_CRED_MGMT          0x04    // cm
@@ -121,11 +114,7 @@ static struct {
     uint8_t uv_retries;
 } g_client_pin = {};
 
-// ============================================================================
-// Credential Management State (CTAP 2.1)
-// ============================================================================
-
-// CredentialManagement subcommands
+/** \brief Credential management constants and enumeration state. */
 #define CRED_MGMT_GET_CREDS_METADATA            0x01
 #define CRED_MGMT_ENUMERATE_RPS_BEGIN           0x02
 #define CRED_MGMT_ENUMERATE_RPS_GET_NEXT        0x03
@@ -146,10 +135,11 @@ static struct {
     uint8_t current_rp_id_hash[32];              // RP being enumerated
 } g_cred_mgmt = {};
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
+/**
+ * \brief Fills a buffer with cryptographically secure random bytes.
+ * \param out Destination buffer.
+ * \param len Number of random bytes to generate.
+ */
 static void secure_random_fill(uint8_t* out, size_t len) {
     auto* se = cdc::hal::getSecureElementInstance();
     if (se && se->isSessionActive() && se->getRandom(out, static_cast<uint16_t>(len))) {
@@ -170,6 +160,13 @@ static uint8_t build_authenticator_data(
     uint16_t *out_len
 );
 
+/**
+ * \brief mbedTLS RNG callback backed by secure random source.
+ * \param ctx Unused context pointer.
+ * \param out Destination buffer.
+ * \param len Number of random bytes.
+ * \return Always returns `0`.
+ */
 static int ctap2_random(void *ctx, unsigned char *out, size_t len) {
     (void)ctx;
     // Use TROPIC01 TRNG (with ESP32 fallback)
@@ -177,6 +174,16 @@ static int ctap2_random(void *ctx, unsigned char *out, size_t len) {
     return 0;
 }
 
+/**
+ * \brief Builds attested credential data (AAGUID, credential ID, COSE key).
+ * \param cred_id Credential ID bytes.
+ * \param cred_id_len Length of `cred_id`.
+ * \param pubkey Public key bytes.
+ * \param curve Public-key curve identifier.
+ * \param out Destination buffer.
+ * \param out_len Output length of encoded structure.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool ctap2_build_attested_cred(const uint8_t *cred_id,
                                       uint16_t cred_id_len,
                                       const uint8_t *pubkey,
@@ -208,7 +215,13 @@ static bool ctap2_build_attested_cred(const uint8_t *cred_id,
     return !cbor_writer_error(&cose_w);
 }
 
-// Build credProtect extension CBOR: {"credProtect": level}
+/**
+ * \brief Builds CBOR payload for the `credProtect` extension.
+ * \param level Requested credProtect level.
+ * \param out Output buffer for CBOR bytes.
+ * \param out_size Size of `out` in bytes.
+ * \return Encoded CBOR length, or `0` on failure.
+ */
 static uint16_t ctap2_build_cred_protect_extension(uint8_t level, uint8_t *out, size_t out_size) {
     if (level == 0 || !out || out_size < 20) return 0;
     cbor_writer_t w;
@@ -222,6 +235,16 @@ static uint16_t ctap2_build_cred_protect_extension(uint8_t level, uint8_t *out, 
     return (uint16_t)cbor_writer_length(&w);
 }
 
+/**
+ * \brief Builds authenticator data for makeCredential with optional credProtect extension.
+ * \param rp_id_hash SHA-256 hash of RP ID.
+ * \param attested_cred Encoded attested credential data.
+ * \param attested_len Length of `attested_cred`.
+ * \param cred_protect Requested credProtect level.
+ * \param auth_data Destination buffer for authenticator data.
+ * \param auth_data_len Output length.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool ctap2_build_auth_data_for_cred(const uint8_t *rp_id_hash,
                                            const uint8_t *attested_cred,
                                            uint16_t attested_len,
@@ -253,6 +276,12 @@ static bool ctap2_build_auth_data_for_cred(const uint8_t *rp_id_hash,
                                     auth_data, auth_data_len) == CTAP2_OK;
 }
 
+/**
+ * \brief Builds CBOR payload for `appid` extension in assertions.
+ * \param out Output buffer.
+ * \param out_size Size of `out` in bytes.
+ * \return Encoded CBOR length, or `0` on failure.
+ */
 static uint16_t ctap2_build_appid_extension(uint8_t *out, size_t out_size) {
     cbor_writer_t w;
     cbor_writer_init(&w, out, out_size);
@@ -265,6 +294,18 @@ static uint16_t ctap2_build_appid_extension(uint8_t *out, size_t out_size) {
     return (uint16_t)cbor_writer_length(&w);
 }
 
+/**
+ * \brief Builds packed-attestation makeCredential response CBOR payload.
+ * \param auth_data Authenticator data bytes.
+ * \param auth_data_len Length of `auth_data`.
+ * \param sig Attestation signature bytes.
+ * \param sig_len Length of `sig`.
+ * \param cert Optional attestation certificate.
+ * \param cert_len Length of `cert`.
+ * \param response Destination CTAP2 response buffer.
+ * \param response_len In/out response buffer length.
+ * \return CTAP2 status code.
+ */
 static uint8_t ctap2_build_make_credential_response_packed(const uint8_t *auth_data,
                                                             uint16_t auth_data_len,
                                                             const uint8_t *sig,
@@ -326,6 +367,12 @@ static uint8_t ctap2_build_make_credential_response_packed(const uint8_t *auth_d
     return CTAP2_OK;
 }
 
+/**
+ * \brief Generates ephemeral P-256 key pair and exports 64-byte `X||Y` public key.
+ * \param key Destination keypair structure.
+ * \param pubkey Destination buffer for public key coordinates.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool ctap2_generate_ephemeral_keypair(mbedtls_ecp_keypair *key, uint8_t pubkey[64]) {
     if (!key || !pubkey) return false;
     mbedtls_ecp_keypair_init(key);
@@ -360,6 +407,16 @@ static bool ctap2_generate_ephemeral_keypair(mbedtls_ecp_keypair *key, uint8_t p
     return true;
 }
 
+/**
+ * \brief Signs message using provided keypair (ECDSA over SHA-256).
+ * \param key Keypair for signing.
+ * \param msg Message bytes to hash and sign.
+ * \param msg_len Length of `msg`.
+ * \param sig Destination signature buffer.
+ * \param sig_size Size of `sig`.
+ * \param sig_len Output signature length.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool ctap2_sign_with_keypair(mbedtls_ecp_keypair *key,
                                     const uint8_t *msg, size_t msg_len,
                                     uint8_t *sig, size_t sig_size, size_t *sig_len) {
@@ -384,6 +441,19 @@ static bool ctap2_sign_with_keypair(mbedtls_ecp_keypair *key,
     return rc == 0;
 }
 
+/**
+ * \brief Builds raw authenticatorData structure.
+ * \param rp_id_hash SHA-256 hash of RP ID.
+ * \param flags Authenticator data flags.
+ * \param sign_count Signature counter value.
+ * \param attested_cred_data Optional attested credential block.
+ * \param attested_cred_len Length of `attested_cred_data`.
+ * \param ext_data Optional extension CBOR bytes.
+ * \param ext_len Length of `ext_data`.
+ * \param out Destination buffer.
+ * \param out_len Output length.
+ * \return CTAP2 status code.
+ */
 static uint8_t build_authenticator_data(
     const uint8_t *rp_id_hash,
     uint8_t flags,
@@ -428,6 +498,13 @@ static uint8_t build_authenticator_data(
     return CTAP2_OK;
 }
 
+/**
+ * \brief Requests user-presence confirmation through platform callback.
+ * \param rp_id RP ID shown to user.
+ * \param action Requested user action type.
+ * \param user_name Optional user name shown for registration.
+ * \return `true` when approved, otherwise `false`.
+ */
 static bool wait_for_user_presence(const char *rp_id, fido2_action_t action, const char *user_name) {
     LOG_I("CTAP2", "User presence required for %s at %s",
           action == FIDO2_ACTION_REGISTER ? "registration" : "authentication",
@@ -456,10 +533,12 @@ static bool wait_for_user_presence(const char *rp_id, fido2_action_t action, con
     }
 }
 
-// ============================================================================
-// getInfo (0x04)
-// ============================================================================
-
+/**
+ * \brief Handles CTAP2 `authenticatorGetInfo` (`0x04`).
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2 status code.
+ */
 uint8_t ctap2_get_info(uint8_t *response, uint16_t *response_len) {
     cbor_writer_t w;
     cbor_writer_init(&w, response + 1, *response_len - 1);
@@ -566,11 +645,7 @@ uint8_t ctap2_get_info(uint8_t *response, uint16_t *response_len) {
     return CTAP2_OK;
 }
 
-// ============================================================================
-// makeCredential (0x01)
-// ============================================================================
-
-// Parsed parameters for makeCredential command
+/** \brief Parsed parameters for `authenticatorMakeCredential`. */
 struct MakeCredentialParams {
     uint8_t client_data_hash[32];
     char rp_id[FIDO2_RP_ID_MAX_LEN];
@@ -599,7 +674,12 @@ struct MakeCredentialParams {
     }
 };
 
-// Parse the rp map from CBOR
+/**
+ * \brief Parses the RP map from a makeCredential CBOR request.
+ * \param r CBOR reader positioned at the RP map.
+ * \param p Output parameter structure to fill.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool parse_rp_map(cbor_reader_t *r, MakeCredentialParams *p) {
     int rp_count = cbor_read_map(r);
     if (rp_count < 0) return false;
@@ -623,7 +703,12 @@ static bool parse_rp_map(cbor_reader_t *r, MakeCredentialParams *p) {
     return true;
 }
 
-// Parse the user map from CBOR
+/**
+ * \brief Parses the user map from a makeCredential CBOR request.
+ * \param r CBOR reader positioned at the user map.
+ * \param p Output parameter structure to fill.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool parse_user_map(cbor_reader_t *r, MakeCredentialParams *p) {
     int user_count = cbor_read_map(r);
     if (user_count < 0) return false;
@@ -650,7 +735,12 @@ static bool parse_user_map(cbor_reader_t *r, MakeCredentialParams *p) {
     return true;
 }
 
-// Parse pubKeyCredParams array from CBOR
+/**
+ * \brief Parses `pubKeyCredParams` and selects a supported algorithm.
+ * \param r CBOR reader positioned at the params array.
+ * \param p Output parameter structure to fill.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool parse_pubkey_cred_params(cbor_reader_t *r, MakeCredentialParams *p) {
     int params_count = cbor_read_array(r);
     if (params_count < 0) return false;
@@ -680,7 +770,12 @@ static bool parse_pubkey_cred_params(cbor_reader_t *r, MakeCredentialParams *p) 
     return true;
 }
 
-// Parse extensions map from CBOR
+/**
+ * \brief Parses makeCredential extensions map from CBOR.
+ * \param r CBOR reader positioned at the extensions map.
+ * \param p Output parameter structure to fill.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool parse_extensions_map(cbor_reader_t *r, MakeCredentialParams *p) {
     int ext_count = cbor_read_map(r);
     if (ext_count < 0) return false;
@@ -710,7 +805,12 @@ static bool parse_extensions_map(cbor_reader_t *r, MakeCredentialParams *p) {
     return true;
 }
 
-// Parse options map from CBOR
+/**
+ * \brief Parses makeCredential options map from CBOR.
+ * \param r CBOR reader positioned at the options map.
+ * \param p Output parameter structure to fill.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool parse_options_map(cbor_reader_t *r, MakeCredentialParams *p) {
     int opt_count = cbor_read_map(r);
     if (opt_count < 0) return false;
@@ -735,7 +835,13 @@ static bool parse_options_map(cbor_reader_t *r, MakeCredentialParams *p) {
     return true;
 }
 
-// Parse all makeCredential parameters from CBOR
+/**
+ * \brief Parses complete makeCredential request map from CBOR payload.
+ * \param data CBOR request payload.
+ * \param data_len Length of `data`.
+ * \param p Output parameter structure.
+ * \return CTAP2 status code.
+ */
 static uint8_t parse_make_credential_params(const uint8_t *data, uint16_t data_len,
                                             MakeCredentialParams *p) {
     cbor_reader_t r;
@@ -802,7 +908,11 @@ static uint8_t parse_make_credential_params(const uint8_t *data, uint16_t data_l
     return CTAP2_OK;
 }
 
-// Verify PIN/UV auth parameter
+/**
+ * \brief Verifies `pinUvAuthParam` for makeCredential.
+ * \param p Parsed makeCredential parameters.
+ * \return CTAP2 status code.
+ */
 static uint8_t verify_pin_uv_auth(const MakeCredentialParams *p) {
     LOG_D("CTAP2", "pinToken valid=%d", g_client_pin.pin_token_valid);
 
@@ -835,7 +945,11 @@ static uint8_t verify_pin_uv_auth(const MakeCredentialParams *p) {
     return CTAP2_OK;
 }
 
-// Check appidExclude extension
+/**
+ * \brief Validates the `appidExclude` extension against existing credentials.
+ * \param p Parsed makeCredential parameters.
+ * \return CTAP2 status code.
+ */
 static uint8_t check_appid_exclude(const MakeCredentialParams *p) {
     if (!p->has_appid_exclude || p->appid_exclude[0] == '\0') {
         return CTAP2_OK;
@@ -849,7 +963,13 @@ static uint8_t check_appid_exclude(const MakeCredentialParams *p) {
     return CTAP2_OK;
 }
 
-// Handle browser probe/selection requests (Firefox: "make.me.blink", Chrome: ".dummy")
+/**
+ * \brief Handles browser probe RP IDs by returning a synthetic attested response.
+ * \param p Parsed makeCredential parameters.
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2 status code.
+ */
 static uint8_t handle_browser_probe(const MakeCredentialParams *p,
                                     uint8_t *response, uint16_t *response_len) {
     LOG_I("CTAP2", "Browser probe request (%s) - waiting for user selection", p->rp_id);
@@ -931,12 +1051,23 @@ static uint8_t handle_browser_probe(const MakeCredentialParams *p,
     return status;
 }
 
-// Check if rp_id is a browser probe request
+/**
+ * \brief Detects known browser probe RP IDs.
+ * \param rp_id RP ID string to test.
+ * \return `true` if this RP ID is treated as a probe, otherwise `false`.
+ */
 static bool is_browser_probe(const char *rp_id) {
     return strcmp(rp_id, "make.me.blink") == 0 || strcmp(rp_id, ".dummy") == 0;
 }
 
-// Create credential, sign with attestation key, and build response
+/**
+ * \brief Creates credential, signs attestation statement, and builds response.
+ * \param p Parsed makeCredential parameters.
+ * \param curve Selected key curve.
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2 status code.
+ */
 static uint8_t create_credential_and_respond(const MakeCredentialParams *p,
                                              uint8_t curve,
                                              uint8_t *response, uint16_t *response_len) {
@@ -1033,6 +1164,14 @@ static uint8_t create_credential_and_respond(const MakeCredentialParams *p,
     return status;
 }
 
+/**
+ * \brief Handles CTAP2 `authenticatorMakeCredential` (`0x01`).
+ * \param params CBOR request payload.
+ * \param params_len Length of `params`.
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2 status code.
+ */
 uint8_t ctap2_make_credential(const uint8_t *params, uint16_t params_len,
                                uint8_t *response, uint16_t *response_len) {
     MakeCredentialParams p;
@@ -1107,11 +1246,7 @@ uint8_t ctap2_make_credential(const uint8_t *params, uint16_t params_len,
     return create_credential_and_respond(&p, curve, response, response_len);
 }
 
-// ============================================================================
-// getAssertion Helper Structures and Functions
-// ============================================================================
-
-// Parameters parsed from getAssertion CBOR request
+/** \brief Parsed parameters for `authenticatorGetAssertion`. */
 struct GetAssertionParams {
     char rp_id[FIDO2_RP_ID_MAX_LEN];
     uint8_t rp_id_hash[32];
@@ -1139,7 +1274,7 @@ struct GetAssertionParams {
     uint8_t pin_uv_auth_protocol;
 };
 
-// Result of credential filtering for assertion
+/** \brief Credential-selection result used to build assertion responses. */
 struct AssertionCredentials {
     uint8_t slots[FIDO2_MAX_CREDENTIALS];
     uint8_t count;
@@ -1148,7 +1283,13 @@ struct AssertionCredentials {
     uint8_t* hash_in_use;  // Points to rp_id_hash or appid_hash
 };
 
-// Parse a single credential from allowList
+/**
+ * \brief Parses one allowList credential descriptor and extracts credential ID.
+ * \param r CBOR reader positioned at one descriptor map.
+ * \param cred_id Output credential ID buffer.
+ * \param cred_id_len Output credential ID length.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool ga_parse_allow_list_credential(cbor_reader_t *r, uint8_t *cred_id,
                                            size_t *cred_id_len) {
     int cred_map = cbor_read_map(r);
@@ -1179,7 +1320,12 @@ static bool ga_parse_allow_list_credential(cbor_reader_t *r, uint8_t *cred_id,
     return have_id && *cred_id_len == FIDO2_CRED_ID_LEN;
 }
 
-// Parse allowList (0x03) from CBOR
+/**
+ * \brief Parses getAssertion `allowList` (map key `0x03`).
+ * \param r CBOR reader positioned at the allowList value.
+ * \param p Output getAssertion parameter structure.
+ * \return CTAP2 status code.
+ */
 static uint8_t ga_parse_allow_list(cbor_reader_t *r, GetAssertionParams *p) {
     int list_count = cbor_read_array(r);
     if (list_count < 0) {
@@ -1217,7 +1363,12 @@ static uint8_t ga_parse_allow_list(cbor_reader_t *r, GetAssertionParams *p) {
     return CTAP2_OK;
 }
 
-// Parse extensions (0x04) from CBOR
+/**
+ * \brief Parses getAssertion extensions (map key `0x04`).
+ * \param r CBOR reader positioned at the extensions value.
+ * \param p Output getAssertion parameter structure.
+ * \return CTAP2 status code.
+ */
 static uint8_t ga_parse_extensions(cbor_reader_t *r, GetAssertionParams *p) {
     int ext_count = cbor_read_map(r);
     if (ext_count < 0) {
@@ -1247,7 +1398,12 @@ static uint8_t ga_parse_extensions(cbor_reader_t *r, GetAssertionParams *p) {
     return CTAP2_OK;
 }
 
-// Parse options (0x05) from CBOR
+/**
+ * \brief Parses getAssertion options (map key `0x05`).
+ * \param r CBOR reader positioned at the options value.
+ * \param p Output getAssertion parameter structure.
+ * \return CTAP2 status code.
+ */
 static uint8_t ga_parse_options(cbor_reader_t *r, GetAssertionParams *p) {
     int opt_count = cbor_read_map(r);
     if (opt_count < 0) {
@@ -1273,7 +1429,13 @@ static uint8_t ga_parse_options(cbor_reader_t *r, GetAssertionParams *p) {
     return CTAP2_OK;
 }
 
-// Parse all getAssertion CBOR parameters
+/**
+ * \brief Parses complete getAssertion request map from CBOR payload.
+ * \param params CBOR request payload.
+ * \param params_len Length of `params`.
+ * \param p Output parameter structure.
+ * \return CTAP2 status code.
+ */
 static uint8_t ga_parse_params(const uint8_t *params, uint16_t params_len,
                                GetAssertionParams *p) {
     memset(p, 0, sizeof(*p));
@@ -1353,7 +1515,12 @@ static uint8_t ga_parse_params(const uint8_t *params, uint16_t params_len,
     return CTAP2_OK;
 }
 
-// Verify pinUvAuthParam using HMAC
+/**
+ * \brief Verifies getAssertion `pinUvAuthParam` via HMAC.
+ * \param p Parsed getAssertion parameters.
+ * \param uv_verified Output flag set to UV verification result.
+ * \return CTAP2 status code.
+ */
 static uint8_t ga_verify_pin_auth(const GetAssertionParams *p, bool *uv_verified) {
     *uv_verified = false;
 
@@ -1406,7 +1573,12 @@ static uint8_t ga_verify_pin_auth(const GetAssertionParams *p, bool *uv_verified
     return CTAP2_OK;
 }
 
-// Find matching credentials, handling appid extension
+/**
+ * \brief Finds credentials matching RP/allowList and appid extension rules.
+ * \param p Parsed getAssertion parameters (modified during selection).
+ * \param creds Output credential selection result.
+ * \return void
+ */
 static void ga_find_credentials(GetAssertionParams *p, AssertionCredentials *creds) {
     memset(creds, 0, sizeof(*creds));
     creds->hash_in_use = p->rp_id_hash;
@@ -1468,7 +1640,16 @@ static void ga_find_credentials(GetAssertionParams *p, AssertionCredentials *cre
     }
 }
 
-// Sign assertion data (authData || clientDataHash)
+/**
+ * \brief Signs assertion message (`authData || clientDataHash`) for one credential slot.
+ * \param slot Credential slot index.
+ * \param auth_data Authenticator data bytes.
+ * \param auth_data_len Length of `auth_data`.
+ * \param client_data_hash ClientDataHash bytes.
+ * \param signature Destination signature buffer.
+ * \param sig_len Output signature length.
+ * \return CTAP2 status code.
+ */
 static uint8_t ga_sign_assertion(uint8_t slot, const uint8_t *auth_data,
                                  uint16_t auth_data_len, const uint8_t *client_data_hash,
                                  uint8_t *signature, uint8_t *sig_len) {
@@ -1490,7 +1671,20 @@ static uint8_t ga_sign_assertion(uint8_t slot, const uint8_t *auth_data,
     return CTAP2_OK;
 }
 
-// Build CBOR response for getAssertion
+/**
+ * \brief Builds CBOR response payload for getAssertion/getNextAssertion.
+ * \param cred_id Credential ID bytes.
+ * \param auth_data Authenticator data bytes.
+ * \param auth_data_len Length of `auth_data`.
+ * \param signature Assertion signature bytes.
+ * \param sig_len Length of `signature`.
+ * \param cred Credential metadata record.
+ * \param include_user Whether to include user entity map.
+ * \param total_creds Total matching credential count.
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2 status code.
+ */
 static uint8_t ga_build_response(const uint8_t *cred_id, const uint8_t *auth_data,
                                  uint16_t auth_data_len, const uint8_t *signature,
                                  uint8_t sig_len, const fido2_credential_info_t *cred,
@@ -1553,10 +1747,14 @@ static uint8_t ga_build_response(const uint8_t *cred_id, const uint8_t *auth_dat
     return CTAP2_OK;
 }
 
-// ============================================================================
-// getAssertion (0x02)
-// ============================================================================
-
+/**
+ * \brief Handles CTAP2 `authenticatorGetAssertion` (`0x02`).
+ * \param params CBOR request payload.
+ * \param params_len Length of `params`.
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2 status code.
+ */
 uint8_t ctap2_get_assertion(const uint8_t *params, uint16_t params_len,
                              uint8_t *response, uint16_t *response_len) {
     // Step 1: Parse CBOR parameters
@@ -1687,10 +1885,12 @@ uint8_t ctap2_get_assertion(const uint8_t *params, uint16_t params_len,
     return CTAP2_OK;
 }
 
-// ============================================================================
-// getNextAssertion (0x08)
-// ============================================================================
-
+/**
+ * \brief Handles CTAP2 `authenticatorGetNextAssertion` (`0x08`).
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2 status code.
+ */
 uint8_t ctap2_get_next_assertion(uint8_t *response, uint16_t *response_len) {
     if (g_ctap2.assertion_count == 0 || !g_ctap2.assertion_up_done) {
         response[0] = CTAP2_ERR_NOT_ALLOWED;
@@ -1782,11 +1982,11 @@ uint8_t ctap2_get_next_assertion(uint8_t *response, uint16_t *response_len) {
     return CTAP2_OK;
 }
 
-// ============================================================================
-// clientPIN (0x06) - Full Implementation
-// ============================================================================
-
-// Initialize ClientPIN ECDH key pair
+/** \brief ClientPIN command implementation helpers. */
+/**
+ * \brief Initializes the ClientPIN ephemeral ECDH key pair.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool client_pin_init_ecdh(void) {
     if (g_client_pin.ecdh_valid) return true;
 
@@ -1807,9 +2007,14 @@ static bool client_pin_init_ecdh(void) {
     return true;
 }
 
-// Compute shared secret from platform's public key
-// Protocol 1: sharedSecret = SHA256(Z)
-// Protocol 2: sharedSecret = HKDF-SHA256(salt=0, IKM=Z, info="CTAP2 AES key")
+/**
+ * \brief Computes ClientPIN shared secret from platform ECDH public key.
+ * \param platform_key_x Platform public key X coordinate.
+ * \param platform_key_y Platform public key Y coordinate.
+ * \param pin_protocol PIN protocol version.
+ * \param shared_secret Output 32-byte shared secret.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool client_pin_compute_shared_secret(const uint8_t *platform_key_x,
                                               const uint8_t *platform_key_y,
                                               uint8_t pin_protocol,
@@ -1920,7 +2125,15 @@ cleanup:
     return ret == 0;
 }
 
-// AES-256-CBC decrypt with custom IV
+/**
+ * \brief Decrypts data using AES-256-CBC with caller-provided IV.
+ * \param key 32-byte AES key.
+ * \param iv 16-byte IV.
+ * \param input Ciphertext buffer.
+ * \param len Ciphertext length in bytes.
+ * \param output Destination plaintext buffer.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool aes_256_cbc_decrypt_iv(const uint8_t *key, const uint8_t *iv,
                                     const uint8_t *input, size_t len, uint8_t *output) {
     mbedtls_aes_context aes;
@@ -1940,14 +2153,28 @@ static bool aes_256_cbc_decrypt_iv(const uint8_t *key, const uint8_t *iv,
     return ret == 0;
 }
 
-// AES-256-CBC decrypt (IV = 0) - for Protocol 1
+/**
+ * \brief Decrypts Protocol-1 PIN payload (AES-256-CBC with zero IV).
+ * \param key 32-byte AES key.
+ * \param input Ciphertext buffer.
+ * \param len Ciphertext length in bytes.
+ * \param output Destination plaintext buffer.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool aes_256_cbc_decrypt(const uint8_t *key, const uint8_t *input,
                                  size_t len, uint8_t *output) {
     uint8_t iv[16] = {0};
     return aes_256_cbc_decrypt_iv(key, iv, input, len, output);
 }
 
-// AES-256-CBC encrypt (IV = 0) - for Protocol 1
+/**
+ * \brief Encrypts Protocol-1 PIN payload (AES-256-CBC with zero IV).
+ * \param key 32-byte AES key.
+ * \param input Plaintext buffer.
+ * \param len Plaintext length in bytes.
+ * \param output Destination ciphertext buffer.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool aes_256_cbc_encrypt(const uint8_t *key, const uint8_t *input,
                                  size_t len, uint8_t *output) {
     mbedtls_aes_context aes;
@@ -1966,8 +2193,14 @@ static bool aes_256_cbc_encrypt(const uint8_t *key, const uint8_t *input,
     return ret == 0;
 }
 
-// AES-256-CBC encrypt for Protocol 2: returns IV || ciphertext
-// output must have space for len + 16 bytes (IV prefix)
+/**
+ * \brief Encrypts Protocol-2 PIN payload and prefixes random IV (`IV || ciphertext`).
+ * \param key 32-byte AES key.
+ * \param input Plaintext buffer.
+ * \param len Plaintext length in bytes.
+ * \param output Destination buffer (`len + 16` bytes required).
+ * \return `true` on success, otherwise `false`.
+ */
 static bool aes_256_cbc_encrypt_p2(const uint8_t *key, const uint8_t *input,
                                     size_t len, uint8_t *output) {
     mbedtls_aes_context aes;
@@ -1992,7 +2225,12 @@ static bool aes_256_cbc_encrypt_p2(const uint8_t *key, const uint8_t *input,
     return ret == 0;
 }
 
-// getPINRetries (subCommand 0x01)
+/**
+ * \brief Handles ClientPIN subcommand `getPINRetries` (`0x01`).
+ * \param response Output response buffer.
+ * \param response_len In/out length of `response`.
+ * \return CTAP2 status code.
+ */
 static uint8_t client_pin_get_retries(uint8_t *response, uint16_t *response_len) {
     cbor_writer_t w;
     cbor_writer_init(&w, response + 1, *response_len - 1);
@@ -2012,7 +2250,12 @@ static uint8_t client_pin_get_retries(uint8_t *response, uint16_t *response_len)
     return CTAP2_OK;
 }
 
-// getKeyAgreement (subCommand 0x02)
+/**
+ * \brief Handles ClientPIN subcommand `getKeyAgreement` (`0x02`).
+ * \param response Output response buffer.
+ * \param response_len In/out length of `response`.
+ * \return CTAP2 status code.
+ */
 static uint8_t client_pin_get_key_agreement(uint8_t *response, uint16_t *response_len) {
     if (!client_pin_init_ecdh()) {
         response[0] = CTAP2_ERR_OTHER;
@@ -2068,7 +2311,14 @@ static uint8_t client_pin_get_key_agreement(uint8_t *response, uint16_t *respons
     return CTAP2_OK;
 }
 
-// getPinToken (subCommand 0x05)
+/**
+ * \brief Handles ClientPIN subcommand `getPinToken` (`0x05`).
+ * \param params CBOR request payload.
+ * \param params_len Length of `params`.
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2 status code.
+ */
 static uint8_t client_pin_get_pin_token(const uint8_t *params, uint16_t params_len,
                                          uint8_t *response, uint16_t *response_len) {
     // Check if PIN is blocked
@@ -2374,7 +2624,14 @@ static uint8_t client_pin_get_pin_token(const uint8_t *params, uint16_t params_l
     return CTAP2_OK;
 }
 
-// getPinUvAuthTokenUsingPinWithPermissions (0x09) - CTAP 2.1
+/**
+ * \brief Handles ClientPIN subcommand `getPinUvAuthTokenUsingPinWithPermissions` (`0x09`).
+ * \param params CBOR request payload.
+ * \param params_len Length of `params`.
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2 status code.
+ */
 static uint8_t client_pin_get_pin_uv_auth_token(const uint8_t *params, uint16_t params_len,
                                                  uint8_t *response, uint16_t *response_len) {
     // Check if PIN is blocked
@@ -2596,6 +2853,14 @@ static uint8_t client_pin_get_pin_uv_auth_token(const uint8_t *params, uint16_t 
     return CTAP2_OK;
 }
 
+/**
+ * \brief Handles CTAP2 `authenticatorClientPIN` (`0x06`).
+ * \param params CBOR request payload.
+ * \param params_len Length of `params`.
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2 status code.
+ */
 uint8_t ctap2_client_pin(const uint8_t *params, uint16_t params_len,
                           uint8_t *response, uint16_t *response_len) {
     // Initialize if needed
@@ -2669,10 +2934,12 @@ uint8_t ctap2_client_pin(const uint8_t *params, uint16_t params_len,
     }
 }
 
-// ============================================================================
-// reset (0x07)
-// ============================================================================
-
+/**
+ * \brief Handles CTAP2 `authenticatorReset` (`0x07`).
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2 status code.
+ */
 uint8_t ctap2_reset(uint8_t *response, uint16_t *response_len) {
     // Reset requires user presence within 10 seconds of power up
     // For now, just perform the reset
@@ -2688,11 +2955,11 @@ uint8_t ctap2_reset(uint8_t *response, uint16_t *response_len) {
     return CTAP2_OK;
 }
 
-// ============================================================================
-// credentialManagement (0x0A)
-// ============================================================================
-
-// Helper: Count unique RPs among resident credentials
+/** \brief Credential-management helper and command implementation. */
+/**
+ * \brief Counts unique RP IDs among resident credentials.
+ * \return Number of unique relying parties.
+ */
 static uint8_t cred_mgmt_count_unique_rps(void) {
     // Large buffer in PSRAM (32 * 32 = 1024 bytes)
     EXT_RAM_BSS_ATTR static uint8_t unique_hashes[FIDO2_MAX_CREDENTIALS][32];
@@ -2723,7 +2990,11 @@ static uint8_t cred_mgmt_count_unique_rps(void) {
     return count;
 }
 
-// Helper: Find all resident credentials for an RP
+/**
+ * \brief Collects resident credentials for the given RP ID hash.
+ * \param rp_id_hash 32-byte RP ID hash to match.
+ * \return Number of matching credentials.
+ */
 static uint8_t cred_mgmt_find_creds_for_rp(const uint8_t *rp_id_hash) {
     uint8_t count = 0;
 
@@ -2741,7 +3012,13 @@ static uint8_t cred_mgmt_find_creds_for_rp(const uint8_t *rp_id_hash) {
     return count;
 }
 
-// Helper: Encode RP response
+/**
+ * \brief Encodes a credential-management RP response entry.
+ * \param w CBOR writer for output encoding.
+ * \param slot Credential slot used as RP representative.
+ * \param include_total Whether to include total RP count.
+ * \return void
+ */
 static void cred_mgmt_encode_rp(cbor_writer_t *w, uint8_t slot, bool include_total) {
     fido2_credential_info_t info;
     if (!fido2_storage_get_credential(slot, &info)) return;
@@ -2766,7 +3043,13 @@ static void cred_mgmt_encode_rp(cbor_writer_t *w, uint8_t slot, bool include_tot
     }
 }
 
-// Helper: Encode credential response
+/**
+ * \brief Encodes a credential-management credential response entry.
+ * \param w CBOR writer for output encoding.
+ * \param slot Credential slot to encode.
+ * \param include_total Whether to include total credential count.
+ * \return void
+ */
 static void cred_mgmt_encode_credential(cbor_writer_t *w, uint8_t slot, bool include_total) {
     fido2_credential_info_t info;
     if (!fido2_storage_get_credential(slot, &info)) return;
@@ -2835,6 +3118,14 @@ static void cred_mgmt_encode_credential(cbor_writer_t *w, uint8_t slot, bool inc
     cbor_encode_uint(w, info.cred_protect ? info.cred_protect : 1);
 }
 
+/**
+ * \brief Handles CTAP2 `authenticatorCredentialManagement` (`0x0A`).
+ * \param params CBOR request payload.
+ * \param params_len Length of `params`.
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2 status code.
+ */
 uint8_t ctap2_cred_management(const uint8_t *params, uint16_t params_len,
                                uint8_t *response, uint16_t *response_len) {
     // Parse parameters
@@ -3081,10 +3372,12 @@ uint8_t ctap2_cred_management(const uint8_t *params, uint16_t params_len,
     return CTAP2_OK;
 }
 
-// ============================================================================
-// selection (0x0B)
-// ============================================================================
-
+/**
+ * \brief Handles CTAP2 `authenticatorSelection` (`0x0B`).
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2 status code.
+ */
 uint8_t ctap2_selection(uint8_t *response, uint16_t *response_len) {
     // Selection just requires user presence
     if (!wait_for_user_presence(NULL, FIDO2_ACTION_AUTHENTICATE, NULL)) {
@@ -3098,10 +3391,10 @@ uint8_t ctap2_selection(uint8_t *response, uint16_t *response_len) {
     return CTAP2_OK;
 }
 
-// ============================================================================
-// Main Command Processor
-// ============================================================================
-
+/**
+ * \brief Initializes CTAP2 runtime state.
+ * \return `true` on success.
+ */
 bool ctap2_init(void) {
     LOG_I("CTAP2", "Initializing...");
     memset(&g_ctap2, 0, sizeof(g_ctap2));
@@ -3110,6 +3403,14 @@ bool ctap2_init(void) {
     return true;
 }
 
+/**
+ * \brief Dispatches one CTAP2 command and writes response payload.
+ * \param cmd Command buffer (`command byte || CBOR params`).
+ * \param cmd_len Length of `cmd`.
+ * \param response Output response buffer.
+ * \param response_len In/out response length.
+ * \return CTAP2/CTAP1 status code.
+ */
 uint8_t ctap2_process_command(const uint8_t *cmd, uint16_t cmd_len,
                                uint8_t *response, uint16_t *response_len) {
     if (!g_ctap2.initialized || cmd_len < 1) {
@@ -3191,6 +3492,10 @@ uint8_t ctap2_process_command(const uint8_t *cmd, uint16_t cmd_len,
     return status;
 }
 
+/**
+ * \brief Sends CTAPHID keepalive for currently active channel.
+ * \param status Keepalive status byte.
+ */
 void ctap2_send_keepalive(uint8_t status) {
     uint32_t cid = ctaphid_get_current_cid();
     if (cid != 0) {
@@ -3198,6 +3503,9 @@ void ctap2_send_keepalive(uint8_t status) {
     }
 }
 
+/**
+ * \brief Marks current CTAP2 operation as cancelled.
+ */
 void ctap2_cancel(void) {
     g_ctap2.cancelled = true;
     if (CTAP2_DEBUG_COMMANDS) LOG_D("CTAP2", "Operation cancelled");

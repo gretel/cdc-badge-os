@@ -12,7 +12,7 @@ static const char* TAG = "I2cBus";
 
 namespace cdc::hal {
 
-// I2C configuration
+/** \brief I2C bus timing configuration constants. */
 static constexpr uint32_t I2C_FREQ_HZ = 100000;  // 100kHz standard mode
 static constexpr uint32_t I2C_TIMEOUT_MS = 100;
 
@@ -59,6 +59,10 @@ private:
     size_t deviceCount_ = 0;
 };
 
+/**
+ * \brief Initializes hardware I2C controller and driver.
+ * \return `true` if initialization succeeded.
+ */
 bool I2cBusImpl::init() {
     if (state_ != core::ServiceState::UNINITIALIZED) {
         return state_ == core::ServiceState::INITIALIZED;
@@ -92,6 +96,12 @@ bool I2cBusImpl::init() {
     return true;
 }
 
+/**
+ * \brief Registers an I2C target device in static device pool.
+ * \param addr 7-bit device address.
+ * \param out_dev Output handle for registered device.
+ * \return ESP-IDF status code.
+ */
 esp_err_t I2cBusImpl::addDevice(uint8_t addr, I2cDeviceHandle* out_dev) {
     if (deviceCount_ >= MAX_DEVICES) {
         LOG_E(TAG, "%s: device pool full", name_);
@@ -107,6 +117,14 @@ esp_err_t I2cBusImpl::addDevice(uint8_t addr, I2cDeviceHandle* out_dev) {
     return ESP_OK;
 }
 
+/**
+ * \brief Writes bytes to a register of an I2C device.
+ * \param handle Device handle.
+ * \param reg Register address.
+ * \param data Data buffer.
+ * \param len Number of bytes to write.
+ * \return ESP-IDF status code.
+ */
 esp_err_t I2cBusImpl::writeReg(I2cDeviceHandle handle, uint8_t reg,
                                const uint8_t* data, size_t len) {
     auto* dev = static_cast<I2cDevice*>(handle);
@@ -127,6 +145,14 @@ esp_err_t I2cBusImpl::writeReg(I2cDeviceHandle handle, uint8_t reg,
     return err;
 }
 
+/**
+ * \brief Reads bytes from a register of an I2C device.
+ * \param handle Device handle.
+ * \param reg Register address.
+ * \param data Output data buffer.
+ * \param len Number of bytes to read.
+ * \return ESP-IDF status code.
+ */
 esp_err_t I2cBusImpl::readReg(I2cDeviceHandle handle, uint8_t reg,
                               uint8_t* data, size_t len) {
     auto* dev = static_cast<I2cDevice*>(handle);
@@ -153,11 +179,19 @@ esp_err_t I2cBusImpl::readReg(I2cDeviceHandle handle, uint8_t reg,
     return err;
 }
 
-// Singleton instances
+/** \brief Singleton instances for both hardware I2C ports. */
 static I2cBusImpl g_i2c0(I2C_NUM_0, I2C0_SDA_PIN, I2C0_SCL_PIN, "i2c0");
 static I2cBusImpl g_i2c1(I2C_NUM_1, I2C1_SDA_PIN, I2C1_SCL_PIN, "i2c1");
 
+/**
+ * \brief Returns singleton instance of I2C bus 0.
+ * \return Pointer to `II2cBus` instance.
+ */
 II2cBus* getI2cBus0() { return &g_i2c0; }
+/**
+ * \brief Returns singleton instance of I2C bus 1.
+ * \return Pointer to `II2cBus` instance.
+ */
 II2cBus* getI2cBus1() { return &g_i2c1; }
 
 } // namespace cdc::hal

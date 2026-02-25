@@ -26,12 +26,11 @@ static const char* TAG = "SERIAL";
 
 namespace cdc::serial {
 
-// ============================================================================
-// Constants
-// ============================================================================
+/**
+ * \brief Internal constants used by serial command processing.
+ */
 
 static constexpr size_t HISTORY_MAX = 10;
-static constexpr size_t BLOB_PREVIEW_BYTES = 64;
 static constexpr size_t HEX_DUMP_WIDTH = 16;
 static constexpr size_t NVS_KEY_MAX_LEN = 15;
 static constexpr size_t NVS_NAMESPACE_MAX_LEN = 15;
@@ -39,39 +38,48 @@ static constexpr int YEAR_MIN = 2020;
 static constexpr int YEAR_MAX = 2100;
 static constexpr uint32_t WIPE_PROGRESS_INTERVAL = 64;
 
-// ============================================================================
-// Static State
-// ============================================================================
+/**
+ * \brief Global static state for line editing and command dispatch.
+ */
 
 static char s_cmdBuffer[SerialCmd::CMD_BUFFER_SIZE] = {};
 static size_t s_cmdBufferPos = 0;
 static bool s_initialized = false;
 
-// Command history (PSRAM)
+/**
+ * \brief Command history ring buffer allocated in PSRAM.
+ */
 EXT_RAM_BSS_ATTR static char s_historyBuffer[HISTORY_MAX][SerialCmd::CMD_BUFFER_SIZE];
 static size_t s_historyCount = 0;
 static size_t s_historyHead = 0;
 static size_t s_historyPos = 0;
 
-// Escape sequence state
+/**
+ * \brief Escape-sequence parser state for ANSI key handling.
+ */
 enum class EscState : uint8_t { NONE, ESC, BRACKET };
 static EscState s_escState = EscState::NONE;
 
-// Callbacks
+/**
+ * \brief Optional callbacks injected by higher-level modules.
+ */
 static TextChangeCallback s_textCallback = nullptr;
 static TimeChangeCallback s_timeCallback = nullptr;
 
-// Authentication state
+/**
+ * \brief Session authentication flags and timeout baseline.
+ */
 static bool s_authenticated = false;
 static uint64_t s_authTimestamp = 0;
 
-// ============================================================================
-// Helper Functions - General Purpose
-// ============================================================================
+/**
+ * \brief General-purpose helper functions.
+ */
 
 #if FEATURE_SECURE_SERIAL
 /**
- * Reset authentication timer on command execution
+ * \brief Resets the command authentication timeout timer.
+ * \return void
  */
 static void resetAuthTimer() {
     if (s_authenticated) {
@@ -81,7 +89,9 @@ static void resetAuthTimer() {
 #endif
 
 /**
- * Add command to history buffer (ring buffer)
+ * \brief Adds a command line to the history ring buffer.
+ * \param cmd Command string to store.
+ * \return void
  */
 static void historyAdd(const char* cmd) {
     if (!cmd || !*cmd) return;
@@ -96,7 +106,9 @@ static void historyAdd(const char* cmd) {
 }
 
 /**
- * Get history entry by index (0 = newest)
+ * \brief Returns a history entry by reverse index (`0` = newest).
+ * \param idx Reverse history index.
+ * \return Pointer to the command string, or `nullptr` if out of range.
  */
 static const char* historyGet(size_t idx) {
     if (idx >= s_historyCount) return nullptr;
@@ -105,7 +117,10 @@ static const char* historyGet(size_t idx) {
 }
 
 /**
- * Clear current line and redraw with new content
+ * \brief Clears the current console line and redraws it with new content.
+ * \param newContent Replacement line content.
+ * \param bufferPos In/out cursor position updated to new content length.
+ * \return void
  */
 static void redrawLine(const char* newContent, size_t& bufferPos) {
     while (bufferPos > 0) {
@@ -123,9 +138,9 @@ static void redrawLine(const char* newContent, size_t& bufferPos) {
     }
 }
 
-// ============================================================================
-// Helper Functions - Slot Parsing
-// ============================================================================
+/**
+ * \brief Slot parsing helpers for secure-element commands.
+ */
 
 /**
  * Result of slot parsing operation
@@ -136,11 +151,11 @@ struct SlotParseResult {
 };
 
 /**
- * Parse a slot number from string argument
- * @param args Input string containing the slot number
- * @param maxSlot Maximum valid slot value (exclusive)
- * @param slotTypeName Name for error messages (e.g., "ECC slot", "R-Memory slot")
- * @return Parse result with validity flag and parsed value
+ * \brief Parses a slot number from a string argument.
+ * \param args Input string containing the slot number.
+ * \param maxSlot Maximum valid slot value (exclusive).
+ * \param slotTypeName Name for error messages (for example, "ECC slot" or "R-Memory slot").
+ * \return Parse result with validity flag and parsed value.
  */
 static SlotParseResult parseSlotArg(const char* args, uint16_t maxSlot, const char* slotTypeName) {
     SlotParseResult result = {false, 0};
@@ -168,13 +183,13 @@ static SlotParseResult parseSlotArg(const char* args, uint16_t maxSlot, const ch
     return result;
 }
 
-// ============================================================================
-// Helper Functions - Secure Element
-// ============================================================================
+/**
+ * \brief Secure-element access helpers.
+ */
 
 /**
- * Get secure element instance with validation
- * @return Pointer to SE instance, or nullptr with error message printed
+ * \brief Returns the secure element instance after availability validation.
+ * \return Pointer to the secure element instance, or `nullptr` if unavailable.
  */
 static hal::ISecureElement* getSecureElementWithCheck() {
     auto* se = hal::getSecureElementInstance();
@@ -184,12 +199,16 @@ static hal::ISecureElement* getSecureElementWithCheck() {
     return se;
 }
 
-// ============================================================================
-// Helper Functions - NVS
-// ============================================================================
+/**
+ * \brief NVS utility helpers used by command handlers.
+ */
 
 /**
- * Print hex dump of binary data
+ * \brief Prints a bounded hex dump of binary data.
+ * \param data Input binary buffer.
+ * \param len Total data length.
+ * \param maxBytes Maximum number of bytes to print.
+ * \return void
  */
 static void printHexDump(const uint8_t* data, size_t len, size_t maxBytes) {
     for (size_t i = 0; i < len && i < maxBytes; i += HEX_DUMP_WIDTH) {
@@ -205,7 +224,9 @@ static void printHexDump(const uint8_t* data, size_t len, size_t maxBytes) {
 }
 
 /**
- * Get human-readable name for NVS type
+ * \brief Returns a human-readable name for an NVS type value.
+ * \param type NVS value type.
+ * \return Static type-name string.
  */
 static const char* getNvsTypeName(nvs_type_t type) {
     switch (type) {
@@ -224,7 +245,10 @@ static const char* getNvsTypeName(nvs_type_t type) {
 }
 
 /**
- * Find NVS key type by iterating through namespace
+ * \brief Finds the stored NVS type of a key by namespace iteration.
+ * \param ns NVS namespace name.
+ * \param key Key name to inspect.
+ * \return Resolved NVS type, or `NVS_TYPE_ANY` if unknown.
  */
 static nvs_type_t findNvsKeyType(const char* ns, const char* key) {
     nvs_iterator_t it = nullptr;
@@ -246,7 +270,11 @@ static nvs_type_t findNvsKeyType(const char* ns, const char* key) {
 }
 
 /**
- * Print NVS value based on its type
+ * \brief Prints an NVS value according to its stored type.
+ * \param nvs Open NVS handle.
+ * \param key Key name.
+ * \param type Value type of the key.
+ * \return void
  */
 static void printNvsValue(nvs_handle_t nvs, const char* key, nvs_type_t type) {
     switch (type) {
@@ -333,7 +361,7 @@ static void printNvsValue(nvs_handle_t nvs, const char* key, nvs_type_t type) {
                     break;
                 }
                 if (nvs_get_blob(nvs, key, buf, &len) == ESP_OK) {
-                    printHexDump(buf, len, BLOB_PREVIEW_BYTES);
+                    printHexDump(buf, len, len);
                 }
                 free(buf);
             }
@@ -345,15 +373,15 @@ static void printNvsValue(nvs_handle_t nvs, const char* key, nvs_type_t type) {
     }
 }
 
-// ============================================================================
-// Helper Functions - Time
-// ============================================================================
+/**
+ * \brief Date/time parsing and validation helpers.
+ */
 
 /**
- * Get current time as struct tm
- * @param tv Output timeval
- * @param tm Output tm struct pointer
- * @return true if successful
+ * \brief Retrieves the current time as `timeval` and local `tm`.
+ * \param tv Output `timeval`.
+ * \param tm Output pointer to local time structure.
+ * \return `true` if time conversion succeeded, otherwise `false`.
  */
 static bool getCurrentTime(struct timeval& tv, struct tm*& tm) {
     gettimeofday(&tv, nullptr);
@@ -362,7 +390,9 @@ static bool getCurrentTime(struct timeval& tv, struct tm*& tm) {
 }
 
 /**
- * Set system time from tm struct
+ * \brief Sets system time from a populated local `tm` structure.
+ * \param tm Input date/time structure.
+ * \return `true` on success, otherwise `false`.
  */
 static bool setSystemTime(struct tm* tm) {
     struct timeval tv;
@@ -371,20 +401,32 @@ static bool setSystemTime(struct tm* tm) {
     return settimeofday(&tv, nullptr) == 0;
 }
 
-// ============================================================================
-// Command Handlers - System
-// ============================================================================
+/**
+ * \brief System command handlers.
+ */
 
+/**
+ * \brief Prints the registered command overview.
+ * \param args Unused command arguments.
+ */
 static void cmdHelp(const char* args) {
     (void)args;
     getCommandRegistry().showHelp();
 }
 
+/**
+ * \brief Replies with a liveness check response.
+ * \param args Unused command arguments.
+ */
 static void cmdPing(const char* args) {
     (void)args;
     Console::printf("PONG\r\n");
 }
 
+/**
+ * \brief Prints runtime status information for the device.
+ * \param args Unused command arguments.
+ */
 static void cmdStatus(const char* args) {
     (void)args;
     Console::printf("=== System Status ===\r\n");
@@ -394,6 +436,10 @@ static void cmdStatus(const char* args) {
     Console::flush();
 }
 
+/**
+ * \brief Prints heap and PSRAM usage statistics.
+ * \param args Unused command arguments.
+ */
 static void cmdMem(const char* args) {
     (void)args;
     Console::printf("=== Memory Usage ===\r\n");
@@ -411,6 +457,10 @@ static void cmdMem(const char* args) {
     Console::flush();
 }
 
+/**
+ * \brief Reboots the device after flushing serial output.
+ * \param args Unused command arguments.
+ */
 static void cmdReboot(const char* args) {
     (void)args;
     Console::printf("Rebooting...\r\n");
@@ -419,6 +469,10 @@ static void cmdReboot(const char* args) {
     esp_restart();
 }
 
+/**
+ * \brief Displays the error log or clears it when `CLEAR` is passed.
+ * \param args Optional action argument.
+ */
 static void cmdErrorLog(const char* args) {
     if (args && strcmp(args, "CLEAR") == 0) {
         error_log_clear();
@@ -428,10 +482,14 @@ static void cmdErrorLog(const char* args) {
     }
 }
 
-// ============================================================================
-// Command Handlers - NVS
-// ============================================================================
+/**
+ * \brief NVS command handlers.
+ */
 
+/**
+ * \brief Erases all NVS data after explicit confirmation.
+ * \param args Confirmation argument (`YES` required).
+ */
 static void cmdNvsClear(const char* args) {
     if (!args || strcmp(args, "YES") != 0) {
         Console::printf("WARNING: This will ERASE ALL NVS data!\r\n");
@@ -457,6 +515,10 @@ static void cmdNvsClear(const char* args) {
     Console::printf("OK: NVS cleared. Reboot recommended.\r\n");
 }
 
+/**
+ * \brief Lists NVS entries, optionally filtered by namespace.
+ * \param args Optional namespace filter.
+ */
 static void cmdNvsList(const char* args) {
     const char* nsFilter = (args && *args) ? args : nullptr;
 
@@ -505,6 +567,10 @@ static void cmdNvsList(const char* args) {
     Console::printf("\r\nTotal: %d entries\r\n", count);
 }
 
+/**
+ * \brief Reads and prints a single NVS key value.
+ * \param args Arguments in the form `<namespace> <key>`.
+ */
 static void cmdNvsRead(const char* args) {
     if (!args || !*args) {
         Console::printf("Usage: NVS_READ <namespace> <key>\r\n");
@@ -537,6 +603,10 @@ static void cmdNvsRead(const char* args) {
     nvs_close(nvs);
 }
 
+/**
+ * \brief Deletes an NVS key or an entire namespace.
+ * \param args Arguments in the form `<namespace> [key]`.
+ */
 static void cmdNvsDel(const char* args) {
     if (!args || !*args) {
         Console::printf("Usage: NVS_DEL <namespace> [key]\r\n");
@@ -583,10 +653,14 @@ static void cmdNvsDel(const char* args) {
     nvs_close(nvs);
 }
 
-// ============================================================================
-// Command Handlers - Time
-// ============================================================================
+/**
+ * \brief Date/time command handlers.
+ */
 
+/**
+ * \brief Prints the current local time.
+ * \param args Unused command arguments.
+ */
 static void cmdGetTime(const char* args) {
     (void)args;
     struct timeval tv;
@@ -598,6 +672,10 @@ static void cmdGetTime(const char* args) {
     }
 }
 
+/**
+ * \brief Prints the current local date.
+ * \param args Unused command arguments.
+ */
 static void cmdGetDate(const char* args) {
     (void)args;
     struct timeval tv;
@@ -609,6 +687,10 @@ static void cmdGetDate(const char* args) {
     }
 }
 
+/**
+ * \brief Updates the system clock time component.
+ * \param args Time string in format `HH:MM:SS`.
+ */
 static void cmdSetTime(const char* args) {
     if (!args || !*args) {
         Console::printf("Usage: SET_TIME HH:MM:SS\r\n");
@@ -643,6 +725,10 @@ static void cmdSetTime(const char* args) {
     }
 }
 
+/**
+ * \brief Updates the system clock date component.
+ * \param args Date string in format `DD.MM.YYYY`.
+ */
 static void cmdSetDate(const char* args) {
     if (!args || !*args) {
         Console::printf("Usage: SET_DATE DD.MM.YYYY\r\n");
@@ -677,10 +763,14 @@ static void cmdSetDate(const char* args) {
     }
 }
 
-// ============================================================================
-// Command Handlers - Display
-// ============================================================================
+/**
+ * \brief Display text command handlers.
+ */
 
+/**
+ * \brief Sets the lock-screen name text through the text callback.
+ * \param args New name string.
+ */
 static void cmdSetName(const char* args) {
     if (!args) args = "";
     if (s_textCallback) {
@@ -689,6 +779,10 @@ static void cmdSetName(const char* args) {
     Console::printf("OK: Name set to \"%s\"\r\n", args);
 }
 
+/**
+ * \brief Sets the first info line through the text callback.
+ * \param args New info text.
+ */
 static void cmdSetInfo(const char* args) {
     if (!args) args = "";
     if (s_textCallback) {
@@ -697,6 +791,10 @@ static void cmdSetInfo(const char* args) {
     Console::printf("OK: Info set to \"%s\"\r\n", args);
 }
 
+/**
+ * \brief Sets the second info line through the text callback.
+ * \param args New secondary info text.
+ */
 static void cmdSetInfo2(const char* args) {
     if (!args) args = "";
     if (s_textCallback) {
@@ -705,11 +803,15 @@ static void cmdSetInfo2(const char* args) {
     Console::printf("OK: Info2 set to \"%s\"\r\n", args);
 }
 
-// ============================================================================
-// Command Handlers - Authentication
-// ============================================================================
+/**
+ * \brief Authentication command handlers for secure serial mode.
+ */
 
 #if FEATURE_SECURE_SERIAL
+/**
+ * \brief Authenticates the serial session with the supplied PIN.
+ * \param args PIN string.
+ */
 static void cmdAuth(const char* args) {
     auto& pm = core::PinManager::instance();
 
@@ -746,6 +848,10 @@ static void cmdAuth(const char* args) {
     }
 }
 
+/**
+ * \brief Logs out and clears the authenticated serial session state.
+ * \param args Unused command arguments.
+ */
 static void cmdLogout(const char* args) {
     (void)args;
     SerialCmd::logout();
@@ -753,10 +859,14 @@ static void cmdLogout(const char* args) {
 }
 #endif
 
-// ============================================================================
-// Command Handlers - PIN Debug
-// ============================================================================
+/**
+ * \brief PIN state inspection and maintenance handlers.
+ */
 
+/**
+ * \brief Resets badge PIN retry counters for debugging.
+ * \param args Unused command arguments.
+ */
 static void cmdPinReset(const char* args) {
     (void)args;
     core::PinManager::instance().resetBadgeRetries();
@@ -764,6 +874,10 @@ static void cmdPinReset(const char* args) {
                     core::PinManager::instance().getBadgeRetries());
 }
 
+/**
+ * \brief Prints the current badge PIN status snapshot.
+ * \param args Unused command arguments.
+ */
 static void cmdPinStatus(const char* args) {
     (void)args;
     auto& pm = core::PinManager::instance();
@@ -773,10 +887,14 @@ static void cmdPinStatus(const char* args) {
                     pm.isPinSet() ? "yes" : "no");
 }
 
-// ============================================================================
-// Command Handlers - TROPIC01 Secure Element
-// ============================================================================
+/**
+ * \brief TROPIC01 secure-element maintenance and diagnostic handlers.
+ */
 
+/**
+ * \brief Prints secure-element session status.
+ * \param args Unused command arguments.
+ */
 static void cmdTr01Status(const char* args) {
     (void)args;
     auto* se = getSecureElementWithCheck();
@@ -786,6 +904,10 @@ static void cmdTr01Status(const char* args) {
     Console::printf("  Session: %s\r\n", se->isSessionActive() ? "active" : "inactive");
 }
 
+/**
+ * \brief Prints secure-element chip and firmware information.
+ * \param args Unused command arguments.
+ */
 static void cmdTr01Info(const char* args) {
     (void)args;
     auto* se = getSecureElementWithCheck();
@@ -814,6 +936,10 @@ static void cmdTr01Info(const char* args) {
     }
 }
 
+/**
+ * \brief Starts a secure-element session, restarting it if already active.
+ * \param args Unused command arguments.
+ */
 static void cmdTr01Session(const char* args) {
     (void)args;
     auto* se = getSecureElementWithCheck();
@@ -831,6 +957,10 @@ static void cmdTr01Session(const char* args) {
     }
 }
 
+/**
+ * \brief Prints usage information for ECC and R-Memory slots.
+ * \param args Unused command arguments.
+ */
 static void cmdTr01Slots(const char* args) {
     (void)args;
     auto* se = getSecureElementWithCheck();
@@ -855,6 +985,10 @@ static void cmdTr01Slots(const char* args) {
     Console::printf("  Slots 132-511: Password vault\r\n");
 }
 
+/**
+ * \brief Reads and dumps one secure-element R-Memory slot.
+ * \param args Slot number argument.
+ */
 static void cmdTr01RmemRead(const char* args) {
     auto result = parseSlotArg(args, hal::ISecureElement::RMEM_SLOT_COUNT, "R-Memory slot");
     if (!result.valid) {
@@ -879,6 +1013,10 @@ static void cmdTr01RmemRead(const char* args) {
     printHexDump(data, actualLen, actualLen);
 }
 
+/**
+ * \brief Deletes one ECC key slot.
+ * \param args ECC slot number argument.
+ */
 static void cmdTr01EccDel(const char* args) {
     auto result = parseSlotArg(args, hal::ISecureElement::ECC_SLOT_COUNT, "ECC slot");
     if (!result.valid) {
@@ -898,6 +1036,10 @@ static void cmdTr01EccDel(const char* args) {
     }
 }
 
+/**
+ * \brief Erases one R-Memory slot.
+ * \param args R-Memory slot number argument.
+ */
 static void cmdTr01RmemDel(const char* args) {
     auto result = parseSlotArg(args, hal::ISecureElement::RMEM_SLOT_COUNT, "R-Memory slot");
     if (!result.valid) {
@@ -917,6 +1059,10 @@ static void cmdTr01RmemDel(const char* args) {
     }
 }
 
+/**
+ * \brief Restarts the secure-element session to resynchronize state.
+ * \param args Unused command arguments.
+ */
 static void cmdTr01Resync(const char* args) {
     (void)args;
     auto* se = getSecureElementWithCheck();
@@ -935,6 +1081,10 @@ static void cmdTr01Resync(const char* args) {
     }
 }
 
+/**
+ * \brief Rebuilds the Tropic slot cache and prints per-slot diagnostics.
+ * \param args Unused command arguments.
+ */
 static void cmdTr01CacheRebuild(const char* args) {
     (void)args;
     auto& storage = core::TropicStorage::instance();
@@ -961,6 +1111,10 @@ static void cmdTr01CacheRebuild(const char* args) {
     }
 }
 
+/**
+ * \brief Cleans up slot metadata inconsistencies and rebuilds cache state.
+ * \param args Unused command arguments.
+ */
 static void cmdTr01Cleanup(const char* args) {
     (void)args;
     auto& storage = core::TropicStorage::instance();
@@ -972,6 +1126,10 @@ static void cmdTr01Cleanup(const char* args) {
     }
 }
 
+/**
+ * \brief Performs a destructive secure-element factory wipe after confirmation.
+ * \param args Confirmation argument (`CONFIRM` required).
+ */
 static void cmdTr01Wipe(const char* args) {
     auto* se = getSecureElementWithCheck();
     if (!se) return;
@@ -1029,10 +1187,13 @@ static void cmdTr01Wipe(const char* args) {
     Console::printf("Deleted: %d ECC keys, %d R-Memory slots\r\n", eccDeleted, rmemDeleted);
 }
 
-// ============================================================================
-// SerialCmd Public Interface
-// ============================================================================
+/**
+ * \brief Public `SerialCmd` interface implementation.
+ */
 
+/**
+ * \brief Initializes the serial console and registers built-in commands.
+ */
 void SerialCmd::init() {
     if (s_initialized) return;
 
@@ -1056,6 +1217,10 @@ void SerialCmd::init() {
     Console::showPrompt();
 }
 
+/**
+ * \brief Processes one pending input character from the serial console.
+ * \return `true` if a command line was completed, otherwise `false`.
+ */
 bool SerialCmd::process() {
     int c = Console::getchar();
     if (c < 0) return false;
@@ -1149,18 +1314,34 @@ bool SerialCmd::process() {
     }
 }
 
+/**
+ * \brief Returns the shared command registry instance.
+ * \return Reference to the command registry.
+ */
 ICommandRegistry& SerialCmd::getRegistry() {
     return getCommandRegistry();
 }
 
+/**
+ * \brief Sets the callback used by text-setting commands.
+ * \param callback Callback receiving field key and new value.
+ */
 void SerialCmd::setTextCallback(TextChangeCallback callback) {
     s_textCallback = callback;
 }
 
+/**
+ * \brief Sets the callback invoked after successful date/time updates.
+ * \param callback Callback triggered on time change.
+ */
 void SerialCmd::setTimeCallback(TimeChangeCallback callback) {
     s_timeCallback = callback;
 }
 
+/**
+ * \brief Returns whether the serial session is currently authenticated.
+ * \return `true` when authenticated (and not timed out), otherwise `false`.
+ */
 bool SerialCmd::isAuthenticated() {
 #if FEATURE_SECURE_SERIAL
     if (!s_authenticated) return false;
@@ -1178,6 +1359,11 @@ bool SerialCmd::isAuthenticated() {
 #endif
 }
 
+/**
+ * \brief Attempts to authenticate the serial session with a PIN.
+ * \param pin Candidate PIN string.
+ * \return `true` on successful authentication, otherwise `false`.
+ */
 bool SerialCmd::authenticate(const char* pin) {
     auto& pm = core::PinManager::instance();
 
@@ -1207,12 +1393,19 @@ bool SerialCmd::authenticate(const char* pin) {
     return true;
 }
 
+/**
+ * \brief Logs out the current serial session.
+ */
 void SerialCmd::logout() {
     s_authenticated = false;
     s_authTimestamp = 0;
     LOG_I(TAG, "Logged out");
 }
 
+/**
+ * \brief Normalizes and dispatches a command line to the registry.
+ * \param cmd Mutable command buffer.
+ */
 void SerialCmd::executeCommand(char* cmd) {
     cmd = trim(cmd);
     if (!*cmd) return;
@@ -1221,6 +1414,11 @@ void SerialCmd::executeCommand(char* cmd) {
     getCommandRegistry().processCommand(cmd);
 }
 
+/**
+ * \brief Trims leading and trailing ASCII whitespace in-place.
+ * \param str Mutable string pointer.
+ * \return Pointer to the first non-space character inside `str`.
+ */
 char* SerialCmd::trim(char* str) {
     if (!str) return str;
 
@@ -1234,6 +1432,9 @@ char* SerialCmd::trim(char* str) {
     return str;
 }
 
+/**
+ * \brief Registers all built-in serial commands.
+ */
 void SerialCmd::registerBuiltinCommands() {
     auto& reg = getCommandRegistry();
 

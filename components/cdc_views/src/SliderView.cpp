@@ -5,6 +5,7 @@
  */
 
 #include "cdc_views/SliderView.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_hal/IDisplay.h"
@@ -15,7 +16,9 @@
 
 static const char* TAG = "SliderView";
 
-// Display constants
+/**
+ * \brief Display layout constants.
+ */
 static constexpr int TITLE_Y = 20;
 static constexpr int VALUE_Y = 55;
 static constexpr int BAR_Y = 85;
@@ -24,6 +27,16 @@ static constexpr int BAR_MARGIN = 20;
 
 namespace cdc::ui {
 
+/**
+ * \brief Initializes slider bounds, value, and display options.
+ * \param title Title text shown in the view.
+ * \param minVal Minimum slider value.
+ * \param maxVal Maximum slider value.
+ * \param initial Initial slider value.
+ * \param step Default step size.
+ * \param unit Optional value unit suffix.
+ * \return void
+ */
 void SliderView::init(const char* title, uint16_t minVal, uint16_t maxVal,
                       uint16_t initial, uint16_t step, const char* unit) {
     title_ = title;
@@ -37,6 +50,11 @@ void SliderView::init(const char* title, uint16_t minVal, uint16_t maxVal,
     dirty_ = true;
 }
 
+/**
+ * \brief Sets slider value with range clamping.
+ * \param value Target slider value.
+ * \return void
+ */
 void SliderView::setValue(uint16_t value) {
     value = std::clamp(value, minValue_, maxValue_);
     if (value_ != value) {
@@ -45,6 +63,11 @@ void SliderView::setValue(uint16_t value) {
     }
 }
 
+/**
+ * \brief Adjusts slider value up or down.
+ * \param increase `true` to increase, `false` to decrease.
+ * \return void
+ */
 void SliderView::adjust(bool increase) {
     uint16_t newValue = value_;
 
@@ -70,6 +93,11 @@ void SliderView::adjust(bool increase) {
     }
 }
 
+/**
+ * \brief Handles key input for slider adjustment and confirmation.
+ * \param key Pressed key code.
+ * \return Input handling result for the view stack.
+ */
 InputResult SliderView::onKey(char key) {
     switch (key) {
         case '6': // Right = Increase
@@ -94,10 +122,19 @@ InputResult SliderView::onKey(char key) {
     }
 }
 
+/**
+ * \brief Returns localized footer hint text.
+ * \return Footer hint string.
+ */
 const char* SliderView::getFooterHint() const {
     return tr(StringId::HINT_BRIGHTNESS);
 }
 
+/**
+ * \brief Renders slider title, value text, progress bar, and footer.
+ * \param partial Indicates partial/full redraw mode.
+ * \return void
+ */
 void SliderView::render(bool partial) {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;
@@ -117,11 +154,7 @@ void SliderView::render(bool partial) {
     // Title (centered)
     if (title_) {
         gfx->setTextSize(1);
-        int16_t x1, y1;
-        uint16_t w, h;
-        gfx->getTextBounds(title_, 0, 0, &x1, &y1, &w, &h);
-        gfx->setCursor((width - w) / 2, TITLE_Y);
-        gfx->print(title_);
+        render::drawHeaderCentered(gfx, title_, TITLE_Y, width);
     }
 
     // Value display (centered, larger)
@@ -180,22 +213,29 @@ void SliderView::render(bool partial) {
     gfx->print("[6]");
 
     const char* hint = getFooterHint();
-    if (hint) {
-        gfx->fillRect(0, height - 16, width, 16, EPD_BLACK);
-        gfx->setTextColor(EPD_WHITE);
-        gfx->setCursor(4, height - 12);
-        gfx->print(hint);
-    }
+    render::drawFooterBar(gfx, width, height, nullptr, hint, false);
 
     dirty_ = false;
 }
 
-// ============================================================================
-// Convenience Function
-// ============================================================================
+/**
+ * \brief Convenience factory/helper function.
+ */
 
 static SliderView s_sharedSlider;
 
+/**
+ * \brief Shows a shared slider view instance.
+ * \param title View title text.
+ * \param minVal Minimum slider value.
+ * \param maxVal Maximum slider value.
+ * \param initial Initial slider value.
+ * \param step Default step size.
+ * \param unit Optional value unit suffix.
+ * \param onSave Save callback.
+ * \param onChange Optional live-change callback.
+ * \return Pointer to the shared `SliderView` instance.
+ */
 SliderView* showSlider(const char* title, uint16_t minVal, uint16_t maxVal,
                        uint16_t initial, uint16_t step, const char* unit,
                        SliderView::SaveCallback onSave,

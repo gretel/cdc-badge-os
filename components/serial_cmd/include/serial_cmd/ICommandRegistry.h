@@ -75,6 +75,19 @@ public:
      * Used to reset auth timer when FEATURE_SECURE_SERIAL is enabled
      */
     virtual void setOnCommandExecuted(void (*callback)()) = 0;
+
+    /**
+     * Line interceptor for multiline input modes (e.g., vCard paste).
+     * When set, called before normal command dispatch.
+     * Return true to consume the line, false for normal processing.
+     */
+    using LineInterceptor = bool (*)(const char* line);
+
+    /**
+     * Set or clear the line interceptor
+     * @param interceptor Callback, or nullptr to clear
+     */
+    virtual void setLineInterceptor(LineInterceptor interceptor) { (void)interceptor; }
 };
 
 // Get global command registry instance

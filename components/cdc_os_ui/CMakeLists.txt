@@ -5,12 +5,14 @@ idf_component_register(
     SRCS
         "src/HardwareInfo.cpp"
         "src/AppUi.cpp"
+        "src/WifiMenuUi.cpp"
+        "src/BluetoothMenuUi.cpp"
+        "src/ExpertMenuUi.cpp"
         "src/WifiHandlers.cpp"
         "src/SettingsHandlers.cpp"
         "src/SleepManager.cpp"
         "src/views/PinChangeView.cpp"
         "src/views/LockScreenView.cpp"
-        "src/views/WifiListView.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES

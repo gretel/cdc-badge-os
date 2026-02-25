@@ -18,15 +18,25 @@ static const char* TAG = "I18n";
 
 namespace cdc::ui {
 
-// NVS namespace and key
+/**
+ * \brief NVS namespace and key used for persisted language selection.
+ */
 static constexpr const char* NVS_NAMESPACE = "i18n";
 static constexpr const char* NVS_KEY_LANG = "lang";
 
+/**
+ * \brief Returns singleton I18n instance.
+ * \return Reference to global `I18n` instance.
+ */
 I18n& I18n::instance() {
     static I18n instance;
     return instance;
 }
 
+/**
+ * \brief Initializes translations and loads persisted language.
+ * \return `true` when initialization completed.
+ */
 bool I18n::init() {
     // Initialize core strings
     initCoreStrings();
@@ -39,6 +49,11 @@ bool I18n::init() {
     return true;
 }
 
+/**
+ * \brief Sets active UI language and persists it.
+ * \param lang Target language.
+ * \return void
+ */
 void I18n::setLanguage(Language lang) {
     if (lang >= Language::COUNT) {
         lang = Language::EN;
@@ -50,6 +65,11 @@ void I18n::setLanguage(Language lang) {
     }
 }
 
+/**
+ * \brief Returns human-readable language name.
+ * \param lang Language identifier.
+ * \return Display name string for the language.
+ */
 const char* I18n::getLanguageName(Language lang) const {
     switch (lang) {
         case Language::EN: return "English";
@@ -58,10 +78,20 @@ const char* I18n::getLanguageName(Language lang) const {
     }
 }
 
+/**
+ * \brief Resolves translation text for a core string ID.
+ * \param id Core string identifier.
+ * \return Translated string or fallback marker.
+ */
 const char* I18n::str(StringId id) const {
     return str(static_cast<uint16_t>(id));
 }
 
+/**
+ * \brief Resolves translation text for a raw string ID.
+ * \param id Raw string table ID.
+ * \return Translated string or fallback marker.
+ */
 const char* I18n::str(uint16_t id) const {
     if (id >= MAX_STRINGS) {
         return "?";
@@ -83,6 +113,12 @@ const char* I18n::str(uint16_t id) const {
     return "?";
 }
 
+/**
+ * \brief Reserves a contiguous ID range for module-owned strings.
+ * \param moduleName Module name used for logging.
+ * \param count Number of string IDs to reserve.
+ * \return Base string ID of reserved range, or `0` on failure.
+ */
 uint16_t I18n::registerModule(const char* moduleName, uint16_t count) {
     if (nextModuleId_ + count > MAX_STRINGS) {
         LOG_E(TAG, "Cannot register module '%s': out of string slots", moduleName);
@@ -96,6 +132,13 @@ uint16_t I18n::registerModule(const char* moduleName, uint16_t count) {
     return baseId;
 }
 
+/**
+ * \brief Registers one translation entry.
+ * \param stringId String ID to set.
+ * \param lang Language bucket.
+ * \param text Translation text pointer.
+ * \return `true` if registration succeeded.
+ */
 bool I18n::registerTranslation(uint16_t stringId, Language lang, const char* text) {
     if (stringId >= MAX_STRINGS || lang >= Language::COUNT || !text) {
         return false;
@@ -105,6 +148,11 @@ bool I18n::registerTranslation(uint16_t stringId, Language lang, const char* tex
     return true;
 }
 
+/**
+ * \brief Registers a zero-terminated translation table.
+ * \param translations Pointer to translation entries ending at `stringId == 0xFFFF`.
+ * \return void
+ */
 void I18n::registerTranslations(const Translation* translations) {
     if (!translations) return;
 
@@ -114,6 +162,10 @@ void I18n::registerTranslations(const Translation* translations) {
     }
 }
 
+/**
+ * \brief Loads selected language from NVS.
+ * \return void
+ */
 void I18n::loadFromNvs() {
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
@@ -128,6 +180,10 @@ void I18n::loadFromNvs() {
     }
 }
 
+/**
+ * \brief Saves selected language to NVS.
+ * \return void
+ */
 void I18n::saveToNvs() {
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
@@ -138,6 +194,10 @@ void I18n::saveToNvs() {
     }
 }
 
+/**
+ * \brief Registers built-in core string translations.
+ * \return void
+ */
 void I18n::initCoreStrings() {
     // Macro for cleaner registration
     #define REG(id, en, de) \
@@ -177,7 +237,8 @@ void I18n::initCoreStrings() {
     REG(LOCK,               "Lock",                 "Sperren");
     REG(UNLOCK,             "Unlock",               "Entsperren");
     REG(ENTER_PIN,          "Enter PIN",            "PIN eingeben");
-    REG(PRESS_ANY_KEY,      "Press any key",        "Beliebige Taste drucken");
+    REG(PRESS_ANY_KEY,      "Any key: unlock  [3]: menu",  "Taste: entsperren  [3]: Menue");
+    REG(DEEP_SLEEP,         "Deep Sleep",               "Tiefschlaf");
     REG(WRONG_PIN,          "Wrong PIN",            "Falsche PIN");
     REG(LOCKED_OUT,         "Locked out",           "Gesperrt");
     REG(TOO_MANY_ATTEMPTS,  "Too many attempts",    "Zu viele Versuche");

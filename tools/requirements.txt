@@ -1,0 +1,9 @@
+# flash_firmware.py
+esptool>=4.7
+requests>=2.28
+
+# ble_serial.py
+bleak>=0.21
+
+# coredump.py
+esp-coredump>=1.5

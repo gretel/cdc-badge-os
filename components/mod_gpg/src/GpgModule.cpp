@@ -47,10 +47,18 @@ static constexpr uint16_t STR_CONFIRM_RESET = 15;
 static constexpr uint16_t STR_EXPORT_TITLE = 16;
 static constexpr uint16_t STR_COUNT = 17;
 
+/**
+ * \brief Resolves module-localized string by offset.
+ * \param offset Module string-table offset.
+ * \return Translated string pointer.
+ */
 static const char* mstr(uint16_t offset) {
     return ui::tr(s_strIdBase + offset);
 }
 
+/**
+ * \brief Registers GPG module translations.
+ */
 static void registerStrings() {
     auto& i18n = ui::I18n::instance();
     s_strIdBase = i18n.registerModule("mod_gpg", STR_COUNT);
@@ -104,6 +112,9 @@ static void cmd_gpg_generate(const char* args);
 static void cmd_gpg_export(const char* args);
 static void cmd_gpg_reset(const char* args);
 
+/**
+ * \brief Registers serial commands exposed by GPG module.
+ */
 static void registerCommands() {
     if (s_commandsRegistered) return;
     s_commandsRegistered = true;
@@ -114,6 +125,10 @@ static void registerCommands() {
     registry.registerCommand({"GPG_RESET", "Reset GPG keys", cmd_gpg_reset, CMD_MODULE, true});
 }
 
+/**
+ * \brief Serial command printing current GPG key status.
+ * \param args Unused command arguments.
+ */
 static void cmd_gpg_status(const char* args) {
     (void)args;
     gpg_status_t status = {};
@@ -128,6 +143,10 @@ static void cmd_gpg_status(const char* args) {
     cdc::serial::Console::printf("Sign Count: %lu\r\n", static_cast<unsigned long>(status.sign_count));
 }
 
+/**
+ * \brief Serial command generating GPG key with selected curve and user-id.
+ * \param args Command arguments (`<curve> <user_id>`).
+ */
 static void cmd_gpg_generate(const char* args) {
     char curveBuf[8] = {};
     char userId[GPG_USER_ID_MAX] = {};
@@ -159,6 +178,10 @@ static void cmd_gpg_generate(const char* args) {
     cdc::serial::Console::printf(ok ? "OK\r\n" : "ERROR\r\n");
 }
 
+/**
+ * \brief Serial command exporting GPG public key in PEM format.
+ * \param args Unused command arguments.
+ */
 static void cmd_gpg_export(const char* args) {
     (void)args;
     char pem_buf[2048];
@@ -170,6 +193,10 @@ static void cmd_gpg_export(const char* args) {
     cdc::serial::Console::printf("%s\r\n", pem_buf);
 }
 
+/**
+ * \brief Serial command resetting GPG key material.
+ * \param args Unused command arguments.
+ */
 static void cmd_gpg_reset(const char* args) {
     (void)args;
     bool ok = gpg_reset();
@@ -211,6 +238,11 @@ static void confirmReset();
 static void showSettings();
 static void onSettingsSelect(uint16_t index, void*);
 
+/**
+ * \brief Handles GPG main-menu selections.
+ * \param index Selected menu index.
+ * \param userData Optional callback context (unused).
+ */
 static void onMenuSelect(uint16_t index, void*) {
     switch (index) {
         case 0: showStatus(); break;
@@ -222,6 +254,9 @@ static void onMenuSelect(uint16_t index, void*) {
     }
 }
 
+/**
+ * \brief Rebuilds GPG main menu labels.
+ */
 static void rebuildMenu() {
     s_menuItems[0].label = mstr(STR_STATUS);
     s_menuItems[1].label = mstr(STR_GENERATE);
@@ -231,42 +266,89 @@ static void rebuildMenu() {
     s_menuView.init(mstr(STR_GPG), s_menuItems, 5);
 }
 
+/**
+ * \brief Verifies OpenPGP PW1 using persistent pin-storage backend.
+ * \param pin Candidate PW1 value.
+ * \return `true` when valid.
+ */
 static bool gpg_verify_pw1(const char* pin) {
     return pin_storage_openpgp_verify_pw1(pin);
 }
 
+/**
+ * \brief Verifies OpenPGP PW3 using persistent pin-storage backend.
+ * \param pin Candidate PW3 value.
+ * \return `true` when valid.
+ */
 static bool gpg_verify_pw3(const char* pin) {
     return pin_storage_openpgp_verify_pw3(pin);
 }
 
+/**
+ * \brief Changes OpenPGP PW1 value.
+ * \param oldPin Ignored old PIN parameter from generic callback signature.
+ * \param newPin New PW1 value.
+ * \return `true` on success.
+ */
 static bool gpg_change_pw1(const char*, const char* newPin) {
     return pin_storage_openpgp_change_pw1(newPin);
 }
 
+/**
+ * \brief Changes OpenPGP PW3 value.
+ * \param oldPin Ignored old PIN parameter from generic callback signature.
+ * \param newPin New PW3 value.
+ * \return `true` on success.
+ */
 static bool gpg_change_pw3(const char*, const char* newPin) {
     return pin_storage_openpgp_change_pw3(newPin);
 }
 
+/**
+ * \brief Returns remaining retries for OpenPGP PW1.
+ * \return Retry counter.
+ */
 static uint8_t gpg_retries_pw1() {
     return pin_storage_openpgp_pw1_retries();
 }
 
+/**
+ * \brief Returns remaining retries for OpenPGP PW3.
+ * \return Retry counter.
+ */
 static uint8_t gpg_retries_pw3() {
     return pin_storage_openpgp_pw3_retries();
 }
 
+/**
+ * \brief Returns whether OpenPGP PW1 is blocked.
+ * \return `true` when blocked.
+ */
 static bool gpg_blocked_pw1() {
     return pin_storage_openpgp_pw1_blocked();
 }
 
+/**
+ * \brief Returns whether OpenPGP PW3 is blocked.
+ * \return `true` when blocked.
+ */
 static bool gpg_blocked_pw3() {
     return pin_storage_openpgp_pw3_blocked();
 }
 
+/**
+ * \brief Pin-change completion callback returning to previous view.
+ * \param changed Result flag (unused).
+ */
 static void onGpgPinComplete(bool) {
     ui::ViewStack::instance().pop();
 }
 
+/**
+ * \brief Handles settings-menu selection for PW1/PW3 change flow.
+ * \param index Selected settings row.
+ * \param userData Optional callback context (unused).
+ */
 static void onSettingsSelect(uint16_t index, void*) {
     s_pinChangeView.setOnComplete(onGpgPinComplete);
     s_pinChangeView.setTitle(index == 0 ? mstr(STR_USER_PIN) : mstr(STR_ADMIN_PIN));
@@ -286,6 +368,9 @@ static void onSettingsSelect(uint16_t index, void*) {
     ui::ViewStack::instance().push(&s_pinChangeView);
 }
 
+/**
+ * \brief Shows GPG settings menu.
+ */
 static void showSettings() {
     s_settingsItems[0].label = mstr(STR_USER_PIN);
     s_settingsItems[1].label = mstr(STR_ADMIN_PIN);
@@ -294,6 +379,9 @@ static void showSettings() {
     ui::ViewStack::instance().push(&s_settingsView);
 }
 
+/**
+ * \brief Displays current GPG key status and metadata.
+ */
 static void showStatus() {
     gpg_status_t status = {};
     if (!gpg_get_status(&status)) {
@@ -322,6 +410,9 @@ static void onWizardName(const char* text);
 static void onWizardEmail(const char* text);
 static void onWizardCurve(uint16_t index, void*);
 
+/**
+ * \brief Starts key-generation wizard flow.
+ */
 static void wizardStart() {
     memset(&s_wizard, 0, sizeof(s_wizard));
     s_t9Input.init(mstr(STR_NAME), nullptr, 63);
@@ -329,6 +420,10 @@ static void wizardStart() {
     ui::ViewStack::instance().push(&s_t9Input);
 }
 
+/**
+ * \brief Saves wizard name and opens email step.
+ * \param text Entered name.
+ */
 static void onWizardName(const char* text) {
     strncpy(s_wizard.name, text ? text : "", sizeof(s_wizard.name) - 1);
     s_t9Input.init(mstr(STR_EMAIL), nullptr, 63);
@@ -336,6 +431,10 @@ static void onWizardName(const char* text) {
     ui::ViewStack::instance().push(&s_t9Input);
 }
 
+/**
+ * \brief Saves wizard email and opens curve selection.
+ * \param text Entered email.
+ */
 static void onWizardEmail(const char* text) {
     strncpy(s_wizard.email, text ? text : "", sizeof(s_wizard.email) - 1);
     static ui::ListItem curveItems[] = {
@@ -349,6 +448,11 @@ static void onWizardEmail(const char* text) {
     ui::ViewStack::instance().push(&s_curveView);
 }
 
+/**
+ * \brief Finalizes wizard curve selection and triggers key generation.
+ * \param index Selected curve index.
+ * \param userData Optional callback context (unused).
+ */
 static void onWizardCurve(uint16_t index, void*) {
     s_wizard.curve = (index == 0) ? CDC_CURVE_ED25519 : CDC_CURVE_P256;
     char user_id[GPG_USER_ID_MAX] = {};
@@ -392,6 +496,9 @@ static void onWizardCurve(uint16_t index, void*) {
     }
 }
 
+/**
+ * \brief Exports public key to serial output and QR view.
+ */
 static void showExport() {
     static char pem_buf[2048];
     size_t out_len = 0;
@@ -404,6 +511,10 @@ static void showExport() {
     ui::ViewStack::instance().push(&s_qrView);
 }
 
+/**
+ * \brief Confirm callback resetting all GPG key material.
+ * \param userData Optional callback context (unused).
+ */
 static void onResetConfirm(void*) {
     if (gpg_reset()) {
         ui::showToastSuccess(ui::tr(ui::StringId::OK));
@@ -412,16 +523,27 @@ static void onResetConfirm(void*) {
     }
 }
 
+/**
+ * \brief Opens reset confirmation dialog.
+ */
 static void confirmReset() {
     ui::showConfirm(mstr(STR_CONFIRM_RESET), onResetConfirm, nullptr,
                     ui::ConfirmView::Icon::WARNING, nullptr);
 }
 
+/**
+ * \brief Returns singleton GPG module instance.
+ * \return Module singleton reference.
+ */
 GpgModule& GpgModule::instance() {
     static GpgModule inst;
     return inst;
 }
 
+/**
+ * \brief Initializes GPG module resources and slot assignments.
+ * \return `true` if initialization succeeded.
+ */
 bool GpgModule::init() {
     LOG_I(TAG, "Initializing GPG module");
     registerStrings();
@@ -434,6 +556,9 @@ bool GpgModule::init() {
         return false;
     }
     gpg_storage_set_slot_range(slotRange_.eccStart, slotRange_.eccEnd);
+    if (slotRange_.hasRmem) {
+        gpg_storage_set_rmem_range(slotRange_.rmemStart, slotRange_.rmemEnd);
+    }
     if (!gpg_storage_ready()) {
         core::ModuleRegistry::instance().reportModuleError(getName(), "GPG slot range invalid");
         state_ = core::ServiceState::ERROR;
@@ -444,6 +569,10 @@ bool GpgModule::init() {
     return true;
 }
 
+/**
+ * \brief Starts GPG module and registers USB CCID interface.
+ * \return `true` if start transition succeeded.
+ */
 bool GpgModule::start() {
     if (state_ != core::ServiceState::INITIALIZED &&
         state_ != core::ServiceState::STOPPED) {
@@ -466,15 +595,26 @@ bool GpgModule::start() {
     return true;
 }
 
+/**
+ * \brief Stops GPG module and unregisters CCID interface.
+ */
 void GpgModule::stop() {
     core::UsbManager::instance().unregisterInterface(core::UsbHidInterface::Ccid, getName());
     state_ = core::ServiceState::STOPPED;
 }
 
+/**
+ * \brief Stores slot range assigned by module registry.
+ * \param range Slot assignment.
+ */
 void GpgModule::setSlotRange(const core::IModule::SlotRange& range) {
     slotRange_ = range;
 }
 
+/**
+ * \brief Declares slot requirements for GPG module.
+ * \return Slot request descriptor.
+ */
 core::IModule::SlotRequest GpgModule::getSlotRequest() const {
     core::IModule::SlotRequest req = {};
     req.mapName = getName();
@@ -483,6 +623,12 @@ core::IModule::SlotRequest GpgModule::getSlotRequest() const {
     return req;
 }
 
+/**
+ * \brief Provides main-menu entry for GPG module.
+ * \param items Output menu item array.
+ * \param maxItems Maximum writable entries.
+ * \return Number of populated menu items.
+ */
 uint8_t GpgModule::getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems) {
     if (!items || maxItems == 0) return 0;
     items[0] = {mstr(STR_GPG), 60, []() -> ui::IView* {
@@ -496,12 +642,15 @@ uint8_t GpgModule::getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems) {
         }
         rebuildMenu();
         return &s_menuView;
-    }, nullptr, getName(), core::MenuLocation::MAIN_MENU};
+    }, nullptr, getName(), core::MenuLocation::MAIN_MENU, nullptr};
     return 1;
 }
 
 } // namespace cdc::mod_gpg
 
+/**
+ * \brief Registers GPG module initializer in global registry.
+ */
 extern "C" void mod_gpg_register() {
     cdc::core::ModuleRegistry::instance().registerInitializer([]() {
         auto& module = cdc::mod_gpg::GpgModule::instance();

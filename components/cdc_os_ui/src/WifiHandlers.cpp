@@ -11,21 +11,39 @@
 
 namespace cdc::ui {
 
+/**
+ * \brief Resets Wi-Fi wizard state to defaults.
+ * \return void
+ */
 void WifiWizard::reset() {
     memset(this, 0, sizeof(*this));
     useDhcp = true;
     strncpy(netmask, "255.255.255.0", sizeof(netmask));
 }
 
+/**
+ * \brief Returns singleton Wi-Fi handlers instance.
+ * \return Reference to global `WifiHandlers` instance.
+ */
 WifiHandlers& WifiHandlers::instance() {
     static WifiHandlers s_instance;
     return s_instance;
 }
 
+/**
+ * \brief Validates a single IPv4 octet.
+ * \param val Octet value.
+ * \return `true` if value is in `[0,255]`.
+ */
 bool WifiHandlers::isValidIpOctet(int val) {
     return val >= 0 && val <= 255;
 }
 
+/**
+ * \brief Validates dotted IPv4 address string.
+ * \param ip IPv4 address string.
+ * \return `true` if address is syntactically and numerically valid.
+ */
 bool WifiHandlers::isValidIpAddress(const char* ip) {
     if (!ip || !ip[0]) return false;
     int a, b, c, d;
@@ -33,6 +51,11 @@ bool WifiHandlers::isValidIpAddress(const char* ip) {
     return isValidIpOctet(a) && isValidIpOctet(b) && isValidIpOctet(c) && isValidIpOctet(d);
 }
 
+/**
+ * \brief Parses dotted IPv4 string into packed `uint32_t`.
+ * \param ip IPv4 address string.
+ * \return Packed IPv4 value or `0` on parse/validation error.
+ */
 uint32_t WifiHandlers::parseIpAddress(const char* ip) const {
     int a, b, c, d;
     if (sscanf(ip, "%d.%d.%d.%d", &a, &b, &c, &d) != 4) return 0;
@@ -41,6 +64,10 @@ uint32_t WifiHandlers::parseIpAddress(const char* ip) const {
            (static_cast<uint32_t>(c) << 8) | static_cast<uint32_t>(d);
 }
 
+/**
+ * \brief Loads Wi-Fi configuration from NVS.
+ * \return void
+ */
 void WifiHandlers::loadConfig() {
     nvs_handle_t nvs;
     if (nvs_open("wifi", NVS_READONLY, &nvs) != ESP_OK) {
@@ -71,6 +98,10 @@ void WifiHandlers::loadConfig() {
     config_.valid = true;
 }
 
+/**
+ * \brief Saves current wizard Wi-Fi configuration to NVS.
+ * \return void
+ */
 void WifiHandlers::saveConfig() {
     nvs_handle_t nvs;
     if (nvs_open("wifi", NVS_READWRITE, &nvs) != ESP_OK) return;
@@ -94,11 +125,19 @@ void WifiHandlers::saveConfig() {
     loadConfig();
 }
 
+/**
+ * \brief Returns whether Wi-Fi is currently connected.
+ * \return `true` if station is connected.
+ */
 bool WifiHandlers::isConnected() const {
     auto* wifi = hal::getWifiControllerInstance();
     return wifi && wifi->isConnected();
 }
 
+/**
+ * \brief Connects to Wi-Fi using saved configuration.
+ * \return `true` on successful connection.
+ */
 bool WifiHandlers::connect() {
     if (!config_.valid) {
         lastError_ = "No config";
@@ -135,6 +174,10 @@ bool WifiHandlers::connect() {
     return true;
 }
 
+/**
+ * \brief Disconnects and disables Wi-Fi if active.
+ * \return void
+ */
 void WifiHandlers::disconnect() {
     auto* wifi = hal::getWifiControllerInstance();
     if (!wifi) return;
@@ -147,6 +190,10 @@ void WifiHandlers::disconnect() {
     }
 }
 
+/**
+ * \brief Synchronizes system time via NTP.
+ * \return `true` if synchronization succeeded.
+ */
 bool WifiHandlers::syncNtp() {
     auto* wifi = hal::getWifiControllerInstance();
     if (!wifi) {

@@ -17,11 +17,19 @@ static const char* TAG = "PinManager";
 
 namespace cdc::core {
 
+/**
+ * \brief Returns singleton PIN manager instance.
+ * \return Singleton reference.
+ */
 PinManager& PinManager::instance() {
     static PinManager instance;
     return instance;
 }
 
+/**
+ * \brief Initializes PIN state from secure storage or defaults.
+ * \return `true` if state is ready for use.
+ */
 bool PinManager::init() {
     if (pinLoaded_) return true;
 
@@ -34,6 +42,9 @@ bool PinManager::init() {
     return true;
 }
 
+/**
+ * \brief Loads default badge and OpenPGP PIN material.
+ */
 void PinManager::loadDefaults() {
     // Badge/FIDO2 hash
     computeBadgeHash(DEFAULT_BADGE_PIN, badgeHash_);
@@ -55,6 +66,10 @@ void PinManager::loadDefaults() {
     LOG_I(TAG, "Loaded default PINs");
 }
 
+/**
+ * \brief Fills a salt buffer using secure-element RNG or ESP fallback RNG.
+ * \param salt Output salt buffer.
+ */
 void PinManager::generateSalt(uint8_t* salt) {
     // Try to get random from SE, fallback to ESP random
     hal::ISecureElement* se = hal::getSecureElementInstance();
@@ -65,11 +80,19 @@ void PinManager::generateSalt(uint8_t* salt) {
     esp_fill_random(salt, SALT_SIZE);
 }
 
+/**
+ * \brief Returns whether secure storage access is currently available.
+ * \return `true` when secure-element session is active.
+ */
 bool PinManager::isStorageAvailable() const {
     hal::ISecureElement* se = hal::getSecureElementInstance();
     return se && se->isSessionActive();
 }
 
+/**
+ * \brief Loads serialized PIN/KDF state from secure-element R-Memory.
+ * \return `true` on successful load and format validation.
+ */
 bool PinManager::loadFromStorage() {
     hal::ISecureElement* se = hal::getSecureElementInstance();
     if (!se || !se->isSessionActive()) {
@@ -128,6 +151,10 @@ bool PinManager::loadFromStorage() {
     return true;
 }
 
+/**
+ * \brief Persists current PIN/KDF state into secure-element R-Memory.
+ * \return `true` if write succeeded.
+ */
 bool PinManager::saveToStorage() {
     hal::ISecureElement* se = hal::getSecureElementInstance();
     if (!se || !se->isSessionActive()) {
@@ -185,6 +212,12 @@ bool PinManager::saveToStorage() {
     return true;
 }
 
+/**
+ * \brief Computes truncated SHA-256 badge PIN hash.
+ * \param pin Input badge PIN.
+ * \param hashOut Output hash buffer.
+ * \return `true` on success.
+ */
 bool PinManager::computeBadgeHash(const char* pin, uint8_t* hashOut) {
     if (!pin || !hashOut) return false;
 
@@ -200,6 +233,13 @@ bool PinManager::computeBadgeHash(const char* pin, uint8_t* hashOut) {
     return true;
 }
 
+/**
+ * \brief Computes Iterated+Salted S2K SHA-256 hash for OpenPGP PINs.
+ * \param pin Input PIN text.
+ * \param salt Salt bytes.
+ * \param hashOut Output hash buffer.
+ * \return `true` on success.
+ */
 bool PinManager::computeKdfHash(const char* pin, const uint8_t* salt, uint8_t* hashOut) {
     if (!pin || !salt || !hashOut) return false;
 
@@ -233,6 +273,13 @@ bool PinManager::computeKdfHash(const char* pin, const uint8_t* salt, uint8_t* h
     return true;
 }
 
+/**
+ * \brief Compares hash buffers in constant-time style.
+ * \param h1 First hash buffer.
+ * \param h2 Second hash buffer.
+ * \param len Number of bytes to compare.
+ * \return `true` when buffers are equal.
+ */
 bool PinManager::compareHash(const uint8_t* h1, const uint8_t* h2, size_t len) const {
     uint8_t diff = 0;
     for (size_t i = 0; i < len; i++) {
@@ -241,8 +288,15 @@ bool PinManager::compareHash(const uint8_t* h1, const uint8_t* h2, size_t len) c
     return diff == 0;
 }
 
-// === Badge/FIDO2 PIN ===
+/**
+ * \brief Badge/FIDO2 PIN workflow.
+ */
 
+/**
+ * \brief Verifies badge PIN, updates retries, and handles lockout transitions.
+ * \param pin Candidate badge PIN.
+ * \return `true` if PIN is valid.
+ */
 bool PinManager::verifyBadgePin(const char* pin) {
     if (!pin) return false;
     if (!pinLoaded_) init();
@@ -274,11 +328,22 @@ bool PinManager::verifyBadgePin(const char* pin) {
     return false;
 }
 
+/**
+ * \brief Changes badge PIN after validating current PIN.
+ * \param currentPin Current PIN.
+ * \param newPin New PIN.
+ * \return `true` if change succeeded.
+ */
 bool PinManager::changeBadgePin(const char* currentPin, const char* newPin) {
     if (!verifyBadgePin(currentPin)) return false;
     return setBadgePin(newPin);
 }
 
+/**
+ * \brief Sets badge PIN directly with format validation.
+ * \param newPin New PIN value.
+ * \return `true` if update succeeded.
+ */
 bool PinManager::setBadgePin(const char* newPin) {
     if (!newPin) return false;
     size_t len = strlen(newPin);
@@ -305,6 +370,9 @@ bool PinManager::setBadgePin(const char* newPin) {
     return true;
 }
 
+/**
+ * \brief Resets badge retry counter to maximum.
+ */
 void PinManager::resetBadgeRetries() {
     if (badgeRetries_ < MAX_RETRIES) {
         badgeRetries_ = MAX_RETRIES;
@@ -312,19 +380,36 @@ void PinManager::resetBadgeRetries() {
     }
 }
 
+/**
+ * \brief Copies stored badge PIN hash into caller buffer.
+ * \param hashOut Output hash buffer.
+ * \return `true` if hash was copied.
+ */
 bool PinManager::getBadgePinHash(uint8_t* hashOut) const {
     if (!hashOut) return false;
     memcpy(hashOut, badgeHash_, BADGE_HASH_SIZE);
     return true;
 }
 
+/**
+ * \brief Verifies provided hash against stored badge hash.
+ * \param hashIn Candidate hash buffer.
+ * \return `true` if hashes match.
+ */
 bool PinManager::verifyBadgePinHash(const uint8_t* hashIn) const {
     if (!hashIn) return false;
     return compareHash(badgeHash_, hashIn, BADGE_HASH_SIZE);
 }
 
-// === OpenPGP PW1 (User PIN) ===
+/**
+ * \brief OpenPGP PW1 (user PIN) workflow.
+ */
 
+/**
+ * \brief Verifies OpenPGP PW1 and updates retry counters.
+ * \param pin Candidate PW1 value.
+ * \return `true` if PW1 is valid.
+ */
 bool PinManager::verifyPW1(const char* pin) {
     if (!pin) return false;
     if (!pinLoaded_) init();
@@ -348,11 +433,22 @@ bool PinManager::verifyPW1(const char* pin) {
     return false;
 }
 
+/**
+ * \brief Changes PW1 after validating the current value.
+ * \param currentPin Current PW1 value.
+ * \param newPin New PW1 value.
+ * \return `true` if change succeeded.
+ */
 bool PinManager::changePW1(const char* currentPin, const char* newPin) {
     if (!verifyPW1(currentPin)) return false;
     return setPW1(newPin);
 }
 
+/**
+ * \brief Sets PW1 directly and refreshes salt/hash material.
+ * \param newPin New PW1 value.
+ * \return `true` if update succeeded.
+ */
 bool PinManager::setPW1(const char* newPin) {
     if (!newPin) return false;
     size_t len = strlen(newPin);
@@ -371,18 +467,31 @@ bool PinManager::setPW1(const char* newPin) {
     return true;
 }
 
+/**
+ * \brief Copies stored PW1 hash into caller buffer.
+ * \param hashOut Output hash buffer.
+ * \return `true` if copied.
+ */
 bool PinManager::getPW1Hash(uint8_t* hashOut) const {
     if (!hashOut) return false;
     memcpy(hashOut, pw1Hash_, KDF_HASH_SIZE);
     return true;
 }
 
+/**
+ * \brief Copies stored PW1 salt into caller buffer.
+ * \param saltOut Output salt buffer.
+ * \return `true` if copied.
+ */
 bool PinManager::getPW1Salt(uint8_t* saltOut) const {
     if (!saltOut) return false;
     memcpy(saltOut, pw1Salt_, SALT_SIZE);
     return true;
 }
 
+/**
+ * \brief Resets PW1 retry counter to maximum.
+ */
 void PinManager::resetPW1Retries() {
     if (pw1Retries_ < MAX_RETRIES) {
         pw1Retries_ = MAX_RETRIES;
@@ -390,8 +499,15 @@ void PinManager::resetPW1Retries() {
     }
 }
 
-// === OpenPGP PW3 (Admin PIN) ===
+/**
+ * \brief OpenPGP PW3 (admin PIN) workflow.
+ */
 
+/**
+ * \brief Verifies OpenPGP PW3 and updates retry counters.
+ * \param pin Candidate PW3 value.
+ * \return `true` if PW3 is valid.
+ */
 bool PinManager::verifyPW3(const char* pin) {
     if (!pin) return false;
     if (!pinLoaded_) init();
@@ -415,11 +531,22 @@ bool PinManager::verifyPW3(const char* pin) {
     return false;
 }
 
+/**
+ * \brief Changes PW3 after validating the current value.
+ * \param currentPin Current PW3 value.
+ * \param newPin New PW3 value.
+ * \return `true` if change succeeded.
+ */
 bool PinManager::changePW3(const char* currentPin, const char* newPin) {
     if (!verifyPW3(currentPin)) return false;
     return setPW3(newPin);
 }
 
+/**
+ * \brief Sets PW3 directly and refreshes salt/hash material.
+ * \param newPin New PW3 value.
+ * \return `true` if update succeeded.
+ */
 bool PinManager::setPW3(const char* newPin) {
     if (!newPin) return false;
     size_t len = strlen(newPin);
@@ -437,18 +564,31 @@ bool PinManager::setPW3(const char* newPin) {
     return true;
 }
 
+/**
+ * \brief Copies stored PW3 hash into caller buffer.
+ * \param hashOut Output hash buffer.
+ * \return `true` if copied.
+ */
 bool PinManager::getPW3Hash(uint8_t* hashOut) const {
     if (!hashOut) return false;
     memcpy(hashOut, pw3Hash_, KDF_HASH_SIZE);
     return true;
 }
 
+/**
+ * \brief Copies stored PW3 salt into caller buffer.
+ * \param saltOut Output salt buffer.
+ * \return `true` if copied.
+ */
 bool PinManager::getPW3Salt(uint8_t* saltOut) const {
     if (!saltOut) return false;
     memcpy(saltOut, pw3Salt_, SALT_SIZE);
     return true;
 }
 
+/**
+ * \brief Resets PW3 retry counter to maximum.
+ */
 void PinManager::resetPW3Retries() {
     if (pw3Retries_ < MAX_RETRIES) {
         pw3Retries_ = MAX_RETRIES;
@@ -456,8 +596,14 @@ void PinManager::resetPW3Retries() {
     }
 }
 
-// === Lockout Timer ===
+/**
+ * \brief Lockout timer handling.
+ */
 
+/**
+ * \brief Returns whether badge PIN entry is currently blocked by lockout.
+ * \return `true` if blocked.
+ */
 bool PinManager::isBadgeBlocked() const {
     // Blocked if retries exhausted AND lockout still active
     if (badgeRetries_ == 0) {
@@ -466,12 +612,19 @@ bool PinManager::isBadgeBlocked() const {
     return false;
 }
 
+/**
+ * \brief Starts lockout timer after retries are exhausted.
+ */
 void PinManager::startLockout() {
     lockoutStartMs_ = esp_timer_get_time() / 1000;  // Convert to ms
     lockoutActive_ = true;
     LOG_W(TAG, "Lockout started for %lu ms", LOCKOUT_DURATION_MS);
 }
 
+/**
+ * \brief Returns remaining badge lockout duration.
+ * \return Remaining lockout time in milliseconds.
+ */
 uint32_t PinManager::getLockoutRemainingMs() const {
     if (!lockoutActive_ || badgeRetries_ > 0) {
         return 0;
@@ -486,6 +639,10 @@ uint32_t PinManager::getLockoutRemainingMs() const {
     return LOCKOUT_DURATION_MS - elapsed;
 }
 
+/**
+ * \brief Returns whether lockout is currently active and lazily clears expired lockout.
+ * \return `true` if lockout is still active.
+ */
 bool PinManager::isLockoutActive() const {
     if (!lockoutActive_) {
         return false;

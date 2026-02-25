@@ -1,5 +1,7 @@
-// CTAPHID Transport Layer
-// Handles USB HID framing for CTAP2 messages
+/**
+ * \file
+ * \brief CTAPHID transport layer for USB HID framed CTAP2/U2F traffic.
+ */
 
 #include "mod_fido2/ctaphid.h"
 #include "mod_fido2/ctap2.h"
@@ -8,7 +10,7 @@
 #include "cdc_core/feature_flags.h"
 #include <esp_attr.h>
 
-// USB transport (defined in Fido2Module.cpp)
+/** \brief USB transport callback implemented in Fido2Module.cpp. */
 namespace cdc::mod_fido2 {
     bool fido2_usb_write(const uint8_t* buffer);
 }
@@ -18,9 +20,7 @@ using cdc::mod_fido2::fido2_usb_write;
 #include <freertos/task.h>
 #include <freertos/semphr.h>
 
-// ============================================================================
-// Configuration
-// ============================================================================
+/** \brief Enable verbose packet-level debug logging when feature flags allow it. */
 
 #ifndef CTAPHID_DEBUG_PACKETS
 #define CTAPHID_DEBUG_PACKETS       DEBUG_MODE  // Controlled by feature_flags.h
@@ -29,15 +29,13 @@ using cdc::mod_fido2::fido2_usb_write;
 #define CTAPHID_MAX_CHANNELS        8       // Max concurrent channels
 #define CTAPHID_RESPONSE_QUEUE_SIZE 8       // Response packet queue
 
-// ============================================================================
-// State
-// ============================================================================
+/** \brief Runtime state and channel bookkeeping for CTAPHID transport. */
 
-// Rate limiting: max commands per second
+/** \brief Per-window command rate limiting configuration. */
 #define CTAPHID_RATE_LIMIT_WINDOW_MS  1000
 #define CTAPHID_RATE_LIMIT_MAX_CMDS   200
 
-// Large buffers in PSRAM to save internal RAM
+/** \brief Message and response buffers located in PSRAM to save internal RAM. */
 EXT_RAM_BSS_ATTR static uint8_t s_msg_buffers[CTAPHID_MAX_CHANNELS][CTAPHID_MAX_MSG_SIZE];
 EXT_RAM_BSS_ATTR static uint8_t s_response_buffer[CTAPHID_MAX_MSG_SIZE];
 
@@ -61,10 +59,11 @@ static struct {
     uint32_t msg_cmd_count;                 // CTAPHID_MSG (U2F) commands
 } g_ctaphid = {};
 
-// ============================================================================
-// Internal Helpers
-// ============================================================================
-
+/**
+ * \brief Returns the channel record for a given channel identifier.
+ * \param cid CTAPHID channel identifier.
+ * \return Pointer to the channel entry, or `NULL` when not found.
+ */
 static ctaphid_channel_t *find_channel(uint32_t cid) {
     for (int i = 0; i < CTAPHID_MAX_CHANNELS; i++) {
         if (g_ctaphid.channels[i].cid == cid) {
@@ -74,6 +73,11 @@ static ctaphid_channel_t *find_channel(uint32_t cid) {
     return NULL;
 }
 
+/**
+ * \brief Allocates or reuses a channel slot for the provided channel identifier.
+ * \param cid CTAPHID channel identifier to allocate.
+ * \return Pointer to the allocated channel entry, or `NULL` when no slot is available.
+ */
 static ctaphid_channel_t *alloc_channel(uint32_t cid) {
     // First check if already exists
     ctaphid_channel_t *ch = find_channel(cid);
@@ -113,6 +117,10 @@ static ctaphid_channel_t *alloc_channel(uint32_t cid) {
     return NULL;  // All channels actively in use
 }
 
+/**
+ * \brief Allocates the next non-broadcast CTAPHID channel identifier.
+ * \return Newly allocated channel identifier.
+ */
 static uint32_t allocate_cid(void) {
     // Start from 1, avoid broadcast CID
     if (g_ctaphid.next_cid == 0 || g_ctaphid.next_cid == CTAPHID_BROADCAST_CID) {
@@ -121,6 +129,15 @@ static uint32_t allocate_cid(void) {
     return g_ctaphid.next_cid++;
 }
 
+/**
+ * \brief Builds a CTAPHID initialization packet.
+ * \param packet Destination buffer for the 64-byte HID packet.
+ * \param cid CTAPHID channel identifier.
+ * \param cmd CTAPHID command byte without the init bit.
+ * \param bcnt Total message byte count.
+ * \param data Optional payload pointer.
+ * \param data_len Number of payload bytes available in `data`.
+ */
 static void build_init_packet(uint8_t *packet, uint32_t cid, uint8_t cmd,
                                uint16_t bcnt, const uint8_t *data, uint16_t data_len) {
     memset(packet, 0, CTAPHID_PACKET_SIZE);
@@ -141,6 +158,14 @@ static void build_init_packet(uint8_t *packet, uint32_t cid, uint8_t cmd,
     }
 }
 
+/**
+ * \brief Builds a CTAPHID continuation packet.
+ * \param packet Destination buffer for the 64-byte HID packet.
+ * \param cid CTAPHID channel identifier.
+ * \param seq Continuation sequence number.
+ * \param data Optional payload pointer.
+ * \param data_len Number of payload bytes available in `data`.
+ */
 static void build_cont_packet(uint8_t *packet, uint32_t cid, uint8_t seq,
                                const uint8_t *data, uint16_t data_len) {
     memset(packet, 0, CTAPHID_PACKET_SIZE);
@@ -159,6 +184,13 @@ static void build_cont_packet(uint8_t *packet, uint32_t cid, uint8_t seq,
     }
 }
 
+/**
+ * \brief Stores a command response so it can be packetized and read out later.
+ * \param cid Channel identifier for the response.
+ * \param cmd CTAPHID response command.
+ * \param data Optional response payload pointer.
+ * \param len Number of payload bytes.
+ */
 static void prepare_response(uint32_t cid, uint8_t cmd, const uint8_t *data, uint16_t len) {
     g_ctaphid.response_cid = cid;
     g_ctaphid.response_cmd = cmd;
@@ -178,10 +210,12 @@ static void prepare_response(uint32_t cid, uint8_t cmd, const uint8_t *data, uin
     }
 }
 
-// ============================================================================
-// Command Handlers
-// ============================================================================
-
+/**
+ * \brief Handles CTAPHID INIT and returns negotiated channel/capability data.
+ * \param cid Source channel identifier from the request.
+ * \param data INIT request payload.
+ * \param len Length of `data` in bytes.
+ */
 static void handle_init(uint32_t cid, const uint8_t *data, uint16_t len) {
     if (len < 8) {
         ctaphid_send_error(cid, CTAPHID_ERR_INVALID_LEN);
@@ -214,24 +248,44 @@ static void handle_init(uint32_t cid, const uint8_t *data, uint16_t len) {
     if (CTAPHID_DEBUG_PACKETS) LOG_D("CTAPHID", "INIT: allocated CID 0x%08lX", new_cid);
 }
 
+/**
+ * \brief Handles CTAPHID PING by echoing the request payload.
+ * \param cid Request channel identifier.
+ * \param data PING payload bytes.
+ * \param len Length of `data` in bytes.
+ */
 static void handle_ping(uint32_t cid, const uint8_t *data, uint16_t len) {
     // Echo back the data
     prepare_response(cid, CTAPHID_PING, data, len);
     if (CTAPHID_DEBUG_PACKETS) LOG_D("CTAPHID", "PING: echoing %d bytes", len);
 }
 
+/**
+ * \brief Handles CTAPHID WINK requests.
+ * \param cid Request channel identifier.
+ */
 static void handle_wink(uint32_t cid) {
     // TODO: Visual feedback (LED blink or similar)
     prepare_response(cid, CTAPHID_WINK, NULL, 0);
     if (CTAPHID_DEBUG_PACKETS) LOG_D("CTAPHID", "WINK");
 }
 
+/**
+ * \brief Handles CTAPHID CANCEL requests and aborts active CTAP2 work.
+ * \param cid Request channel identifier.
+ */
 static void handle_cancel(uint32_t cid) {
     ctap2_cancel();
     // No response for CANCEL
     if (CTAPHID_DEBUG_PACKETS) LOG_D("CTAPHID", "CANCEL");
 }
 
+/**
+ * \brief Handles CTAPHID CBOR requests by dispatching to the CTAP2 command processor.
+ * \param cid Request channel identifier.
+ * \param data CBOR command payload.
+ * \param len Length of `data` in bytes.
+ */
 static void handle_cbor(uint32_t cid, const uint8_t *data, uint16_t len) {
     if (len < 1) {
         ctaphid_send_error(cid, CTAPHID_ERR_INVALID_LEN);
@@ -252,6 +306,10 @@ static void handle_cbor(uint32_t cid, const uint8_t *data, uint16_t len) {
     if (CTAPHID_DEBUG_PACKETS) LOG_D("CTAPHID", "CBOR: cmd=0x%02X status=0x%02X len=%d", data[0], status, response_len);
 }
 
+/**
+ * \brief Dispatches a fully assembled channel message to its command handler.
+ * \param ch Channel state containing command and assembled payload.
+ */
 static void process_complete_message(ctaphid_channel_t *ch) {
     uint32_t cid = ch->cid;
     uint8_t cmd = ch->cmd;
@@ -304,10 +362,10 @@ static void process_complete_message(ctaphid_channel_t *ch) {
     ch->offset = 0;
 }
 
-// ============================================================================
-// Public API
-// ============================================================================
-
+/**
+ * \brief Initializes CTAPHID transport state and synchronization primitives.
+ * \return `true` on success, otherwise `false`.
+ */
 bool ctaphid_init(void) {
     LOG_I("CTAPHID", "Initializing...");
 
@@ -325,16 +383,29 @@ bool ctaphid_init(void) {
     return true;
 }
 
+/**
+ * \brief Returns cumulative counters for CTAPHID CBOR and MSG commands.
+ * \param cbor_count Optional destination for CBOR command count.
+ * \param msg_count Optional destination for MSG/U2F command count.
+ */
 void ctaphid_get_cmd_counts(uint32_t *cbor_count, uint32_t *msg_count) {
     if (cbor_count) *cbor_count = g_ctaphid.cbor_cmd_count;
     if (msg_count) *msg_count = g_ctaphid.msg_cmd_count;
 }
 
+/**
+ * \brief Resets CTAPHID command counters.
+ */
 void ctaphid_reset_cmd_counts(void) {
     g_ctaphid.cbor_cmd_count = 0;
     g_ctaphid.msg_cmd_count = 0;
 }
 
+/**
+ * \brief Processes one incoming 64-byte CTAPHID packet.
+ * \param packet HID packet buffer.
+ * \return `true` when the packet is consumed, `false` on invalid preconditions.
+ */
 bool ctaphid_process_packet(const uint8_t *packet) {
     if (!g_ctaphid.initialized || !packet) return false;
 
@@ -468,10 +539,19 @@ bool ctaphid_process_packet(const uint8_t *packet) {
     return true;
 }
 
+/**
+ * \brief Indicates whether a response is queued for host retrieval.
+ * \return `true` when a response is pending, otherwise `false`.
+ */
 bool ctaphid_has_response(void) {
     return g_ctaphid.response_pending;
 }
 
+/**
+ * \brief Retrieves the next response HID packet from the queued response message.
+ * \param packet Destination buffer for the response packet.
+ * \return `true` when a packet was written, otherwise `false`.
+ */
 bool ctaphid_get_response_packet(uint8_t *packet) {
     if (!g_ctaphid.response_pending || !packet) return false;
 
@@ -505,6 +585,11 @@ bool ctaphid_get_response_packet(uint8_t *packet) {
     return true;
 }
 
+/**
+ * \brief Sends a CTAPHID KEEPALIVE packet immediately over USB.
+ * \param cid Channel identifier.
+ * \param status CTAPHID keepalive status byte.
+ */
 void ctaphid_send_keepalive(uint32_t cid, uint8_t status) {
     uint8_t packet[CTAPHID_PACKET_SIZE];
     uint8_t data = status;
@@ -514,12 +599,20 @@ void ctaphid_send_keepalive(uint32_t cid, uint8_t status) {
     fido2_usb_write(packet);
 }
 
+/**
+ * \brief Queues a CTAPHID ERROR response for the given channel.
+ * \param cid Channel identifier.
+ * \param error CTAPHID error code.
+ */
 void ctaphid_send_error(uint32_t cid, uint8_t error) {
     uint8_t data = error;
     prepare_response(cid, CTAPHID_ERROR, &data, 1);
     LOG_W("CTAPHID", "Sending error 0x%02X to CID 0x%08lX", error, cid);
 }
 
+/**
+ * \brief Expires active channels whose message assembly timeout elapsed.
+ */
 void ctaphid_check_timeout(void) {
     if (!g_ctaphid.initialized) return;
 
@@ -539,10 +632,18 @@ void ctaphid_check_timeout(void) {
     xSemaphoreGive(g_ctaphid.mutex);
 }
 
+/**
+ * \brief Returns the channel identifier of the currently processed request.
+ * \return Active request channel identifier.
+ */
 uint32_t ctaphid_get_current_cid(void) {
     return g_ctaphid.current_cid;
 }
 
+/**
+ * \brief Reports whether any CTAPHID channel currently has an active transaction.
+ * \return `true` when at least one channel is active, otherwise `false`.
+ */
 bool ctaphid_is_busy(void) {
     for (int i = 0; i < CTAPHID_MAX_CHANNELS; i++) {
         if (g_ctaphid.channels[i].active) return true;

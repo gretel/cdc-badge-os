@@ -12,6 +12,7 @@ idf_component_register(
         "src/TropicSlotMap.cpp"
         "src/KeyFingerprint.cpp"
         "src/UsbManager.cpp"
+        "src/IKeyboardProvider.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES

@@ -23,7 +23,9 @@
 
 static const char* TAG = "LockScreen";
 
-// Display layout constants
+/**
+ * \brief Display layout constants.
+ */
 static constexpr int CLOCK_Y = 5;
 static constexpr int DATE_Y = 22;
 static constexpr int ICONS_Y = 5;
@@ -34,7 +36,9 @@ static constexpr int BATTERY_X = 260;
 static constexpr int BATTERY_Y = 5;
 static constexpr int DISPLAY_WIDTH = 296;
 
-// Font size table: 5=24pt, 4=18pt, 3=12pt, 2=9pt, 1=built-in 6x8
+/**
+ * \brief Font size table: 5=24pt, 4=18pt, 3=12pt, 2=9pt, 1=built-in 6x8.
+ */
 static const GFXfont* const FONT_SIZES[] = {
     nullptr,                // Size 1: built-in 6x8
     &FreeMonoBold9pt7b,     // Size 2: 9pt
@@ -44,7 +48,9 @@ static const GFXfont* const FONT_SIZES[] = {
 };
 static constexpr int FONT_SIZE_COUNT = 5;
 
-// Battery icon dimensions
+/**
+ * \brief Battery icon dimensions.
+ */
 static constexpr int BAT_WIDTH = 28;
 static constexpr int BAT_HEIGHT = 12;
 static constexpr int BAT_TIP_WIDTH = 3;
@@ -52,6 +58,9 @@ static constexpr int BAT_TIP_HEIGHT = 6;
 
 namespace cdc::ui {
 
+/**
+ * \brief Initializes lock-screen state fields to defaults.
+ */
 void LockScreenView::init() {
     memset(name_, 0, sizeof(name_));
     memset(info_, 0, sizeof(info_));
@@ -64,6 +73,10 @@ void LockScreenView::init() {
     dirty_ = true;
 }
 
+/**
+ * \brief Sets primary display name shown on lock screen.
+ * \param name Name text (nullable).
+ */
 void LockScreenView::setDisplayName(const char* name) {
     if (name) {
         strncpy(name_, name, MAX_TEXT_LEN - 1);
@@ -74,6 +87,10 @@ void LockScreenView::setDisplayName(const char* name) {
     dirty_ = true;
 }
 
+/**
+ * \brief Sets first informational line.
+ * \param info Info text (nullable).
+ */
 void LockScreenView::setInfo(const char* info) {
     if (info) {
         strncpy(info_, info, MAX_TEXT_LEN - 1);
@@ -84,6 +101,10 @@ void LockScreenView::setInfo(const char* info) {
     dirty_ = true;
 }
 
+/**
+ * \brief Sets second informational line.
+ * \param info2 Secondary info text (nullable).
+ */
 void LockScreenView::setInfo2(const char* info2) {
     if (info2) {
         strncpy(info2_, info2, MAX_TEXT_LEN - 1);
@@ -94,6 +115,10 @@ void LockScreenView::setInfo2(const char* info2) {
     dirty_ = true;
 }
 
+/**
+ * \brief Sets clock text shown in the header.
+ * \param clock Clock text (nullable).
+ */
 void LockScreenView::setClock(const char* clock) {
     if (clock) {
         strncpy(clock_, clock, sizeof(clock_) - 1);
@@ -104,6 +129,10 @@ void LockScreenView::setClock(const char* clock) {
     dirty_ = true;
 }
 
+/**
+ * \brief Sets date text shown below clock.
+ * \param date Date text (nullable).
+ */
 void LockScreenView::setDate(const char* date) {
     if (date) {
         strncpy(date_, date, sizeof(date_) - 1);
@@ -114,6 +143,10 @@ void LockScreenView::setDate(const char* date) {
     dirty_ = true;
 }
 
+/**
+ * \brief Updates battery percentage indicator.
+ * \param percent Battery percentage (clamped to 0..100).
+ */
 void LockScreenView::setBatteryPercent(uint8_t percent) {
     if (percent > 100) percent = 100;
     if (batteryPercent_ != percent) {
@@ -122,6 +155,10 @@ void LockScreenView::setBatteryPercent(uint8_t percent) {
     }
 }
 
+/**
+ * \brief Replaces full status-icon bitmask.
+ * \param icons New status icon mask.
+ */
 void LockScreenView::setStatusIcons(StatusIcon icons) {
     if (statusIcons_ != icons) {
         statusIcons_ = icons;
@@ -129,19 +166,33 @@ void LockScreenView::setStatusIcons(StatusIcon icons) {
     }
 }
 
+/**
+ * \brief Adds one status icon flag.
+ * \param icon Icon bit to set.
+ */
 void LockScreenView::addStatusIcon(StatusIcon icon) {
     setStatusIcons(statusIcons_ | icon);
 }
 
+/**
+ * \brief Removes one status icon flag.
+ * \param icon Icon bit to clear.
+ */
 void LockScreenView::removeStatusIcon(StatusIcon icon) {
     setStatusIcons(static_cast<StatusIcon>(
         static_cast<uint16_t>(statusIcons_) & ~static_cast<uint16_t>(icon)
     ));
 }
 
-// Static reference for callback access
+/**
+ * \brief Static lock-screen instance pointer for C-style callbacks.
+ */
 static LockScreenView* s_lockScreenInstance = nullptr;
 
+/**
+ * \brief Handles entering lock screen and updates backlight behavior.
+ * \param context Optional enter context (unused).
+ */
 void LockScreenView::onEnter(void* context) {
     (void)context;
     s_lockScreenInstance = this;
@@ -157,6 +208,9 @@ void LockScreenView::onEnter(void* context) {
     dirty_ = true;
 }
 
+/**
+ * \brief Handles returning to lock screen and reapplies backlight policy.
+ */
 void LockScreenView::onResume() {
     // Called when returning to lock screen (e.g., via N from main menu)
     nPressStartMs_ = 0;  // Reset deep sleep trigger
@@ -171,6 +225,9 @@ void LockScreenView::onResume() {
     dirty_ = true;
 }
 
+/**
+ * \brief Toggles display backlight and corresponding status icon.
+ */
 void LockScreenView::toggleBacklight() {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;
@@ -185,6 +242,9 @@ void LockScreenView::toggleBacklight() {
     dirty_ = true;
 }
 
+/**
+ * \brief Context-menu callback toggling lock-screen backlight mode.
+ */
 static void onLightMenuCallback() {
     if (s_lockScreenInstance) {
         s_lockScreenInstance->toggleBacklight();
@@ -192,19 +252,48 @@ static void onLightMenuCallback() {
     hideContextMenu();
 }
 
-// Storage for dynamic context menu items from modules
+/**
+ * \brief Storage for dynamic context-menu items contributed by modules.
+ */
 static constexpr uint8_t MAX_CONTEXT_ITEMS = 8;
 static ContextMenuItem s_contextItems[MAX_CONTEXT_ITEMS];
 static core::LockScreenContextItem s_moduleContextItems[MAX_CONTEXT_ITEMS - 1];
 static uint8_t s_moduleContextCount = 0;
 
-// Wrapper callbacks for module items
+/**
+ * \brief Wrapper callback for module context item at index 0.
+ * \return void
+ */
 static void moduleContextCallback0() { if (s_moduleContextItems[0].callback) { s_moduleContextItems[0].callback(); } hideContextMenu(); }
+/**
+ * \brief Wrapper callback for module context item at index 1.
+ * \return void
+ */
 static void moduleContextCallback1() { if (s_moduleContextItems[1].callback) { s_moduleContextItems[1].callback(); } hideContextMenu(); }
+/**
+ * \brief Wrapper callback for module context item at index 2.
+ * \return void
+ */
 static void moduleContextCallback2() { if (s_moduleContextItems[2].callback) { s_moduleContextItems[2].callback(); } hideContextMenu(); }
+/**
+ * \brief Wrapper callback for module context item at index 3.
+ * \return void
+ */
 static void moduleContextCallback3() { if (s_moduleContextItems[3].callback) { s_moduleContextItems[3].callback(); } hideContextMenu(); }
+/**
+ * \brief Wrapper callback for module context item at index 4.
+ * \return void
+ */
 static void moduleContextCallback4() { if (s_moduleContextItems[4].callback) { s_moduleContextItems[4].callback(); } hideContextMenu(); }
+/**
+ * \brief Wrapper callback for module context item at index 5.
+ * \return void
+ */
 static void moduleContextCallback5() { if (s_moduleContextItems[5].callback) { s_moduleContextItems[5].callback(); } hideContextMenu(); }
+/**
+ * \brief Wrapper callback for module context item at index 6.
+ * \return void
+ */
 static void moduleContextCallback6() { if (s_moduleContextItems[6].callback) { s_moduleContextItems[6].callback(); } hideContextMenu(); }
 
 static void (*const s_moduleCallbacks[])() = {
@@ -213,6 +302,14 @@ static void (*const s_moduleCallbacks[])() = {
     moduleContextCallback6
 };
 
+/**
+ * \brief Handles lock-screen key actions.
+ *
+ * Key `3` opens the context menu; any other key triggers unlock callback.
+ *
+ * \param key Pressed key code.
+ * \return Input consumption result.
+ */
 InputResult LockScreenView::onKey(char key) {
     // Key 3 opens context menu for light toggle + module items
     if (key == '3') {
@@ -242,11 +339,19 @@ InputResult LockScreenView::onKey(char key) {
     return InputResult::CONSUMED;
 }
 
+/**
+ * \brief Per-tick handler for long-press deep-sleep detection.
+ * \param nowMs Current uptime in milliseconds.
+ */
 void LockScreenView::onTick(uint32_t nowMs) {
     // Check for long-press N -> deep sleep (flight mode)
     checkDeepSleepTrigger(nowMs);
 }
 
+/**
+ * \brief Detects and handles long press on `N` key to enter deep sleep.
+ * \param nowMs Current uptime in milliseconds.
+ */
 void LockScreenView::checkDeepSleepTrigger(uint32_t nowMs) {
     auto* keypad = hal::getKeypadInstance();
     if (!keypad) return;
@@ -261,21 +366,19 @@ void LockScreenView::checkDeepSleepTrigger(uint32_t nowMs) {
             // Check if held long enough
             uint32_t elapsed = nowMs - nPressStartMs_;
             if (elapsed >= DEEP_SLEEP_HOLD_MS) {
-                // Enter flight mode (deep sleep)
                 LOG_I(TAG, "Long-press N detected, entering deep sleep...");
 
-                // Show deep sleep icon
-                addStatusIcon(StatusIcon::DEEP_SLEEP);
-                render(false);
-
-                // Wait for display to refresh
-                vTaskDelay(pdMS_TO_TICKS(500));
+                // Render deep sleep screen and push to e-paper
+                renderDeepSleepScreen();
 
                 // Turn off backlight
                 auto* display = hal::getDisplayInstance();
                 if (display) {
                     display->backlightOff();
                 }
+
+                // Wait 2s so user can release button without triggering wakeup
+                vTaskDelay(pdMS_TO_TICKS(2000));
 
                 // Enter deep sleep (does not return - causes reset on wake)
                 auto* sleep = hal::getSleepControllerInstance();
@@ -293,10 +396,21 @@ void LockScreenView::checkDeepSleepTrigger(uint32_t nowMs) {
     }
 }
 
+/**
+ * \brief Returns footer hint based on current lock-screen mode.
+ * \return Localized footer hint string.
+ */
 const char* LockScreenView::getFooterHint() const {
+    if (deepSleepMode_) return tr(StringId::DEEP_SLEEP);
     return tr(StringId::PRESS_ANY_KEY);
 }
 
+/**
+ * \brief Renders battery icon including charging/no-battery overlays.
+ * \param gfxPtr Native graphics pointer.
+ * \param x Left coordinate.
+ * \param y Top coordinate.
+ */
 void LockScreenView::renderBattery(void* gfxPtr, int x, int y) {
     auto* gfx = static_cast<Gdey029T94*>(gfxPtr);
     // Battery outline
@@ -330,6 +444,12 @@ void LockScreenView::renderBattery(void* gfxPtr, int x, int y) {
     }
 }
 
+/**
+ * \brief Renders top-row status icons.
+ * \param gfxPtr Native graphics pointer.
+ * \param x Start x coordinate.
+ * \param y Start y coordinate.
+ */
 void LockScreenView::renderStatusIcons(void* gfxPtr, int x, int y) {
     auto* gfx = static_cast<Gdey029T94*>(gfxPtr);
     int iconX = x;
@@ -437,6 +557,30 @@ void LockScreenView::renderStatusIcons(void* gfxPtr, int x, int y) {
     (void)iconX;
 }
 
+/**
+ * \brief Renders and flushes dedicated deep-sleep transition screen.
+ */
+void LockScreenView::renderDeepSleepScreen() {
+    deepSleepMode_ = true;
+
+    // Clear clock and status icons for minimal screen
+    setClock("");
+    setDate("");
+    statusIcons_ = StatusIcon::NONE;
+
+    // Render normal lockscreen (with deep sleep footer) and push to display
+    render(false);
+
+    auto* display = hal::getDisplayInstance();
+    if (display) {
+        display->flushSync(hal::RefreshMode::PARTIAL);
+    }
+}
+
+/**
+ * \brief Renders complete lock-screen layout.
+ * \param partial `true` for partial redraw, `false` for full redraw.
+ */
 void LockScreenView::render(bool partial) {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;

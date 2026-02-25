@@ -7,6 +7,7 @@
 
 #include "cdc_views/PinEntryView.h"
 #include "cdc_views/MessageBox.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_core/PinManager.h"
 #include "cdc_ui/I18n.h"
@@ -17,7 +18,9 @@
 
 static const char* TAG = "PinEntryView";
 
-// Display constants
+/**
+ * \brief Display layout constants.
+ */
 static constexpr int TITLE_Y = 15;
 static constexpr int PIN_Y = 50;
 static constexpr int PIN_DOT_SIZE = 16;
@@ -26,6 +29,13 @@ static constexpr int RETRIES_Y = 80;
 
 namespace cdc::ui {
 
+/**
+ * \brief Initializes PIN entry configuration and clears current input.
+ * \param title Title text shown in the view.
+ * \param maxPinLength Maximum accepted PIN length.
+ * \param maxAttempts Maximum allowed attempts before lockout handling.
+ * \return void
+ */
 void PinEntryView::init(const char* title, uint8_t maxPinLength, uint8_t maxAttempts) {
     title_ = title;
     maxLength_ = maxPinLength > MAX_PIN_LENGTH ? MAX_PIN_LENGTH : maxPinLength;
@@ -35,17 +45,31 @@ void PinEntryView::init(const char* title, uint8_t maxPinLength, uint8_t maxAtte
     dirty_ = true;
 }
 
+/**
+ * \brief Resets entry state when the view is entered.
+ * \param context Optional view context (unused).
+ * \return void
+ */
 void PinEntryView::onEnter(void* context) {
     (void)context;
     clear();
     dirty_ = true;
 }
 
+/**
+ * \brief Clears the internal PIN buffer.
+ * \return void
+ */
 void PinEntryView::clear() {
     memset(buffer_, 0, sizeof(buffer_));
     length_ = 0;
 }
 
+/**
+ * \brief Appends a digit to the PIN buffer.
+ * \param digit Numeric digit character.
+ * \return void
+ */
 void PinEntryView::addDigit(char digit) {
     if (length_ >= maxLength_ || lockedOut_) return;
 
@@ -54,6 +78,10 @@ void PinEntryView::addDigit(char digit) {
     dirty_ = true;
 }
 
+/**
+ * \brief Removes the last digit from the PIN buffer.
+ * \return void
+ */
 void PinEntryView::backspace() {
     if (length_ > 0 && !lockedOut_) {
         buffer_[--length_] = '\0';
@@ -61,6 +89,11 @@ void PinEntryView::backspace() {
     }
 }
 
+/**
+ * \brief Updates lockout state and periodic countdown refresh.
+ * \param nowMs Current monotonic time in milliseconds.
+ * \return void
+ */
 void PinEntryView::onTick(uint32_t nowMs) {
     (void)nowMs;
     core::PinManager& pm = core::PinManager::instance();
@@ -82,10 +115,18 @@ void PinEntryView::onTick(uint32_t nowMs) {
     }
 }
 
+/**
+ * \brief Returns remaining lockout time.
+ * \return Remaining lockout duration in milliseconds.
+ */
 uint32_t PinEntryView::getLockoutRemaining() const {
     return core::PinManager::instance().getLockoutRemainingMs();
 }
 
+/**
+ * \brief Verifies the entered PIN via callback and updates UI state.
+ * \return void
+ */
 void PinEntryView::verify() {
     if (length_ < minLength_) {
         if (showMessages_) {
@@ -132,6 +173,11 @@ void PinEntryView::verify() {
     }
 }
 
+/**
+ * \brief Handles key input for PIN entry and actions.
+ * \param key Pressed key code.
+ * \return Input handling result for the view stack.
+ */
 InputResult PinEntryView::onKey(char key) {
     if (lockedOut_) {
         return InputResult::IGNORED;
@@ -165,10 +211,19 @@ InputResult PinEntryView::onKey(char key) {
     }
 }
 
+/**
+ * \brief Returns localized footer hint text.
+ * \return Footer hint string.
+ */
 const char* PinEntryView::getFooterHint() const {
     return tr(StringId::HINT_PIN_INPUT);
 }
 
+/**
+ * \brief Renders PIN dots, status text, and footer hint.
+ * \param partial Indicates partial/full redraw mode.
+ * \return void
+ */
 void PinEntryView::render(bool partial) {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) {
@@ -194,11 +249,7 @@ void PinEntryView::render(bool partial) {
     // Title (centered)
     if (title_) {
         gfx->setTextSize(1);
-        int16_t x1, y1;
-        uint16_t w, h;
-        gfx->getTextBounds(title_, 0, 0, &x1, &y1, &w, &h);
-        gfx->setCursor((width - w) / 2, TITLE_Y);
-        gfx->print(title_);
+        render::drawHeaderCentered(gfx, title_, TITLE_Y, width);
     }
 
     // PIN dots (centered)
@@ -242,22 +293,27 @@ void PinEntryView::render(bool partial) {
 
     // Footer hint
     const char* hint = getFooterHint();
-    if (hint) {
-        gfx->fillRect(0, height - 16, width, 16, EPD_BLACK);
-        gfx->setTextColor(EPD_WHITE);
-        gfx->setCursor(4, height - 12);
-        gfx->print(hint);
-    }
+    render::drawFooterBar(gfx, width, height, nullptr, hint, false);
 
     dirty_ = false;
 }
 
-// ============================================================================
-// Convenience Function
-// ============================================================================
+/**
+ * \brief Convenience factory/helper function.
+ */
 
 static PinEntryView s_sharedPinEntry;
 
+/**
+ * \brief Shows a shared PIN entry view instance.
+ * \param title View title text.
+ * \param onVerify Verification callback.
+ * \param onSuccess Success callback.
+ * \param maxLength Maximum PIN length.
+ * \param minLength Minimum PIN length.
+ * \param maxAttempts Maximum retry attempts.
+ * \return Pointer to the shared `PinEntryView` instance.
+ */
 PinEntryView* showPinEntry(const char* title,
                            PinEntryView::VerifyCallback onVerify,
                            PinEntryView::SuccessCallback onSuccess,

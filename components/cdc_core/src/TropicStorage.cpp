@@ -12,11 +12,19 @@ static constexpr uint8_t CACHE_VERSION = 1;
 static constexpr const char* NVS_NAMESPACE = "tr01_meta";
 static constexpr const char* NVS_KEY_HEADER = "hdr";
 
+/**
+ * \brief Returns singleton instance of TROPIC metadata cache manager.
+ * \return Reference to singleton instance.
+ */
 TropicStorage& TropicStorage::instance() {
     static TropicStorage inst;
     return inst;
 }
 
+/**
+ * \brief Initializes cache metadata and validates persisted cache header.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::init() {
     if (state_ != ServiceState::UNINITIALIZED) {
         return state_ == ServiceState::INITIALIZED || state_ == ServiceState::STARTED;
@@ -37,6 +45,10 @@ bool TropicStorage::init() {
     return true;
 }
 
+/**
+ * \brief Starts cache service, initializing first if required.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::start() {
     if (state_ == ServiceState::UNINITIALIZED) {
         if (!init()) return false;
@@ -45,14 +57,33 @@ bool TropicStorage::start() {
     return true;
 }
 
+/**
+ * \brief Stops cache service.
+ */
 void TropicStorage::stop() {
     state_ = ServiceState::STOPPED;
 }
 
+/**
+ * \brief Iterates all cached slots for one module across its allowed range.
+ * \param moduleId Module identifier.
+ * \param cb Callback invoked per matching slot.
+ * \param ctx Opaque callback context.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::forEachSlot(uint8_t moduleId, SlotCallback cb, void* ctx) {
     return forEachSlot(moduleId, 0, 0xFFFF, cb, ctx);
 }
 
+/**
+ * \brief Iterates cached slots for one module within optional slot bounds.
+ * \param moduleId Module identifier.
+ * \param fromSlot Inclusive start slot or `0` for module range start.
+ * \param toSlot Inclusive end slot or `0xFFFF` for module range end.
+ * \param cb Callback invoked per matching slot.
+ * \param ctx Opaque callback context.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::forEachSlot(uint8_t moduleId, uint16_t fromSlot, uint16_t toSlot,
                                 SlotCallback cb, void* ctx) {
     if (!cb) return false;
@@ -91,6 +122,14 @@ bool TropicStorage::forEachSlot(uint8_t moduleId, uint16_t fromSlot, uint16_t to
     return true;
 }
 
+/**
+ * \brief Resolves one module-relative index to slot entry and invokes callback.
+ * \param moduleId Module identifier.
+ * \param index Zero-based index within module slot range.
+ * \param cb Callback receiving resolved slot and entry.
+ * \param ctx Opaque callback context.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::getSlot(uint8_t moduleId, uint16_t index, SlotCallback cb, void* ctx) {
     if (!cb) return false;
 
@@ -118,6 +157,14 @@ bool TropicStorage::getSlot(uint8_t moduleId, uint16_t index, SlotCallback cb, v
     return true;
 }
 
+/**
+ * \brief Writes or updates cached metadata entry for one slot.
+ * \param moduleId Module identifier owning the slot.
+ * \param slot Absolute R-MEM slot index.
+ * \param name Optional entry name.
+ * \param flags Entry flags.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::writeSlot(uint8_t moduleId, uint16_t slot, const char* name, uint8_t flags) {
     if (!isEntryAllowed(slot, moduleId)) {
         return false;
@@ -138,6 +185,12 @@ bool TropicStorage::writeSlot(uint8_t moduleId, uint16_t slot, const char* name,
     return setEntry(slot, entry);
 }
 
+/**
+ * \brief Clears cached metadata entry for one slot.
+ * \param moduleId Module identifier owning the slot.
+ * \param slot Absolute R-MEM slot index.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::eraseSlot(uint8_t moduleId, uint16_t slot) {
     if (!isEntryAllowed(slot, moduleId)) {
         return false;
@@ -147,10 +200,20 @@ bool TropicStorage::eraseSlot(uint8_t moduleId, uint16_t slot) {
     return setEntry(slot, entry);
 }
 
+/**
+ * \brief Rebuilds cache contents from secure-element R-MEM without verbose logging.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::rebuild() {
     return rebuildVerbose(nullptr, nullptr);
 }
 
+/**
+ * \brief Rebuilds cache contents from secure-element R-MEM with optional logging callback.
+ * \param logFn Optional callback to receive per-slot progress/status strings.
+ * \param ctx Opaque callback context passed to `logFn`.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::rebuildVerbose(RebuildLogFn logFn, void* ctx) {
     if (!secureElement_) {
         LOG_E(TAG, "No secure element set");
@@ -211,6 +274,10 @@ bool TropicStorage::rebuildVerbose(RebuildLogFn logFn, void* ctx) {
     return cacheValid_;
 }
 
+/**
+ * \brief Removes cache entries and chip records that violate slot/module mapping.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::cleanup() {
     if (!secureElement_) {
         LOG_E(TAG, "No secure element set");
@@ -248,6 +315,10 @@ bool TropicStorage::cleanup() {
     return rebuild();
 }
 
+/**
+ * \brief Loads cache header from NVS and validates schema/map signature.
+ * \return `true` when valid header loaded, otherwise `false`.
+ */
 bool TropicStorage::loadHeader() {
     nvs_handle_t nvs;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) {
@@ -272,6 +343,10 @@ bool TropicStorage::loadHeader() {
     return true;
 }
 
+/**
+ * \brief Persists current cache header to NVS.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::saveHeader() {
     nvs_handle_t nvs;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
@@ -285,6 +360,12 @@ bool TropicStorage::saveHeader() {
     return err == ESP_OK;
 }
 
+/**
+ * \brief Loads one cache chunk from NVS into memory.
+ * \param chunkIndex Chunk index to load.
+ * \param entries Destination buffer for `CHUNK_SLOTS` entries.
+ * \return `true` on success; missing chunks return zeroed entries and `true`.
+ */
 bool TropicStorage::loadChunk(uint16_t chunkIndex, CacheEntry* entries) {
     if (!entries) return false;
     memset(entries, 0, sizeof(CacheEntry) * CHUNK_SLOTS);
@@ -306,6 +387,12 @@ bool TropicStorage::loadChunk(uint16_t chunkIndex, CacheEntry* entries) {
     return true;
 }
 
+/**
+ * \brief Persists one cache chunk to NVS.
+ * \param chunkIndex Chunk index to store.
+ * \param entries Source buffer with `CHUNK_SLOTS` entries.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::saveChunk(uint16_t chunkIndex, const CacheEntry* entries) {
     if (!entries) return false;
     nvs_handle_t nvs;
@@ -322,6 +409,10 @@ bool TropicStorage::saveChunk(uint16_t chunkIndex, const CacheEntry* entries) {
     return err == ESP_OK;
 }
 
+/**
+ * \brief Computes cache map signature used for stale-cache invalidation.
+ * \return 32-bit signature value.
+ */
 uint32_t TropicStorage::computeMapSignature() const {
     // FNV-1a 32-bit over map constants
     uint32_t hash = 2166136261u;
@@ -335,6 +426,12 @@ uint32_t TropicStorage::computeMapSignature() const {
     return hash;
 }
 
+/**
+ * \brief Sets one cache entry by absolute slot index.
+ * \param slot Absolute slot index.
+ * \param entry New cache entry value.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::setEntry(uint16_t slot, const CacheEntry& entry) {
     uint16_t chunkIndex = slot / CHUNK_SLOTS;
     uint16_t offset = slot % CHUNK_SLOTS;
@@ -344,6 +441,12 @@ bool TropicStorage::setEntry(uint16_t slot, const CacheEntry& entry) {
     return saveChunk(chunkIndex, entries);
 }
 
+/**
+ * \brief Reads one cache entry by absolute slot index.
+ * \param slot Absolute slot index.
+ * \param entry Destination for retrieved entry.
+ * \return `true` on success, otherwise `false`.
+ */
 bool TropicStorage::getEntry(uint16_t slot, CacheEntry* entry) {
     if (!entry) return false;
     uint16_t chunkIndex = slot / CHUNK_SLOTS;
@@ -354,10 +457,21 @@ bool TropicStorage::getEntry(uint16_t slot, CacheEntry* entry) {
     return true;
 }
 
+/**
+ * \brief Checks whether cache entry is marked used.
+ * \param entry Entry to inspect.
+ * \return `true` when used, otherwise `false`.
+ */
 bool TropicStorage::isEntryUsed(const CacheEntry& entry) const {
     return (entry.flags & FLAG_USED) != 0;
 }
 
+/**
+ * \brief Validates whether slot is allowed for module identifier.
+ * \param slot Absolute slot index.
+ * \param moduleId Module identifier.
+ * \return `true` when mapping allows the slot/module pairing.
+ */
 bool TropicStorage::isEntryAllowed(uint16_t slot, uint8_t moduleId) const {
     return TropicSlotMap::instance().isRmemAllowedForModuleId(slot, moduleId);
 }

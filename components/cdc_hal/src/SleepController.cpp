@@ -26,17 +26,17 @@ static const char* TAG = "SLEEP";
 
 namespace cdc::hal {
 
-// Default light sleep timer interval: 1 minute (60 seconds)
+/** \brief Default light-sleep timer interval in seconds. */
 static constexpr uint32_t DEFAULT_LIGHT_SLEEP_INTERVAL_S = 60;
 
-// NVS storage
+/** \brief NVS namespace/key for persisted sleep interval. */
 static constexpr const char* NVS_NAMESPACE = "sleep";
 static constexpr const char* NVS_KEY_INTERVAL = "interval";
 
-// Maximum callbacks per type
+/** \brief Maximum number of registered callbacks per callback list. */
 static constexpr size_t MAX_CALLBACKS = 8;
 
-// RTC memory: survives deep sleep
+/** \brief RTC-retained flag indicating previous deep-sleep state. */
 RTC_DATA_ATTR static bool g_was_in_deep_sleep = false;
 
 class Esp32SleepController : public ISleepController {
@@ -82,6 +82,10 @@ private:
     size_t wakeupCount_ = 0;
 };
 
+/**
+ * \brief Initializes sleep controller configuration and wake-state tracking.
+ * \return `true` on successful initialization.
+ */
 bool Esp32SleepController::init() {
     if (state_ != core::ServiceState::UNINITIALIZED) {
         return state_ == core::ServiceState::INITIALIZED ||
@@ -109,6 +113,9 @@ bool Esp32SleepController::init() {
     return true;
 }
 
+/**
+ * \brief Enters light sleep with configured wake sources.
+ */
 void Esp32SleepController::enterLightSleep() {
     if (!lightSleepConfigured_) {
         // Configure timer wakeup
@@ -151,6 +158,9 @@ void Esp32SleepController::enterLightSleep() {
     invokeCallbacks(wakeupCallbacks_, wakeupCount_);
 }
 
+/**
+ * \brief Enters deep sleep mode and never returns.
+ */
 [[noreturn]] void Esp32SleepController::enterDeepSleep() {
     LOG_I(TAG, "Entering deep sleep mode...");
 
@@ -169,6 +179,10 @@ void Esp32SleepController::enterLightSleep() {
     while (true) { }
 }
 
+/**
+ * \brief Returns last wakeup source reported by ESP-IDF.
+ * \return Wakeup source enum value.
+ */
 WakeupSource Esp32SleepController::getWakeupSource() const {
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
 
@@ -188,6 +202,10 @@ WakeupSource Esp32SleepController::getWakeupSource() const {
     }
 }
 
+/**
+ * \brief Updates light-sleep interval and persists it.
+ * \param seconds New interval in seconds.
+ */
 void Esp32SleepController::setLightSleepInterval(uint32_t seconds) {
     if (lightSleepIntervalS_ == seconds) return;
 
@@ -200,6 +218,9 @@ void Esp32SleepController::setLightSleepInterval(uint32_t seconds) {
     LOG_I(TAG, "Light sleep interval set to %lus", (unsigned long)seconds);
 }
 
+/**
+ * \brief Prepares GPIO/keypad state for entering sleep.
+ */
 void Esp32SleepController::prepareGpioForSleep() {
     LOG_D(TAG, "Preparing GPIO for sleep...");
 
@@ -210,6 +231,9 @@ void Esp32SleepController::prepareGpioForSleep() {
     }
 }
 
+/**
+ * \brief Restores/stabilizes GPIO/keypad state after wake.
+ */
 void Esp32SleepController::stabilizeGpioAfterWakeup() {
     LOG_D(TAG, "Stabilizing GPIO after wakeup...");
 
@@ -220,6 +244,11 @@ void Esp32SleepController::stabilizeGpioAfterWakeup() {
     }
 }
 
+/**
+ * \brief Registers callback invoked before sleep transition.
+ * \param entry Callback registration descriptor.
+ * \return `true` on successful registration.
+ */
 bool Esp32SleepController::registerPreSleepCallback(const SleepCallbackEntry& entry) {
     if (preSleepCount_ >= MAX_CALLBACKS) {
         LOG_W(TAG, "Pre-sleep callback limit reached");
@@ -248,6 +277,11 @@ bool Esp32SleepController::registerPreSleepCallback(const SleepCallbackEntry& en
     return true;
 }
 
+/**
+ * \brief Registers callback invoked after wakeup.
+ * \param entry Callback registration descriptor.
+ * \return `true` on successful registration.
+ */
 bool Esp32SleepController::registerWakeupCallback(const SleepCallbackEntry& entry) {
     if (wakeupCount_ >= MAX_CALLBACKS) {
         LOG_W(TAG, "Wakeup callback limit reached");
@@ -276,6 +310,10 @@ bool Esp32SleepController::registerWakeupCallback(const SleepCallbackEntry& entr
     return true;
 }
 
+/**
+ * \brief Removes all callbacks belonging to one module.
+ * \param moduleName Module name key.
+ */
 void Esp32SleepController::unregisterCallbacks(const char* moduleName) {
     if (!moduleName) return;
 
@@ -309,6 +347,11 @@ void Esp32SleepController::unregisterCallbacks(const char* moduleName) {
     LOG_I(TAG, "Unregistered callbacks for: %s", moduleName);
 }
 
+/**
+ * \brief Invokes callback list in current stored order.
+ * \param callbacks Callback array.
+ * \param count Number of active callbacks.
+ */
 void Esp32SleepController::invokeCallbacks(SleepCallbackEntry* callbacks, size_t count) {
     for (size_t i = 0; i < count; i++) {
         if (callbacks[i].callback) {
@@ -318,6 +361,9 @@ void Esp32SleepController::invokeCallbacks(SleepCallbackEntry* callbacks, size_t
     }
 }
 
+/**
+ * \brief Loads persisted light-sleep interval from NVS.
+ */
 void Esp32SleepController::loadFromNvs() {
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
@@ -330,6 +376,9 @@ void Esp32SleepController::loadFromNvs() {
     }
 }
 
+/**
+ * \brief Persists current light-sleep interval to NVS.
+ */
 void Esp32SleepController::saveToNvs() {
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
@@ -340,10 +389,13 @@ void Esp32SleepController::saveToNvs() {
     }
 }
 
-// Singleton instance
+/** \brief Singleton sleep-controller instance. */
 static Esp32SleepController g_sleepController;
 
-// Factory function
+/**
+ * \brief Returns the singleton sleep controller service instance.
+ * \return Pointer to the global `ISleepController` implementation.
+ */
 ISleepController* getSleepControllerInstance() {
     return &g_sleepController;
 }

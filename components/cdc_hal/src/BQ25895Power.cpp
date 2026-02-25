@@ -11,6 +11,7 @@
 #include "cdc_hal/hw_config.h"
 #include "cdc_log.h"
 #include "esp_attr.h"
+#include "esp_timer.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -19,7 +20,9 @@ static const char* TAG = "BQ25895";
 
 namespace cdc::hal {
 
-// BQ25895 Register Map
+/**
+ * \brief BQ25895 register map constants.
+ */
 static constexpr uint8_t BQ_REG_INPUT_CTRL   = 0x00;  // Input source control
 static constexpr uint8_t BQ_REG_ADC_CTRL     = 0x02;  // ADC control
 static constexpr uint8_t BQ_REG_CHG_CTRL     = 0x03;  // Charge control (SYS_MIN, OTG)
@@ -36,7 +39,9 @@ static constexpr uint8_t BQ_REG_ICHG         = 0x12;  // Charge current ADC
 static constexpr uint8_t BQ_REG_VINDPM       = 0x13;  // VINDPM threshold
 static constexpr uint8_t BQ_REG_VENDOR       = 0x14;  // Vendor/Part info
 
-// Charge current settings
+/**
+ * \brief Charge current and safety threshold constants.
+ */
 static constexpr uint8_t  BQ_ICHG_STEP_MA = 64;       // REG04[6:0] step size
 static constexpr uint16_t BQ_SYS_MIN_MV   = 3300;     // Minimum system voltage
 static constexpr uint16_t CHARGE_CURRENT_SLOW = 512;  // Slow charge: 512mA
@@ -44,10 +49,16 @@ static constexpr uint16_t CHARGE_CURRENT_FAST = 1000; // Fast charge: 1000mA
 static constexpr uint16_t CHARGE_CURRENT_MIN  = 64;
 static constexpr uint16_t CHARGE_CURRENT_MAX  = 1024;  // Critical: max for 1200mAh LiPo
 
-// IRQ flags (set in ISR)
+/**
+ * \brief Charger IRQ flag set by ISR and consumed in `update()`.
+ */
 static volatile bool charger_irq_pending = false;
 
-// ISR handler
+/**
+ * \brief GPIO interrupt handler for the charger IRQ pin.
+ * \param arg Unused ISR argument.
+ * \return void
+ */
 static void IRAM_ATTR charger_isr(void* arg) {
     (void)arg;
     charger_irq_pending = true;
@@ -60,14 +71,21 @@ class BQ25895Power : public IPowerManager {
 public:
     BQ25895Power() = default;
 
-    // IService implementation
+    /**
+     * \name IService implementation
+     * \{
+     */
     bool init() override;
     bool start() override;
     void stop() override;
     core::ServiceState getState() const override { return state_; }
     const char* getName() const override { return "power"; }
+    /** \} */
 
-    // IPowerManager implementation
+    /**
+     * \name IPowerManager implementation
+     * \{
+     */
     uint16_t getBatteryVoltage() const override;
     uint8_t getBatteryPercent() const override;
     bool isUsbConnected() const override;
@@ -79,49 +97,74 @@ public:
     void setChargingEnabled(bool enabled) override;
     void enterShipMode() override;
     void update() override;
+    /** \} */
 
 private:
-    // I2C helpers
+    /** \brief I2C register access helpers. */
     bool readReg(uint8_t reg, uint8_t* value) const;
     bool writeReg(uint8_t reg, uint8_t value);
     bool updateRegBits(uint8_t reg, uint8_t mask, uint8_t value, const char* label);
 
-    // Internal
+    /** \brief Internal helper methods. */
     void readChargerStatus();
     bool setChargeCurrentMa(uint16_t currentMa);
 
     core::ServiceState state_ = core::ServiceState::UNINITIALIZED;
 
-    // I2C device
+    /** \brief I2C device handles. */
     II2cBus* bus_ = nullptr;
     I2cDeviceHandle device_ = nullptr;
 
-    // State
+    /** \brief Kicks the charger watchdog timer. */
+    void kickWatchdog();
+
+    /** \brief Runtime charging state. */
     uint16_t currentChargeMa_ = CHARGE_CURRENT_SLOW;
     bool fastChargeEnabled_ = false;
+    uint32_t lastWdtKickMs_ = 0;
 
-    // Cached status (updated in update())
+    /** \brief Cached charger state updated in `update()`. */
     mutable uint16_t cachedBatteryMv_ = 0;
     mutable ChargeStatus cachedChargeStatus_ = ChargeStatus::NOT_CHARGING;
     mutable bool cachedUsbConnected_ = false;
     mutable bool cachedBatteryPresent_ = false;
 
-    // Previous status for change detection (avoid log spam)
+    /** \brief Previous status values for change-detection logging. */
     ChargeStatus prevChargeStatus_ = ChargeStatus::NOT_CHARGING;
     bool prevUsbConnected_ = false;
     bool prevBatteryPresent_ = false;
 };
 
+/**
+ * \brief Reads one BQ25895 register.
+ * \param reg Register address.
+ * \param value Output register byte.
+ * \return `true` on successful I2C read.
+ */
 bool BQ25895Power::readReg(uint8_t reg, uint8_t* value) const {
     if (!device_ || !value) return false;
     return bus_->readReg(device_, reg, value, 1) == ESP_OK;
 }
 
+/**
+ * \brief Writes one BQ25895 register.
+ * \param reg Register address.
+ * \param value Register value.
+ * \return `true` on successful I2C write.
+ */
 bool BQ25895Power::writeReg(uint8_t reg, uint8_t value) {
     if (!device_) return false;
     return bus_->writeReg(device_, reg, &value, 1) == ESP_OK;
 }
 
+/**
+ * \brief Updates masked register bits while preserving remaining bits.
+ * \param reg Register address.
+ * \param mask Bit mask to update.
+ * \param value New masked value.
+ * \param label Log label for diagnostics.
+ * \return `true` if operation succeeded or no change was needed.
+ */
 bool BQ25895Power::updateRegBits(uint8_t reg, uint8_t mask, uint8_t value, const char* label) {
     uint8_t current = 0;
     if (!readReg(reg, &current)) {
@@ -144,6 +187,10 @@ bool BQ25895Power::updateRegBits(uint8_t reg, uint8_t mask, uint8_t value, const
     return true;
 }
 
+/**
+ * \brief Initializes charger hardware and applies safe boot defaults.
+ * \return `true` if initialization succeeded.
+ */
 bool BQ25895Power::init() {
     if (state_ != core::ServiceState::UNINITIALIZED) {
         return state_ == core::ServiceState::INITIALIZED ||
@@ -238,6 +285,10 @@ bool BQ25895Power::init() {
     return true;
 }
 
+/**
+ * \brief Starts power manager service state.
+ * \return `true` if service is started after the call.
+ */
 bool BQ25895Power::start() {
     if (state_ == core::ServiceState::INITIALIZED ||
         state_ == core::ServiceState::STOPPED) {
@@ -247,12 +298,18 @@ bool BQ25895Power::start() {
     return state_ == core::ServiceState::STARTED;
 }
 
+/**
+ * \brief Stops power manager service state.
+ */
 void BQ25895Power::stop() {
     if (state_ == core::ServiceState::STARTED) {
         state_ = core::ServiceState::STOPPED;
     }
 }
 
+/**
+ * \brief Reads charger status/fault registers and refreshes cached state.
+ */
 void BQ25895Power::readChargerStatus() {
     uint8_t reg0b = 0, reg0c = 0;
     uint8_t chrgStat = 0;
@@ -338,8 +395,9 @@ void BQ25895Power::readChargerStatus() {
         if (reg0c == 0x80 && chrgStat == 3 && cachedBatteryPresent_) {
             LOG_I(TAG, "Battery full");
         } else if (reg0c == 0x80) {
-            // Watchdog expired - kick it to resume charging (silent)
-            updateRegBits(BQ_REG_CHG_CTRL, (1 << 6), (1 << 6), "WDT reset");
+            // Watchdog expired after sleep - kick to resume charging
+            LOG_D(TAG, "WDT expired (post-sleep), kicking");
+            kickWatchdog();
         } else {
             // Real fault
             LOG_W(TAG, "Fault: 0x%02X", reg0c);
@@ -348,6 +406,11 @@ void BQ25895Power::readChargerStatus() {
     }
 }
 
+/**
+ * \brief Programs charging current setpoint.
+ * \param currentMa Desired charging current in milliamps.
+ * \return `true` if register update succeeded.
+ */
 bool BQ25895Power::setChargeCurrentMa(uint16_t currentMa) {
     // Clamp to valid range
     if (currentMa < CHARGE_CURRENT_MIN) currentMa = CHARGE_CURRENT_MIN;
@@ -366,6 +429,10 @@ bool BQ25895Power::setChargeCurrentMa(uint16_t currentMa) {
     return true;
 }
 
+/**
+ * \brief Returns measured battery voltage in millivolts.
+ * \return Battery voltage in mV, or `0` on read failure.
+ */
 uint16_t BQ25895Power::getBatteryVoltage() const {
     // Start ADC conversion if not running (REG02[7]=CONV_START)
     uint8_t reg02 = 0;
@@ -385,6 +452,10 @@ uint16_t BQ25895Power::getBatteryVoltage() const {
     return cachedBatteryMv_;
 }
 
+/**
+ * \brief Estimates battery percentage from measured voltage.
+ * \return Battery level in percent.
+ */
 uint8_t BQ25895Power::getBatteryPercent() const {
     uint16_t mv = getBatteryVoltage();
     if (mv == 0) return 0;
@@ -396,31 +467,59 @@ uint8_t BQ25895Power::getBatteryPercent() const {
     return (uint8_t)(((uint32_t)(mv - 3200) * 100) / 1000);
 }
 
+/**
+ * \brief Returns cached USB power presence.
+ * \return `true` when USB input is detected.
+ */
 bool BQ25895Power::isUsbConnected() const {
     // Use cached value (updated in update())
     return cachedUsbConnected_;
 }
 
+/**
+ * \brief Returns current active power source.
+ * \return `PowerSource::USB` or `PowerSource::BATTERY`.
+ */
 PowerSource BQ25895Power::getPowerSource() const {
     return cachedUsbConnected_ ? PowerSource::USB : PowerSource::BATTERY;
 }
 
+/**
+ * \brief Returns cached charge-state machine value.
+ * \return Current charge status enum.
+ */
 ChargeStatus BQ25895Power::getChargeStatus() const {
     return cachedChargeStatus_;
 }
 
+/**
+ * \brief Indicates low-battery threshold state.
+ * \return `true` if battery level is below 20%.
+ */
 bool BQ25895Power::isBatteryLow() const {
     return getBatteryPercent() < 20;
 }
 
+/**
+ * \brief Indicates critical-battery threshold state.
+ * \return `true` if battery level is below 5%.
+ */
 bool BQ25895Power::isBatteryCritical() const {
     return getBatteryPercent() < 5;
 }
 
+/**
+ * \brief Returns whether a battery is considered present.
+ * \return `true` if battery presence is detected.
+ */
 bool BQ25895Power::isBatteryPresent() const {
     return cachedBatteryPresent_;
 }
 
+/**
+ * \brief Enables or effectively disables charging current.
+ * \param enabled Desired charging enable state.
+ */
 void BQ25895Power::setChargingEnabled(bool enabled) {
     if (enabled) {
         setChargeCurrentMa(fastChargeEnabled_ ? CHARGE_CURRENT_FAST : CHARGE_CURRENT_SLOW);
@@ -431,6 +530,9 @@ void BQ25895Power::setChargingEnabled(bool enabled) {
     LOG_I(TAG, "Charging %s", enabled ? "enabled" : "disabled");
 }
 
+/**
+ * \brief Requests battery ship mode via BATFET disconnect.
+ */
 void BQ25895Power::enterShipMode() {
     // Set BATFET_DIS (REG09[5]=1) to disconnect battery
     // System will only run from USB after this.
@@ -449,19 +551,45 @@ void BQ25895Power::enterShipMode() {
     LOG_I(TAG, "Entered shipping mode");
 }
 
+/**
+ * \brief Resets charger watchdog timer.
+ */
+void BQ25895Power::kickWatchdog() {
+    // REG03[6] = 1 resets the I2C watchdog timer
+    // Silently kick without debug log (runs every 30s)
+    uint8_t current = 0;
+    if (readReg(BQ_REG_CHG_CTRL, &current)) {
+        writeReg(BQ_REG_CHG_CTRL, current | (1 << 6));
+    }
+}
+
+/**
+ * \brief Periodic power-manager update handling watchdog and IRQ-driven refresh.
+ */
 void BQ25895Power::update() {
+    // Proactive watchdog kick every 30s (WDT timeout is 40s)
+    uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000);
+    if ((nowMs - lastWdtKickMs_) >= 30000) {
+        lastWdtKickMs_ = nowMs;
+        kickWatchdog();
+    }
+
     // Handle charger IRQ
     if (charger_irq_pending) {
         charger_irq_pending = false;
-        LOG_I(TAG, "Charger IRQ received");
         readChargerStatus();
     }
 }
 
-// Singleton instance
+/**
+ * \brief Singleton power manager instance.
+ */
 static BQ25895Power g_powerManager;
 
-// Factory function
+/**
+ * \brief Returns the singleton power manager instance.
+ * \return Pointer to the global `IPowerManager` implementation.
+ */
 IPowerManager* getPowerManagerInstance() {
     return &g_powerManager;
 }

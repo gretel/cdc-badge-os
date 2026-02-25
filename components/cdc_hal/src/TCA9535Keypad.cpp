@@ -17,7 +17,7 @@ static const char* TAG = "Keypad";
 
 namespace cdc::hal {
 
-// TCA9535 register addresses
+/** \brief TCA9535 register-address constants. */
 static constexpr uint8_t REG_INPUT_0    = 0x00;
 static constexpr uint8_t REG_INPUT_1    = 0x01;
 static constexpr uint8_t REG_OUTPUT_0   = 0x02;
@@ -27,18 +27,19 @@ static constexpr uint8_t REG_POLARITY_1 = 0x05;
 static constexpr uint8_t REG_CONFIG_0   = 0x06;
 static constexpr uint8_t REG_CONFIG_1   = 0x07;
 
-// Task configuration
+/** \brief Keypad task scheduling configuration. */
 static constexpr uint32_t TASK_STACK_SIZE = 4096;
 static constexpr UBaseType_t TASK_PRIORITY = 5;
 static constexpr uint32_t POLL_TIMEOUT_MS = 50;
 static constexpr uint32_t DEBOUNCE_MS = 10;
 
-// Key buffer configuration
+/** \brief Ring-buffer configuration for queued key events. */
 static constexpr size_t KEY_BUFFER_SIZE = 16;
 
 /**
- * Convert raw 16-bit input to Key enum
- * Keys are active-low, mapped to bits 0-11
+ * \brief Converts raw 16-bit keypad state to a `Key` enum value.
+ * \param raw Raw keypad state bitmask (active-low, bits 0-11).
+ * \return Mapped `Key` value, or `KEY_NONE` when no key is active.
  */
 static Key rawToKey(uint16_t raw) {
     switch (raw & 0x0FFF) {
@@ -59,7 +60,9 @@ static Key rawToKey(uint16_t raw) {
 }
 
 /**
- * Convert Key to expected raw mask (12-bit)
+ * \brief Converts a `Key` enum value to its expected raw 12-bit mask.
+ * \param key Key to convert.
+ * \return Raw keypad mask for the selected key.
  */
 static uint16_t keyToMask(Key key) {
     switch (key) {
@@ -145,6 +148,10 @@ private:
     bool longPressFired_ = false;
 };
 
+/**
+ * \brief Initializes keypad hardware, ISR, and worker task.
+ * \return `true` on successful initialization.
+ */
 bool TCA9535Keypad::init() {
     if (state_ != core::ServiceState::UNINITIALIZED) {
         return state_ == core::ServiceState::INITIALIZED ||
@@ -235,6 +242,10 @@ bool TCA9535Keypad::init() {
     return true;
 }
 
+/**
+ * \brief Starts keypad service state.
+ * \return `true` if service is started after the call.
+ */
 bool TCA9535Keypad::start() {
     if (state_ == core::ServiceState::INITIALIZED ||
         state_ == core::ServiceState::STOPPED) {
@@ -244,12 +255,19 @@ bool TCA9535Keypad::start() {
     return state_ == core::ServiceState::STARTED;
 }
 
+/**
+ * \brief Stops keypad service state.
+ */
 void TCA9535Keypad::stop() {
     if (state_ == core::ServiceState::STARTED) {
         state_ = core::ServiceState::STOPPED;
     }
 }
 
+/**
+ * \brief Reads raw 16-bit input state from TCA9535.
+ * \return Raw input bitmask.
+ */
 uint16_t TCA9535Keypad::readInputs() {
     if (!device_) return 0xFFFF;
 
@@ -260,6 +278,11 @@ uint16_t TCA9535Keypad::readInputs() {
     return (uint16_t)((hi << 8) | lo);
 }
 
+/**
+ * \brief Checks whether specified key is currently pressed.
+ * \param key Key to test.
+ * \return `true` when key is active.
+ */
 bool TCA9535Keypad::isKeyPressed(Key key) const {
     uint16_t mask = keyToMask(key);
     if (mask == 0xFFFF) return false;
@@ -268,10 +291,18 @@ bool TCA9535Keypad::isKeyPressed(Key key) const {
     return (current & 0x0FFF) == mask;
 }
 
+/**
+ * \brief Retrieves next buffered key press.
+ * \return Next key or `KEY_NONE`.
+ */
 Key TCA9535Keypad::getNextKey() {
     return bufferGetKey();
 }
 
+/**
+ * \brief Returns whether key buffer currently contains entries.
+ * \return `true` when a key is available.
+ */
 bool TCA9535Keypad::hasKey() const {
     portENTER_CRITICAL(&bufferMux_);
     bool hasKey = bufferHead_ != bufferTail_;
@@ -279,17 +310,30 @@ bool TCA9535Keypad::hasKey() const {
     return hasKey;
 }
 
+/**
+ * \brief Returns whether any keypad key is physically held down.
+ * \return `true` when any key is pressed.
+ */
 bool TCA9535Keypad::anyKeyDown() const {
     uint16_t current = const_cast<TCA9535Keypad*>(this)->readInputs();
     // 0x0FFF = all 12 keys released (bits 0-11 high, bits 12-15 don't care)
     return (current & 0x0FFF) != 0x0FFF;
 }
 
+/**
+ * \brief Enables/disables long-press detection and sets threshold.
+ * \param enabled Long-press enable state.
+ * \param thresholdMs Threshold in milliseconds.
+ */
 void TCA9535Keypad::setLongPressEnabled(bool enabled, uint32_t thresholdMs) {
     longPressEnabled_ = enabled;
     longPressThresholdMs_ = thresholdMs;
 }
 
+/**
+ * \brief Adds key to circular buffer if space is available.
+ * \param key Key to enqueue.
+ */
 void TCA9535Keypad::bufferAddKey(Key key) {
     if (key == Key::KEY_NONE) return;
 
@@ -302,6 +346,10 @@ void TCA9535Keypad::bufferAddKey(Key key) {
     portEXIT_CRITICAL(&bufferMux_);
 }
 
+/**
+ * \brief Pops key from circular buffer.
+ * \return Dequeued key or `KEY_NONE`.
+ */
 Key TCA9535Keypad::bufferGetKey() {
     portENTER_CRITICAL(&bufferMux_);
     if (bufferHead_ == bufferTail_) {
@@ -315,6 +363,10 @@ Key TCA9535Keypad::bufferGetKey() {
     return key;
 }
 
+/**
+ * \brief GPIO ISR forwarding key interrupt to worker task.
+ * \param arg Keypad instance pointer.
+ */
 void IRAM_ATTR TCA9535Keypad::isrHandler(void* arg) {
     auto* self = static_cast<TCA9535Keypad*>(arg);
     if (self->inSleepMode_) return;
@@ -324,6 +376,10 @@ void IRAM_ATTR TCA9535Keypad::isrHandler(void* arg) {
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
+/**
+ * \brief Worker task handling debounce, key transitions, and long-press callbacks.
+ * \param arg Keypad instance pointer.
+ */
 void TCA9535Keypad::taskFunc(void* arg) {
     auto* self = static_cast<TCA9535Keypad*>(arg);
     LOG_I(TAG, "Keypad task started");
@@ -379,6 +435,9 @@ void TCA9535Keypad::taskFunc(void* arg) {
     }
 }
 
+/**
+ * \brief Prepares keypad interrupt handling for system sleep entry.
+ */
 void TCA9535Keypad::prepareForSleep() {
     LOG_D(TAG, "Preparing keypad for sleep...");
 
@@ -389,6 +448,9 @@ void TCA9535Keypad::prepareForSleep() {
     gpio_intr_disable(EXP_IRQ_PIN);
 }
 
+/**
+ * \brief Restores keypad operation after wakeup.
+ */
 void TCA9535Keypad::recoverFromSleep() {
     LOG_D(TAG, "Recovering keypad after sleep...");
 
@@ -421,6 +483,9 @@ void TCA9535Keypad::recoverFromSleep() {
     LOG_D(TAG, "Keypad recovered, state: 0x%04X", lastRawState_);
 }
 
+/**
+ * \brief Clears pending key buffer.
+ */
 void TCA9535Keypad::clearBuffer() {
     portENTER_CRITICAL(&bufferMux_);
     bufferHead_ = 0;
@@ -428,10 +493,13 @@ void TCA9535Keypad::clearBuffer() {
     portEXIT_CRITICAL(&bufferMux_);
 }
 
-// Singleton instance
+/** \brief Singleton keypad instance. */
 static TCA9535Keypad g_keypad;
 
-// Factory function
+/**
+ * \brief Returns the singleton keypad service instance.
+ * \return Pointer to the global `IKeypad` implementation.
+ */
 IKeypad* getKeypadInstance() {
     return &g_keypad;
 }

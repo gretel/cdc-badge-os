@@ -15,5 +15,4 @@ idf_component_register(
         serial_cmd
         nvs_flash
         freertos
-        bt
 )

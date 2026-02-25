@@ -19,7 +19,9 @@ static const char* TAG = "RTC";
 
 namespace cdc::hal {
 
-// NVS namespace for timezone only (time is NOT persisted)
+/**
+ * \brief NVS namespace used to persist timezone metadata (not wall-clock time).
+ */
 static constexpr const char* NVS_NAMESPACE = "rtc";
 static constexpr const char* NVS_KEY_TZ = "tz_offset";
 
@@ -56,6 +58,10 @@ private:
     int8_t tzOffset_ = 0;  // Hours from UTC
 };
 
+/**
+ * \brief Initializes RTC service and timezone context.
+ * \return `true` if initialization succeeded.
+ */
 bool Esp32Rtc::init() {
     if (state_ != core::ServiceState::UNINITIALIZED) {
         return state_ == core::ServiceState::INITIALIZED ||
@@ -92,6 +98,11 @@ bool Esp32Rtc::init() {
     return true;
 }
 
+/**
+ * \brief Reads current local time into `tm`.
+ * \param timeinfo Output time structure.
+ * \return void
+ */
 void Esp32Rtc::getTime(struct tm* timeinfo) const {
     if (!timeinfo) return;
     time_t now;
@@ -99,6 +110,12 @@ void Esp32Rtc::getTime(struct tm* timeinfo) const {
     localtime_r(&now, timeinfo);
 }
 
+/**
+ * \brief Formats current time as `HH:MM`.
+ * \param buf Output character buffer.
+ * \param bufLen Size of output buffer.
+ * \return void
+ */
 void Esp32Rtc::getTimeStr(char* buf, size_t bufLen) const {
     if (!buf || bufLen < 6) return;
     struct tm timeinfo;
@@ -106,6 +123,12 @@ void Esp32Rtc::getTimeStr(char* buf, size_t bufLen) const {
     strftime(buf, bufLen, "%H:%M", &timeinfo);
 }
 
+/**
+ * \brief Formats current date as `YYYY-MM-DD`.
+ * \param buf Output character buffer.
+ * \param bufLen Size of output buffer.
+ * \return void
+ */
 void Esp32Rtc::getDateStr(char* buf, size_t bufLen) const {
     if (!buf || bufLen < 11) return;
     struct tm timeinfo;
@@ -113,6 +136,13 @@ void Esp32Rtc::getDateStr(char* buf, size_t bufLen) const {
     strftime(buf, bufLen, "%Y-%m-%d", &timeinfo);
 }
 
+/**
+ * \brief Sets RTC time while preserving current date.
+ * \param hour Hour value.
+ * \param minute Minute value.
+ * \param second Second value.
+ * \return void
+ */
 void Esp32Rtc::setTime(int hour, int minute, int second) {
     struct tm timeinfo;
     getTime(&timeinfo);
@@ -141,6 +171,13 @@ void Esp32Rtc::setTime(int hour, int minute, int second) {
              timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
 }
 
+/**
+ * \brief Sets RTC date while preserving current time.
+ * \param year Year value.
+ * \param month Month value.
+ * \param day Day value.
+ * \return void
+ */
 void Esp32Rtc::setDate(int year, int month, int day) {
     struct tm timeinfo;
     getTime(&timeinfo);
@@ -158,6 +195,11 @@ void Esp32Rtc::setDate(int year, int month, int day) {
     LOG_I(TAG, "Date set to %04d-%02d-%02d", year, month, day);
 }
 
+/**
+ * \brief Sets RTC from UNIX timestamp.
+ * \param timestamp UNIX timestamp.
+ * \return void
+ */
 void Esp32Rtc::setTimestamp(time_t timestamp) {
     struct timeval tv = { .tv_sec = timestamp, .tv_usec = 0 };
     settimeofday(&tv, nullptr);
@@ -171,12 +213,21 @@ void Esp32Rtc::setTimestamp(time_t timestamp) {
              timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
 }
 
+/**
+ * \brief Returns current UNIX timestamp.
+ * \return Current UNIX timestamp.
+ */
 time_t Esp32Rtc::getTimestamp() const {
     time_t now;
     time(&now);
     return now;
 }
 
+/**
+ * \brief Sets timezone offset and persists it.
+ * \param hours Timezone offset from UTC.
+ * \return void
+ */
 void Esp32Rtc::setTimezoneOffset(int8_t hours) {
     if (hours < -12 || hours > 14) {
         LOG_W(TAG, "Invalid timezone offset: %d", hours);
@@ -197,6 +248,10 @@ void Esp32Rtc::setTimezoneOffset(int8_t hours) {
     LOG_I(TAG, "Timezone set to UTC%+d", hours);
 }
 
+/**
+ * \brief Loads timezone offset from NVS.
+ * \return void
+ */
 void Esp32Rtc::loadTimezoneFromNvs() {
     nvs_handle_t nvs;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
@@ -208,6 +263,10 @@ void Esp32Rtc::loadTimezoneFromNvs() {
     }
 }
 
+/**
+ * \brief Applies timezone offset to C runtime environment.
+ * \return void
+ */
 void Esp32Rtc::applyTimezone() {
     // Set TZ environment variable
     // Format: "UTC<offset>" where offset is negated (UTC-1 means TZ=UTC1)
@@ -221,10 +280,15 @@ void Esp32Rtc::applyTimezone() {
     tzset();
 }
 
-// Singleton instance
+/**
+ * \brief Singleton RTC implementation instance.
+ */
 static Esp32Rtc g_rtc;
 
-// Factory function
+/**
+ * \brief Returns the singleton RTC service instance.
+ * \return Pointer to the global `IRtc` implementation.
+ */
 IRtc* getRtcInstance() {
     return &g_rtc;
 }

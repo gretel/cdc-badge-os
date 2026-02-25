@@ -5,6 +5,7 @@
  */
 
 #include "cdc_os_ui/views/PinChangeView.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_core/PinManager.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_hal/IDisplay.h"
@@ -15,7 +16,9 @@
 
 static const char* TAG = "PinChangeView";
 
-// Display constants
+/**
+ * \brief Display layout constants.
+ */
 static constexpr int TITLE_Y = 15;
 static constexpr int STEP_Y = 30;
 static constexpr int PIN_Y = 55;
@@ -25,6 +28,12 @@ static constexpr int MESSAGE_Y = 90;
 
 namespace cdc::ui {
 
+/**
+ * \brief Initializes PIN-change wizard state.
+ * \param minLength Minimum required PIN length.
+ * \param maxLength Maximum allowed PIN length.
+ * \return void
+ */
 void PinChangeView::init(uint8_t minLength, uint8_t maxLength) {
     minLength_ = minLength < 4 ? 4 : minLength;
     maxLength_ = maxLength > MAX_PIN_LENGTH ? MAX_PIN_LENGTH : maxLength;
@@ -39,11 +48,20 @@ void PinChangeView::init(uint8_t minLength, uint8_t maxLength) {
     dirty_ = true;
 }
 
+/**
+ * \brief Resets wizard state when entering the view.
+ * \param context Optional view context (unused).
+ * \return void
+ */
 void PinChangeView::onEnter(void* context) {
     (void)context;
     init(minLength_, maxLength_);
 }
 
+/**
+ * \brief Clears the input buffer for the current wizard step.
+ * \return void
+ */
 void PinChangeView::clearBuffer() {
     char* buf = getCurrentBuffer();
     if (buf) {
@@ -52,6 +70,10 @@ void PinChangeView::clearBuffer() {
     length_ = 0;
 }
 
+/**
+ * \brief Returns mutable buffer for current wizard step.
+ * \return Pointer to active step buffer.
+ */
 char* PinChangeView::getCurrentBuffer() {
     switch (step_) {
         case Step::CURRENT_PIN: return currentPin_;
@@ -61,6 +83,10 @@ char* PinChangeView::getCurrentBuffer() {
     return currentPin_;
 }
 
+/**
+ * \brief Returns localized title for current wizard step.
+ * \return Step title string.
+ */
 const char* PinChangeView::getStepTitle() const {
     switch (step_) {
         case Step::CURRENT_PIN: return tr(StringId::CURRENT_PIN);
@@ -70,11 +96,20 @@ const char* PinChangeView::getStepTitle() const {
     return "";
 }
 
+/**
+ * \brief Returns remaining retry count for current PIN verification.
+ * \return Remaining retries.
+ */
 uint8_t PinChangeView::getRetriesRemaining() const {
     if (onRetries_) return onRetries_();
     return core::PinManager::instance().getBadgeRetries();
 }
 
+/**
+ * \brief Appends one digit to current step buffer.
+ * \param digit Numeric digit character.
+ * \return void
+ */
 void PinChangeView::addDigit(char digit) {
     if (length_ >= maxLength_) return;
 
@@ -84,6 +119,10 @@ void PinChangeView::addDigit(char digit) {
     dirty_ = true;
 }
 
+/**
+ * \brief Removes last digit from current step buffer.
+ * \return void
+ */
 void PinChangeView::backspace() {
     if (length_ > 0) {
         char* buf = getCurrentBuffer();
@@ -92,12 +131,21 @@ void PinChangeView::backspace() {
     }
 }
 
+/**
+ * \brief Shows transient status/error message.
+ * \param msg Message text.
+ * \return void
+ */
 void PinChangeView::showMessage(const char* msg) {
     message_ = msg;
     messageShownMs_ = esp_timer_get_time() / 1000;
     dirty_ = true;
 }
 
+/**
+ * \brief Validates and processes current wizard step confirmation.
+ * \return void
+ */
 void PinChangeView::confirmStep() {
     switch (step_) {
         case Step::CURRENT_PIN: {
@@ -180,6 +228,11 @@ void PinChangeView::confirmStep() {
     }
 }
 
+/**
+ * \brief Handles message timeout and completion callbacks.
+ * \param nowMs Current monotonic time in milliseconds.
+ * \return void
+ */
 void PinChangeView::onTick(uint32_t nowMs) {
     if (messageShownMs_ > 0 && message_ != nullptr) {
         if (nowMs - messageShownMs_ >= MESSAGE_DISPLAY_MS) {
@@ -195,6 +248,11 @@ void PinChangeView::onTick(uint32_t nowMs) {
     }
 }
 
+/**
+ * \brief Handles key input for PIN-change flow.
+ * \param key Pressed key code.
+ * \return Input handling result for the view stack.
+ */
 InputResult PinChangeView::onKey(char key) {
     // Don't accept input if locked out
     bool blocked = onBlocked_ ? onBlocked_() : core::PinManager::instance().isBadgeBlocked();
@@ -242,10 +300,19 @@ InputResult PinChangeView::onKey(char key) {
     }
 }
 
+/**
+ * \brief Returns localized footer hint text.
+ * \return Footer hint string.
+ */
 const char* PinChangeView::getFooterHint() const {
     return tr(StringId::HINT_PIN_INPUT);
 }
 
+/**
+ * \brief Renders PIN-change wizard UI.
+ * \param partial Indicates partial/full redraw mode.
+ * \return void
+ */
 void PinChangeView::render(bool partial) {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;
@@ -261,14 +328,12 @@ void PinChangeView::render(bool partial) {
     }
 
     gfx->setTextColor(EPD_BLACK);
+    int16_t x1, y1;
+    uint16_t w, h;
 
     gfx->setTextSize(1);
     const char* title = title_ ? title_ : tr(StringId::CHANGE_PIN);
-    int16_t x1, y1;
-    uint16_t w, h;
-    gfx->getTextBounds(title, 0, 0, &x1, &y1, &w, &h);
-    gfx->setCursor((width - w) / 2, TITLE_Y);
-    gfx->print(title);
+    render::drawHeaderCentered(gfx, title, TITLE_Y, width);
 
     const char* stepTitle = getStepTitle();
     char stepStr[48];
@@ -311,12 +376,7 @@ void PinChangeView::render(bool partial) {
     }
 
     const char* hint = getFooterHint();
-    if (hint) {
-        gfx->fillRect(0, height - 16, width, 16, EPD_BLACK);
-        gfx->setTextColor(EPD_WHITE);
-        gfx->setCursor(4, height - 12);
-        gfx->print(hint);
-    }
+    render::drawFooterBar(gfx, width, height, nullptr, hint, false);
 
     dirty_ = false;
 }

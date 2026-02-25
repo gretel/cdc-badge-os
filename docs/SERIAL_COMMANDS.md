@@ -1,6 +1,6 @@
 # Serial Commands Reference
 
-> **FOSDEM 2026 Demo** - This documentation was created for demonstration purposes at FOSDEM 2026. Commands and functionality are subject to change.
+USB serial command interface for the CDC Badge.
 
 Connect via USB CDC at **115200 baud**. Use `HELP` to list all available commands.
 
@@ -79,10 +79,10 @@ Commands marked with `[AUTH]` require authentication when `FEATURE_SECURE_SERIAL
 
 | Command | Description |
 |---------|-------------|
-| `TOTP_LIST` | List all TOTP accounts |
-| `TOTP_ADD <name> <secret> [issuer] [digits] [period]` | Add TOTP account |
-| `TOTP_DEL <index>` | Delete TOTP account by index |
-| `TOTP_GET <index>` | Generate TOTP code by index |
+| `TOTP_LIST` | List all TOTP accounts `[AUTH]` |
+| `TOTP_ADD <name> <secret> [issuer] [digits] [period]` | Add TOTP account `[AUTH]` |
+| `TOTP_DEL <index>` | Delete TOTP account by index `[AUTH]` |
+| `TOTP_GET <index>` | Generate TOTP code by index `[AUTH]` |
 
 **TOTP_ADD Parameters:**
 - `name` - Account name (required)
@@ -105,7 +105,7 @@ Commands marked with `[AUTH]` require authentication when `FEATURE_SECURE_SERIAL
 | Command | Description |
 |---------|-------------|
 | `GPG_STATUS` | Show GPG key status `[AUTH]` |
-| `GPG_GENERATE` | Generate GPG keys `[AUTH]` |
+| `GPG_GENERATE <curve> <user_id>` | Generate GPG keys (1=Ed25519, 2=P-256) `[AUTH]` |
 | `GPG_EXPORT` | Export public keys `[AUTH]` |
 | `GPG_RESET` | Reset GPG keys `[AUTH]` |
 

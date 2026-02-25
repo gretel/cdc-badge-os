@@ -1,5 +1,7 @@
-// FIDO2 Storage Layer (TROPIC01 + NVS)
-// Handles credential storage in ECC slots and R-Memory
+/**
+ * \file
+ * \brief FIDO2 storage layer using secure-element ECC slots, R-Memory, and NVS counters.
+ */
 
 #include "mod_fido2/fido2_storage.h"
 #include "mod_fido2/fido2_common.h"
@@ -13,9 +15,7 @@
 using cdc::mod_fido2::get_se;
 using cdc::mod_fido2::sha256;
 
-// ============================================================================
-// Storage Layout
-// ============================================================================
+/** \brief Persistent storage layout definitions. */
 
 #define FIDO2_RMEM_MAGIC        "FID2"
 #define FIDO2_RMEM_MAGIC_LEN    4
@@ -41,12 +41,10 @@ typedef struct {
 
 #define FIDO2_STORED_SIZE sizeof(fido2_stored_cred_t)
 
-// Flag bits
+/** \brief Stored-credential flag bits. */
 #define FIDO2_FLAG_RESIDENT     0x01
 
-// ============================================================================
-// State
-// ============================================================================
+/** \brief Runtime storage/cache state. */
 
 static struct {
     bool initialized;
@@ -75,6 +73,13 @@ static uint8_t s_ecc_end = 0;
 static uint16_t s_rmem_start = 0;
 static uint16_t s_rmem_end = 0;
 
+/**
+ * \brief Configures FIDO2 storage slot ranges.
+ * \param ecc_start First ECC slot.
+ * \param ecc_end Last ECC slot.
+ * \param rmem_start First RMEM slot.
+ * \param rmem_end Last RMEM slot.
+ */
 void fido2_storage_set_slot_range(uint8_t ecc_start, uint8_t ecc_end,
                                   uint16_t rmem_start, uint16_t rmem_end) {
     s_ecc_start = ecc_start;
@@ -83,45 +88,94 @@ void fido2_storage_set_slot_range(uint8_t ecc_start, uint8_t ecc_end,
     s_rmem_end = rmem_end;
 }
 
+/**
+ * \brief Returns configured ECC start slot.
+ * \return ECC start slot index.
+ */
 uint8_t fido2_storage_ecc_start(void) { return s_ecc_start; }
+
+/**
+ * \brief Returns configured ECC end slot.
+ * \return ECC end slot index.
+ */
 uint8_t fido2_storage_ecc_end(void) { return s_ecc_end; }
+
+/**
+ * \brief Returns configured RMEM start slot.
+ * \return RMEM start slot index.
+ */
 uint16_t fido2_storage_rmem_start(void) { return s_rmem_start; }
+
+/**
+ * \brief Returns configured RMEM end slot.
+ * \return RMEM end slot index.
+ */
 uint16_t fido2_storage_rmem_end(void) { return s_rmem_end; }
 
+/**
+ * \brief Validates slot-range configuration.
+ * \return `true` if ranges are monotonic.
+ */
 static bool slot_range_valid(void) {
     return s_ecc_end >= s_ecc_start && s_rmem_end >= s_rmem_start;
 }
 
+/**
+ * \brief Returns number of configured logical ECC slots.
+ * \return ECC slot count.
+ */
 static uint16_t ecc_count(void) {
     if (!slot_range_valid()) return 0;
     return static_cast<uint16_t>(s_ecc_end - s_ecc_start + 1);
 }
 
+/**
+ * \brief Returns number of configured logical RMEM slots.
+ * \return RMEM slot count.
+ */
 static uint16_t rmem_count(void) {
     if (!slot_range_valid()) return 0;
     return static_cast<uint16_t>(s_rmem_end - s_rmem_start + 1);
 }
 
+/**
+ * \brief Checks whether logical slot index is within range.
+ * \param slot Logical slot index.
+ * \return `true` if valid.
+ */
 static bool slot_logical_valid(uint8_t slot) {
     uint16_t count = ecc_count();
     return count > 0 && slot < count;
 }
 
+/**
+ * \brief Maps logical slot to physical ECC slot.
+ * \param slot Logical slot index.
+ * \return Physical ECC slot.
+ */
 static uint8_t ecc_slot_for_logical(uint8_t slot) {
     return static_cast<uint8_t>(s_ecc_start + slot);
 }
 
+/**
+ * \brief Maps logical slot to physical RMEM slot.
+ * \param slot Logical slot index.
+ * \return Physical RMEM slot.
+ */
 static uint16_t rmem_slot_for_logical(uint8_t slot) {
     if (!slot_range_valid()) return 0;
     uint16_t offset = static_cast<uint16_t>(slot);
     return static_cast<uint16_t>(s_rmem_start + offset);
 }
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
+/** \brief Internal helper functions for slot and cache management. */
 
-// Read credential from R-Memory and validate magic header
+/**
+ * \brief Reads a stored credential from R-Memory and validates its magic header.
+ * \param logical_slot Logical credential slot index.
+ * \param stored Output structure receiving the stored credential payload.
+ * \return `true` on successful read and validation, otherwise `false`.
+ */
 static bool read_rmem_credential(uint8_t logical_slot, fido2_stored_cred_t* stored) {
     if (!stored) return false;
 
@@ -146,7 +200,13 @@ static bool read_rmem_credential(uint8_t logical_slot, fido2_stored_cred_t* stor
     return true;
 }
 
-// Update cache entry from stored credential data
+/** \brief Updates cache entry from stored credential payload. */
+/**
+ * \brief Updates in-memory cache entry from persisted credential structure.
+ * \param slot Logical slot index.
+ * \param stored Stored credential payload.
+ * \param is_resident Resident-key flag.
+ */
 static void update_cache_from_stored(uint8_t slot, const fido2_stored_cred_t* stored,
                                       bool is_resident) {
     g_storage.creds[slot].valid = true;
@@ -163,7 +223,11 @@ static void update_cache_from_stored(uint8_t slot, const fido2_stored_cred_t* st
     g_storage.creds[slot].curve = stored->curve;
 }
 
-// Erase both ECC key and R-Memory for a logical slot
+/**
+ * \brief Erases ECC key material and R-Memory data for a logical slot.
+ * \param logical_slot Logical credential slot index.
+ * \return void
+ */
 static void erase_slot_data(uint8_t logical_slot) {
     auto* se = get_se();
     if (!se) return;
@@ -175,8 +239,13 @@ static void erase_slot_data(uint8_t logical_slot) {
     se->rmemErase(rmem_slot);
 }
 
-// Convert raw 64-byte ECDSA signature to DER format
-// Returns length written to 'der_sig'
+/** \brief Converts raw 64-byte ECDSA signature (`R||S`) to DER sequence format. */
+/**
+ * \brief Converts a raw 64-byte ECDSA signature into DER encoding.
+ * \param raw_sig Input raw signature buffer (`R || S`).
+ * \param der_sig Output buffer that receives DER-encoded signature data.
+ * \return Number of bytes written to `der_sig`.
+ */
 static uint8_t raw_sig_to_der(const uint8_t raw_sig[64], uint8_t* der_sig) {
     uint8_t* p = der_sig;
     *p++ = 0x30;  // SEQUENCE
@@ -218,7 +287,14 @@ static uint8_t raw_sig_to_der(const uint8_t raw_sig[64], uint8_t* der_sig) {
     return static_cast<uint8_t>(p - der_sig);
 }
 
-// Sign hash with ECDSA, returns raw 64-byte signature
+/** \brief Signs a digest in secure element and returns raw 64-byte signature. */
+/**
+ * \brief Signs 32-byte hash using ECDSA key from logical slot.
+ * \param logical_slot Logical credential slot.
+ * \param hash Input digest.
+ * \param raw_sig Output raw signature (`R||S`, 64 bytes).
+ * \return `true` on success.
+ */
 static bool ecdsa_sign_hash(uint8_t logical_slot, const uint8_t hash[32],
                             uint8_t raw_sig[64]) {
     auto* se = get_se();
@@ -235,7 +311,12 @@ static bool ecdsa_sign_hash(uint8_t logical_slot, const uint8_t hash[32],
     return true;
 }
 
-// Write credential to R-Memory (erases first, then writes)
+/**
+ * \brief Writes credential metadata to R-Memory after erasing the destination slot.
+ * \param logical_slot Logical credential slot index.
+ * \param stored Credential payload to persist.
+ * \return `true` if write succeeded, otherwise `false`.
+ */
 static bool write_rmem_credential(uint8_t logical_slot, const fido2_stored_cred_t* stored) {
     auto* se = get_se();
     if (!se) return false;
@@ -253,10 +334,11 @@ static bool write_rmem_credential(uint8_t logical_slot, const fido2_stored_cred_
     return true;
 }
 
-// ============================================================================
-// NVS Counter Operations
-// ============================================================================
+/** \brief NVS-backed global authentication counter operations. */
 
+/**
+ * \brief Loads global authentication counter from NVS.
+ */
 void fido2_storage_counter_load(void) {
     nvs_handle_t nvs;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
@@ -283,6 +365,10 @@ void fido2_storage_counter_load(void) {
     g_storage.counter_loaded = true;
 }
 
+/**
+ * \brief Returns current global authentication counter.
+ * \return Counter value.
+ */
 uint32_t fido2_storage_counter_get(void) {
     if (!g_storage.counter_loaded) {
         fido2_storage_counter_load();
@@ -290,6 +376,10 @@ uint32_t fido2_storage_counter_get(void) {
     return g_storage.auth_counter;
 }
 
+/**
+ * \brief Increments and persists global authentication counter.
+ * \return `true` on successful persistence.
+ */
 bool fido2_storage_counter_increment(void) {
     if (!g_storage.counter_loaded) {
         fido2_storage_counter_load();
@@ -319,10 +409,12 @@ bool fido2_storage_counter_increment(void) {
     return true;
 }
 
-// ============================================================================
-// Initialization
-// ============================================================================
+/** \brief Initialization and cache rebuild routines. */
 
+/**
+ * \brief Initializes FIDO2 storage cache from secure element and NVS.
+ * \return Number of discovered credentials.
+ */
 uint8_t fido2_storage_init(void) {
     LOG_I("FIDO2", "Initializing storage...");
 
@@ -363,19 +455,30 @@ uint8_t fido2_storage_init(void) {
     return g_storage.cred_count;
 }
 
-// ============================================================================
-// Lookup Operations (use cache - no TROPIC01 access)
-// ============================================================================
+/** \brief Credential lookup operations using in-memory cache only. */
 
+/**
+ * \brief Returns number of cached credentials.
+ * \return Credential count.
+ */
 uint8_t fido2_storage_count(void) {
     return g_storage.cred_count;
 }
 
+/**
+ * \brief Checks whether logical slot is occupied.
+ * \param slot Logical slot index.
+ * \return `true` if used.
+ */
 bool fido2_storage_slot_used(uint8_t slot) {
     if (!slot_logical_valid(slot)) return false;
     return g_storage.creds[slot].valid;
 }
 
+/**
+ * \brief Finds first unused logical slot.
+ * \return Logical slot index or `-1` if full.
+ */
 int8_t fido2_storage_find_free_slot(void) {
     uint16_t count = ecc_count();
     for (uint8_t i = 0; i < count && i < FIDO2_MAX_CREDENTIALS; i++) {
@@ -386,6 +489,13 @@ int8_t fido2_storage_find_free_slot(void) {
     return -1;
 }
 
+/**
+ * \brief Finds credentials matching RP hash.
+ * \param rp_id_hash RP ID hash (32 bytes).
+ * \param out_slots Output slot array.
+ * \param max_slots Maximum writable slots.
+ * \return Number of matches.
+ */
 uint8_t fido2_storage_find_by_rp(const uint8_t *rp_id_hash,
                                   uint8_t *out_slots, uint8_t max_slots) {
     uint8_t count = 0;
@@ -401,6 +511,13 @@ uint8_t fido2_storage_find_by_rp(const uint8_t *rp_id_hash,
     return count;
 }
 
+/**
+ * \brief Finds resident credentials matching RP hash.
+ * \param rp_id_hash RP ID hash (32 bytes).
+ * \param out_slots Output slot array.
+ * \param max_slots Maximum writable slots.
+ * \return Number of matches.
+ */
 uint8_t fido2_storage_find_by_rp_resident(const uint8_t *rp_id_hash,
                                           uint8_t *out_slots, uint8_t max_slots) {
     uint8_t count = 0;
@@ -422,11 +539,23 @@ uint8_t fido2_storage_find_by_rp_resident(const uint8_t *rp_id_hash,
     return count;
 }
 
+/**
+ * \brief Returns resident-key flag for slot.
+ * \param slot Logical slot index.
+ * \return `true` if resident credential.
+ */
 bool fido2_storage_is_resident(uint8_t slot) {
     if (!slot_logical_valid(slot)) return false;
     return g_storage.creds[slot].valid && g_storage.creds[slot].resident;
 }
 
+/**
+ * \brief Finds credential by RP hash and user handle for replacement logic.
+ * \param rp_id_hash RP ID hash (32 bytes).
+ * \param user_id User handle bytes.
+ * \param user_id_len User handle length.
+ * \return Matching slot index or `-1`.
+ */
 int8_t fido2_storage_find_by_rp_user(const uint8_t *rp_id_hash,
                                       const uint8_t *user_id,
                                       uint8_t user_id_len) {
@@ -455,6 +584,12 @@ int8_t fido2_storage_find_by_rp_user(const uint8_t *rp_id_hash,
     return -1;  // No existing credential found
 }
 
+/**
+ * \brief Resolves and verifies logical slot from credential-id blob.
+ * \param cred_id Credential ID bytes.
+ * \param cred_id_len Credential ID length.
+ * \return Slot index or `-1` on mismatch.
+ */
 int8_t fido2_storage_find_slot_by_cred_id(const uint8_t *cred_id, uint16_t cred_id_len) {
     if (!cred_id || cred_id_len != FIDO2_CRED_ID_LEN) return -1;
 
@@ -475,6 +610,15 @@ int8_t fido2_storage_find_slot_by_cred_id(const uint8_t *cred_id, uint16_t cred_
     return (int8_t)slot;
 }
 
+/**
+ * \brief Loads user handle and optional user name for a credential slot.
+ * \param slot Logical slot index.
+ * \param user_id Output user-handle buffer.
+ * \param user_id_len Output user-handle length.
+ * \param user_name Output user-name buffer.
+ * \param user_name_max User-name buffer size.
+ * \return `true` on success.
+ */
 bool fido2_storage_get_user(uint8_t slot,
                             uint8_t *user_id,
                             uint8_t *user_id_len,
@@ -506,6 +650,12 @@ bool fido2_storage_get_user(uint8_t slot,
     return true;
 }
 
+/**
+ * \brief Verifies credential-id for logical slot.
+ * \param slot Logical slot index.
+ * \param cred_id Credential ID bytes.
+ * \return `true` if credential-id matches slot data.
+ */
 bool fido2_storage_verify_cred_id(uint8_t slot, const uint8_t *cred_id) {
     if (!cred_id) return false;
     uint8_t stored_id[FIDO2_CRED_ID_LEN];
@@ -515,6 +665,12 @@ bool fido2_storage_verify_cred_id(uint8_t slot, const uint8_t *cred_id) {
     return memcmp(stored_id, cred_id, FIDO2_CRED_ID_LEN) == 0;
 }
 
+/**
+ * \brief Builds credential-id blob for logical slot.
+ * \param slot Logical slot index.
+ * \param out_cred_id Output credential-id buffer.
+ * \return `true` on success.
+ */
 bool fido2_storage_get_cred_id(uint8_t slot, uint8_t *out_cred_id) {
     if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid || !out_cred_id) {
         return false;
@@ -534,10 +690,14 @@ bool fido2_storage_get_cred_id(uint8_t slot, uint8_t *out_cred_id) {
     return true;
 }
 
-// ============================================================================
-// Credential Operations
-// ============================================================================
+/** \brief Credential create/read/delete operations. */
 
+/**
+ * \brief Returns cached credential metadata for slot.
+ * \param slot Logical slot index.
+ * \param info Output credential info.
+ * \return `true` on success.
+ */
 bool fido2_storage_get_credential(uint8_t slot, fido2_credential_info_t *info) {
     if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid || !info) {
         return false;
@@ -564,6 +724,11 @@ bool fido2_storage_get_credential(uint8_t slot, fido2_credential_info_t *info) {
     return true;
 }
 
+/**
+ * \brief Returns stored curve identifier for slot.
+ * \param slot Logical slot index.
+ * \return Curve id or `0xFF` if invalid.
+ */
 uint8_t fido2_storage_get_curve(uint8_t slot) {
     if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
         return 0xFF;  // Invalid
@@ -571,6 +736,21 @@ uint8_t fido2_storage_get_curve(uint8_t slot) {
     return g_storage.creds[slot].curve;
 }
 
+/**
+ * \brief Creates or replaces credential in secure-element storage.
+ * \param rp_id Relying-party id string.
+ * \param rp_id_hash RP ID hash (32 bytes).
+ * \param user_id User handle bytes.
+ * \param user_id_len User handle length.
+ * \param user_name User display name.
+ * \param resident_key Resident-key flag.
+ * \param cred_protect Credential protection policy.
+ * \param curve Requested key curve.
+ * \param out_slot Output logical slot.
+ * \param out_cred_id Output credential-id.
+ * \param out_pubkey Output public key bytes.
+ * \return `true` on success.
+ */
 bool fido2_storage_create_credential(
     const char *rp_id,
     const uint8_t *rp_id_hash,
@@ -699,6 +879,11 @@ bool fido2_storage_create_credential(
     return true;
 }
 
+/**
+ * \brief Deletes credential and associated slot data.
+ * \param slot Logical slot index.
+ * \return `true` on success.
+ */
 bool fido2_storage_delete_credential(uint8_t slot) {
     if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
         return false;
@@ -717,6 +902,11 @@ bool fido2_storage_delete_credential(uint8_t slot) {
     return true;
 }
 
+/**
+ * \brief Increments per-credential sign counter and persists metadata.
+ * \param slot Logical slot index.
+ * \return New sign count or `0` on failure.
+ */
 uint32_t fido2_storage_increment_sign_count(uint8_t slot) {
     if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
         return 0;
@@ -738,10 +928,17 @@ uint32_t fido2_storage_increment_sign_count(uint8_t slot) {
     return new_count;
 }
 
-// ============================================================================
-// Signing Operations (requires TROPIC01 access)
-// ============================================================================
+/** \brief Signing operations requiring secure-element access. */
 
+/**
+ * \brief Signs message hash with ECDSA and returns DER signature.
+ * \param slot Logical slot index.
+ * \param msg Message bytes.
+ * \param msg_len Message length.
+ * \param signature Output signature buffer.
+ * \param sig_len Output signature length.
+ * \return `true` on success.
+ */
 bool fido2_storage_sign(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
                         uint8_t *signature, uint8_t *sig_len) {
     if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
@@ -764,6 +961,15 @@ bool fido2_storage_sign(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
     return true;
 }
 
+/**
+ * \brief Signs message and returns raw signature (EdDSA/ECDSA).
+ * \param slot Logical slot index.
+ * \param msg Message bytes.
+ * \param msg_len Message length.
+ * \param signature Output raw signature buffer.
+ * \param sig_len Output signature length.
+ * \return `true` on success.
+ */
 bool fido2_storage_sign_raw(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
                             uint8_t *signature, uint8_t *sig_len) {
     if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
@@ -798,7 +1004,16 @@ bool fido2_storage_sign_raw(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
     return true;
 }
 
-// Sign with DER-encoded output (for U2F compatibility)
+/** \brief Signs data and returns DER-encoded signature for U2F compatibility. */
+/**
+ * \brief Signs message hash and returns DER-encoded ECDSA signature.
+ * \param slot Logical slot index.
+ * \param msg Message bytes.
+ * \param msg_len Message length.
+ * \param signature Output DER buffer.
+ * \param sig_len Output DER length.
+ * \return `true` on success.
+ */
 bool fido2_storage_sign_der(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
                             uint8_t *signature, uint8_t *sig_len) {
     if (!slot_logical_valid(slot) || !g_storage.creds[slot].valid) {
@@ -821,6 +1036,12 @@ bool fido2_storage_sign_der(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
     return true;
 }
 
+/**
+ * \brief Reads public key from secure-element slot.
+ * \param slot Logical slot index.
+ * \param pubkey Output public-key buffer.
+ * \return `true` on success.
+ */
 bool fido2_storage_get_pubkey(uint8_t slot, uint8_t *pubkey) {
     if (!slot_logical_valid(slot)) {
         return false;

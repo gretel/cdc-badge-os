@@ -21,6 +21,11 @@
 #endif
 #endif
 
+// NVS Editor destructive actions (privileged tool)
+#ifndef FEATURE_NVS_EDIT
+#define FEATURE_NVS_EDIT 0
+#endif
+
 // Debug Mode (disables lockouts, useful for development)
 #ifndef DEBUG_MODE
 #define DEBUG_MODE 1

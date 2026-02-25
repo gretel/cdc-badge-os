@@ -19,7 +19,7 @@
 
 static const char* TAG = "WiFi-Ctrl";
 
-// Event bits for WiFi state tracking
+/** \brief Event-group bit definitions for Wi-Fi connection state. */
 #define WIFI_CONNECTED_BIT    BIT0
 #define WIFI_FAIL_BIT         BIT1
 #define WIFI_SCAN_DONE_BIT    BIT2
@@ -104,7 +104,14 @@ public:
 
 WifiController* WifiController::instance_ = nullptr;
 
-// WiFi event handler
+/** \brief Wi-Fi event callback bridge. */
+/**
+ * \brief ESP-IDF Wi-Fi event bridge to controller instance.
+ * \param arg Optional callback context (unused).
+ * \param eventBase Event base (unused).
+ * \param eventId Wi-Fi event id.
+ * \param eventData Event payload.
+ */
 static void wifiEventHandler(void* arg, esp_event_base_t eventBase,
                              int32_t eventId, void* eventData) {
     (void)arg;
@@ -113,7 +120,14 @@ static void wifiEventHandler(void* arg, esp_event_base_t eventBase,
     }
 }
 
-// IP event handler
+/** \brief IP event callback bridge. */
+/**
+ * \brief ESP-IDF IP event bridge to controller instance.
+ * \param arg Optional callback context (unused).
+ * \param eventBase Event base (unused).
+ * \param eventId IP event id.
+ * \param eventData Event payload.
+ */
 static void ipEventHandler(void* arg, esp_event_base_t eventBase,
                            int32_t eventId, void* eventData) {
     (void)arg;
@@ -122,6 +136,10 @@ static void ipEventHandler(void* arg, esp_event_base_t eventBase,
     }
 }
 
+/**
+ * \brief Initializes controller resources and event group.
+ * \return `true` on successful initialization.
+ */
 bool WifiController::init() {
     if (state_ != core::ServiceState::UNINITIALIZED) {
         return state_ == core::ServiceState::INITIALIZED ||
@@ -143,6 +161,10 @@ bool WifiController::init() {
     return true;
 }
 
+/**
+ * \brief Starts Wi-Fi controller service state.
+ * \return `true` if service is started after the call.
+ */
 bool WifiController::start() {
     if (state_ == core::ServiceState::INITIALIZED ||
         state_ == core::ServiceState::STOPPED) {
@@ -152,6 +174,9 @@ bool WifiController::start() {
     return state_ == core::ServiceState::STARTED;
 }
 
+/**
+ * \brief Stops Wi-Fi controller and disables active Wi-Fi stack.
+ */
 void WifiController::stop() {
     if (state_ == core::ServiceState::STARTED) {
         if (enabled_) {
@@ -161,6 +186,10 @@ void WifiController::stop() {
     }
 }
 
+/**
+ * \brief Initializes network stack and default event loop.
+ * \return `true` on success.
+ */
 bool WifiController::initNetif() {
     // Initialize TCP/IP stack (once)
     static bool tcpipInitialized = false;
@@ -184,6 +213,9 @@ bool WifiController::initNetif() {
     return true;
 }
 
+/**
+ * \brief Destroys created STA/AP network interfaces.
+ */
 void WifiController::deinitNetif() {
     if (staNetif_) {
         esp_netif_destroy(staNetif_);
@@ -195,6 +227,11 @@ void WifiController::deinitNetif() {
     }
 }
 
+/**
+ * \brief Enables Wi-Fi in requested mode and starts driver.
+ * \param mode Requested Wi-Fi mode.
+ * \return `true` on success.
+ */
 bool WifiController::enable(WifiMode mode) {
     if (mode == WifiMode::OFF) {
         disable();
@@ -305,6 +342,9 @@ bool WifiController::enable(WifiMode mode) {
     return true;
 }
 
+/**
+ * \brief Disables Wi-Fi driver and resets runtime state.
+ */
 void WifiController::disable() {
     if (!enabled_) {
         return;
@@ -337,6 +377,13 @@ void WifiController::disable() {
     LOG_I(TAG, "WiFi disabled");
 }
 
+/**
+ * \brief Connects STA interface to an access point.
+ * \param ssid Target SSID.
+ * \param password Optional passphrase.
+ * \param timeoutMs Timeout for waiting on connection result.
+ * \return `true` when IP acquisition succeeded.
+ */
 bool WifiController::connect(const char* ssid, const char* password,
                               uint32_t timeoutMs) {
     if (!enabled_ || (currentMode_ != WifiMode::STA &&
@@ -393,6 +440,9 @@ bool WifiController::connect(const char* ssid, const char* password,
     }
 }
 
+/**
+ * \brief Disconnects from current access point and clears connection state.
+ */
 void WifiController::disconnect() {
     if (wifiState_ == WifiState::CONNECTED || wifiState_ == WifiState::GOT_IP) {
         esp_wifi_disconnect();
@@ -402,6 +452,12 @@ void WifiController::disconnect() {
     currentIp_.addr = 0;
 }
 
+/**
+ * \brief Returns current STA IPv4 address as text.
+ * \param ip Output text buffer.
+ * \param len Output buffer size.
+ * \return `true` if IP address was written.
+ */
 bool WifiController::getIpAddress(char* ip, size_t len) const {
     if (!ip || len < 16 || currentIp_.addr == 0) {
         return false;
@@ -411,6 +467,11 @@ bool WifiController::getIpAddress(char* ip, size_t len) const {
     return true;
 }
 
+/**
+ * \brief Reads MAC address of active Wi-Fi interface.
+ * \param mac Output 6-byte MAC buffer.
+ * \return `true` on success.
+ */
 bool WifiController::getMacAddress(uint8_t* mac) const {
     if (!mac) return false;
 
@@ -421,6 +482,10 @@ bool WifiController::getMacAddress(uint8_t* mac) const {
     return esp_wifi_get_mac(iface, mac) == ESP_OK;
 }
 
+/**
+ * \brief Returns RSSI of current STA connection.
+ * \return RSSI in dBm, or `0` if unavailable.
+ */
 int8_t WifiController::getRssi() const {
     if (wifiState_ != WifiState::GOT_IP) {
         return 0;
@@ -433,6 +498,10 @@ int8_t WifiController::getRssi() const {
     return 0;
 }
 
+/**
+ * \brief Starts asynchronous AP scan.
+ * \return `true` if scan start succeeded.
+ */
 bool WifiController::startScan() {
     LOG_I(TAG, "startScan() called, enabled=%d, mode=%d", enabled_, static_cast<int>(currentMode_));
 
@@ -461,10 +530,20 @@ bool WifiController::startScan() {
     return true;
 }
 
+/**
+ * \brief Returns whether the last scan has completed.
+ * \return `true` if scan results are ready.
+ */
 bool WifiController::isScanComplete() const {
     return scanComplete_;
 }
 
+/**
+ * \brief Copies scan results into caller buffer.
+ * \param results Output result array.
+ * \param maxResults Maximum writable entries.
+ * \return Number of copied scan entries.
+ */
 uint8_t WifiController::getScanResults(WifiScanResult* results, uint8_t maxResults) {
     if (!results || maxResults == 0 || !scanComplete_) {
         return 0;
@@ -512,6 +591,13 @@ uint8_t WifiController::getScanResults(WifiScanResult* results, uint8_t maxResul
     return static_cast<uint8_t>(toGet);
 }
 
+/**
+ * \brief Configures and starts soft-AP parameters.
+ * \param ssid AP SSID.
+ * \param password Optional AP password.
+ * \param channel AP channel.
+ * \return `true` on success.
+ */
 bool WifiController::startAp(const char* ssid, const char* password,
                               uint8_t channel) {
     if (!enabled_ || (currentMode_ != WifiMode::AP &&
@@ -544,6 +630,10 @@ bool WifiController::startAp(const char* ssid, const char* password,
     return true;
 }
 
+/**
+ * \brief Returns number of stations connected to soft-AP.
+ * \return Connected station count.
+ */
 uint8_t WifiController::getConnectedStations() const {
     if (currentMode_ != WifiMode::AP && currentMode_ != WifiMode::STA_AP) {
         return 0;
@@ -556,6 +646,11 @@ uint8_t WifiController::getConnectedStations() const {
     return 0;
 }
 
+/**
+ * \brief Handles Wi-Fi events from ESP-IDF event loop.
+ * \param eventId Event identifier.
+ * \param eventData Event payload.
+ */
 void WifiController::onWifiEvent(int32_t eventId, void* eventData) {
     switch (eventId) {
         case WIFI_EVENT_STA_START:
@@ -608,6 +703,11 @@ void WifiController::onWifiEvent(int32_t eventId, void* eventData) {
     }
 }
 
+/**
+ * \brief Handles IP-related events from ESP-IDF event loop.
+ * \param eventId Event identifier.
+ * \param eventData Event payload.
+ */
 void WifiController::onIpEvent(int32_t eventId, void* eventData) {
     if (eventId == IP_EVENT_STA_GOT_IP) {
         auto* event = (ip_event_got_ip_t*)eventData;
@@ -625,10 +725,13 @@ void WifiController::onIpEvent(int32_t eventId, void* eventData) {
     }
 }
 
-// Singleton instance
+/** \brief Singleton Wi-Fi controller instance. */
 static WifiController g_wifiController;
 
-// Factory function
+/**
+ * \brief Returns the singleton Wi-Fi controller service instance.
+ * \return Pointer to the global `IWifiController` implementation.
+ */
 IWifiController* getWifiControllerInstance() {
     return &g_wifiController;
 }

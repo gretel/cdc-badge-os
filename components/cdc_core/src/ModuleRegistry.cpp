@@ -12,11 +12,19 @@ static const char* TAG = "ModuleReg";
 
 namespace cdc::core {
 
+/**
+ * \brief Returns the singleton module registry instance.
+ * \return Registry singleton reference.
+ */
 ModuleRegistry& ModuleRegistry::instance() {
     static ModuleRegistry instance;
     return instance;
 }
 
+/**
+ * \brief Registers a deferred module initializer callback.
+ * \param initFunc Initializer function to execute during startup.
+ */
 void ModuleRegistry::registerInitializer(ModuleInitFunc initFunc) {
     if (!initFunc) return;
 
@@ -28,6 +36,9 @@ void ModuleRegistry::registerInitializer(ModuleInitFunc initFunc) {
     initializers_[initCount_++] = initFunc;
 }
 
+/**
+ * \brief Executes all registered initializers and post-registration housekeeping.
+ */
 void ModuleRegistry::runAllInitializers() {
     LOG_I(TAG, "Running %d module initializers", initCount_);
 
@@ -47,6 +58,11 @@ void ModuleRegistry::runAllInitializers() {
     saveModuleList();
 }
 
+/**
+ * \brief Registers a module instance in the runtime registry.
+ * \param module Module instance to register.
+ * \return `true` if registration succeeded.
+ */
 bool ModuleRegistry::registerModule(IModule* module) {
     if (!module) {
         LOG_E(TAG, "Cannot register null module");
@@ -73,6 +89,10 @@ bool ModuleRegistry::registerModule(IModule* module) {
     return true;
 }
 
+/**
+ * \brief Unregisters a module by name.
+ * \param name Module name.
+ */
 void ModuleRegistry::unregisterModule(const char* name) {
     if (!name) return;
 
@@ -89,6 +109,11 @@ void ModuleRegistry::unregisterModule(const char* name) {
     }
 }
 
+/**
+ * \brief Looks up a module by name.
+ * \param name Module name.
+ * \return Pointer to module or `nullptr` if not found.
+ */
 IModule* ModuleRegistry::getModule(const char* name) {
     if (!name) return nullptr;
 
@@ -100,11 +125,20 @@ IModule* ModuleRegistry::getModule(const char* name) {
     return nullptr;
 }
 
+/**
+ * \brief Returns module pointer at registry index.
+ * \param index Module index.
+ * \return Pointer to module or `nullptr` if out of range.
+ */
 IModule* ModuleRegistry::getModuleAt(uint8_t index) {
     if (index >= count_) return nullptr;
     return modules_[index];
 }
 
+/**
+ * \brief Calls `init()` on all registered modules.
+ * \return `true` if all modules initialized successfully.
+ */
 bool ModuleRegistry::initAll() {
     bool allOk = true;
     for (uint8_t i = 0; i < count_; i++) {
@@ -116,6 +150,10 @@ bool ModuleRegistry::initAll() {
     return allOk;
 }
 
+/**
+ * \brief Starts all enabled modules.
+ * \return `true` if all enabled modules started successfully.
+ */
 bool ModuleRegistry::startAll() {
     bool allOk = true;
     for (uint8_t i = 0; i < count_; i++) {
@@ -132,6 +170,11 @@ bool ModuleRegistry::startAll() {
     return allOk;
 }
 
+/**
+ * \brief Starts a single module by index.
+ * \param index Module index.
+ * \return `true` if module is started after the call.
+ */
 bool ModuleRegistry::startModule(uint8_t index) {
     if (index >= count_) return false;
     IModule* module = modules_[index];
@@ -154,6 +197,9 @@ bool ModuleRegistry::startModule(uint8_t index) {
     return true;
 }
 
+/**
+ * \brief Stops all currently started modules.
+ */
 void ModuleRegistry::stopAll() {
     for (uint8_t i = 0; i < count_; i++) {
         if (modules_[i]->getState() == ServiceState::STARTED) {
@@ -162,6 +208,13 @@ void ModuleRegistry::stopAll() {
     }
 }
 
+/**
+ * \brief Collects menu items from started modules for a given location.
+ * \param location Target menu location.
+ * \param items Output array for aggregated menu items.
+ * \param maxItems Maximum writable entries in `items`.
+ * \return Number of returned menu items.
+ */
 uint8_t ModuleRegistry::getMenuItems(MenuLocation location, ModuleMenuItem* items, uint8_t maxItems) {
     if (!items || maxItems == 0) return 0;
 
@@ -171,7 +224,7 @@ uint8_t ModuleRegistry::getMenuItems(MenuLocation location, ModuleMenuItem* item
     for (uint8_t i = 0; i < count_; i++) {
         if (modules_[i]->getState() != ServiceState::STARTED) continue;
 
-        ModuleMenuItem moduleItems[8];
+        ModuleMenuItem moduleItems[8] = {};
         uint8_t count = modules_[i]->getMenuItems(moduleItems, 8);
 
         for (uint8_t j = 0; j < count && totalCount < maxItems; j++) {
@@ -201,6 +254,9 @@ uint8_t ModuleRegistry::getMenuItems(MenuLocation location, ModuleMenuItem* item
     return totalCount;
 }
 
+/**
+ * \brief Dispatches unlock lifecycle event to started modules.
+ */
 void ModuleRegistry::dispatchUnlock() {
     for (uint8_t i = 0; i < count_; i++) {
         if (modules_[i]->getState() == ServiceState::STARTED) {
@@ -209,6 +265,9 @@ void ModuleRegistry::dispatchUnlock() {
     }
 }
 
+/**
+ * \brief Dispatches lock lifecycle event to started modules.
+ */
 void ModuleRegistry::dispatchLock() {
     for (uint8_t i = 0; i < count_; i++) {
         if (modules_[i]->getState() == ServiceState::STARTED) {
@@ -217,6 +276,9 @@ void ModuleRegistry::dispatchLock() {
     }
 }
 
+/**
+ * \brief Dispatches USB-connect lifecycle event to started modules.
+ */
 void ModuleRegistry::dispatchUsbConnect() {
     for (uint8_t i = 0; i < count_; i++) {
         if (modules_[i]->getState() == ServiceState::STARTED) {
@@ -225,6 +287,9 @@ void ModuleRegistry::dispatchUsbConnect() {
     }
 }
 
+/**
+ * \brief Dispatches USB-disconnect lifecycle event to started modules.
+ */
 void ModuleRegistry::dispatchUsbDisconnect() {
     for (uint8_t i = 0; i < count_; i++) {
         if (modules_[i]->getState() == ServiceState::STARTED) {
@@ -233,6 +298,10 @@ void ModuleRegistry::dispatchUsbDisconnect() {
     }
 }
 
+/**
+ * \brief Dispatches periodic tick callback to started modules.
+ * \param nowMs Current system time in milliseconds.
+ */
 void ModuleRegistry::dispatchTick(uint32_t nowMs) {
     for (uint8_t i = 0; i < count_; i++) {
         if (modules_[i]->getState() == ServiceState::STARTED) {
@@ -241,6 +310,12 @@ void ModuleRegistry::dispatchTick(uint32_t nowMs) {
     }
 }
 
+/**
+ * \brief Collects lock-screen context actions from started modules.
+ * \param items Output array for context items.
+ * \param maxItems Maximum writable entries in `items`.
+ * \return Number of returned context items.
+ */
 uint8_t ModuleRegistry::getLockScreenContextItems(LockScreenContextItem* items, uint8_t maxItems) {
     if (!items || maxItems == 0) return 0;
 
@@ -274,15 +349,18 @@ uint8_t ModuleRegistry::getLockScreenContextItems(LockScreenContextItem* items, 
     return totalCount;
 }
 
-// =============================================================================
-// NVS Garbage Collection for removed modules
-// =============================================================================
+/**
+ * \brief NVS garbage collection for removed modules.
+ */
 
 static constexpr const char* MODULES_NVS_NAMESPACE = "modules";
 static constexpr const char* MODULES_NVS_KEY = "list";
 static constexpr const char* MODULES_NVS_KEY_DISABLED = "disabled";
 static constexpr size_t MAX_MODULE_LIST_SIZE = 256;
 
+/**
+ * \brief Removes persisted NVS data for modules no longer present in firmware.
+ */
 void ModuleRegistry::cleanupOrphanedModuleData() {
     nvs_handle_t handle;
     if (nvs_open(MODULES_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
@@ -344,6 +422,9 @@ void ModuleRegistry::cleanupOrphanedModuleData() {
     }
 }
 
+/**
+ * \brief Persists current registered module-name list to NVS.
+ */
 void ModuleRegistry::saveModuleList() {
     if (count_ == 0) {
         LOG_I(TAG, "No modules to save");
@@ -384,10 +465,13 @@ void ModuleRegistry::saveModuleList() {
     }
 }
 
-// =============================================================================
-// Module Enable/Disable Persistence (Name-based for robustness)
-// =============================================================================
+/**
+ * \brief Name-based module enable/disable persistence helpers.
+ */
 
+/**
+ * \brief Loads persisted disabled-module list from NVS.
+ */
 void ModuleRegistry::loadDisabledList() {
     nvs_handle_t handle;
     if (nvs_open(MODULES_NVS_NAMESPACE, NVS_READONLY, &handle) == ESP_OK) {
@@ -401,6 +485,9 @@ void ModuleRegistry::loadDisabledList() {
     }
 }
 
+/**
+ * \brief Saves disabled-module list to NVS.
+ */
 void ModuleRegistry::saveDisabledList() {
     nvs_handle_t handle;
     if (nvs_open(MODULES_NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
@@ -413,6 +500,11 @@ void ModuleRegistry::saveDisabledList() {
     }
 }
 
+/**
+ * \brief Checks whether a module name is currently enabled.
+ * \param name Module name.
+ * \return `true` if module is enabled.
+ */
 bool ModuleRegistry::isModuleEnabledByName(const char* name) const {
     if (!name || name[0] == '\0') return true;
     if (disabledModules_[0] == '\0') return true;  // No disabled modules
@@ -442,11 +534,21 @@ bool ModuleRegistry::isModuleEnabledByName(const char* name) const {
     return true;  // Not in disabled list = enabled
 }
 
+/**
+ * \brief Checks whether module at index is enabled.
+ * \param index Module index.
+ * \return `true` if enabled.
+ */
 bool ModuleRegistry::isModuleEnabled(uint8_t index) const {
     if (index >= count_) return false;
     return isModuleEnabledByName(modules_[index]->getName());
 }
 
+/**
+ * \brief Enables or disables a module by updating persisted disabled list.
+ * \param index Module index.
+ * \param enabled Desired enabled state.
+ */
 void ModuleRegistry::setModuleEnabled(uint8_t index, bool enabled) {
     if (index >= count_) return;
 
@@ -504,6 +606,11 @@ void ModuleRegistry::setModuleEnabled(uint8_t index, bool enabled) {
     saveDisabledList();
 }
 
+/**
+ * \brief Toggles enabled state for a module.
+ * \param index Module index.
+ * \return New enabled state after toggle.
+ */
 bool ModuleRegistry::toggleModuleEnabled(uint8_t index) {
     if (index >= count_) return false;
 
@@ -512,16 +619,31 @@ bool ModuleRegistry::toggleModuleEnabled(uint8_t index) {
     return !wasEnabled;  // Return new state
 }
 
+/**
+ * \brief Reports whether a module currently has a slot-validation error.
+ * \param index Module index.
+ * \return `true` if module has recorded slot error.
+ */
 bool ModuleRegistry::hasModuleSlotError(uint8_t index) const {
     if (index >= count_) return false;
     return moduleErrors_[index].hasError;
 }
 
+/**
+ * \brief Returns stored slot-error message for module index.
+ * \param index Module index.
+ * \return Error message pointer or `nullptr` when no error is set.
+ */
 const char* ModuleRegistry::getModuleSlotError(uint8_t index) const {
     if (index >= count_) return nullptr;
     return moduleErrors_[index].hasError ? moduleErrors_[index].message : nullptr;
 }
 
+/**
+ * \brief Sets module error state and message.
+ * \param index Module index.
+ * \param message Error message text.
+ */
 void ModuleRegistry::setModuleError(uint8_t index, const char* message) {
     if (index >= MAX_MODULES) return;
     moduleErrors_[index].hasError = true;
@@ -533,12 +655,21 @@ void ModuleRegistry::setModuleError(uint8_t index, const char* message) {
     }
 }
 
+/**
+ * \brief Clears module error state for index.
+ * \param index Module index.
+ */
 void ModuleRegistry::clearModuleError(uint8_t index) {
     if (index >= MAX_MODULES) return;
     moduleErrors_[index].hasError = false;
     moduleErrors_[index].message[0] = '\0';
 }
 
+/**
+ * \brief Records and publishes an operational module error by module name.
+ * \param name Module name.
+ * \param message Error message text.
+ */
 void ModuleRegistry::reportModuleError(const char* name, const char* message) {
     if (!name) return;
 
@@ -564,6 +695,10 @@ void ModuleRegistry::reportModuleError(const char* name, const char* message) {
     LOG_W(TAG, "reportModuleError: module '%s' not found", name);
 }
 
+/**
+ * \brief Clears stored module error by module name.
+ * \param name Module name.
+ */
 void ModuleRegistry::clearModuleErrorByName(const char* name) {
     if (!name) return;
 
@@ -575,6 +710,11 @@ void ModuleRegistry::clearModuleErrorByName(const char* name) {
     }
 }
 
+/**
+ * \brief Attempts to recover a failed module by re-initializing and restarting it.
+ * \param index Module index.
+ * \return `true` if retry succeeded.
+ */
 bool ModuleRegistry::retryModule(uint8_t index) {
     if (index >= count_) return false;
 
@@ -606,15 +746,27 @@ bool ModuleRegistry::retryModule(uint8_t index) {
     return true;
 }
 
-// =============================================================================
-// Slot Validation Helpers
-// =============================================================================
+/**
+ * \brief Slot validation helpers.
+ */
 
+/**
+ * \brief Builds standardized slot-validation error text.
+ * \param buffer Output buffer for formatted message.
+ * \param bufSize Output buffer size.
+ * \param errorType Error category text.
+ * \param mapName Slot map name.
+ */
 void ModuleRegistry::buildSlotErrorMessage(char* buffer, size_t bufSize,
                                            const char* errorType, const char* mapName) {
     snprintf(buffer, bufSize, "%s for %s", errorType, mapName);
 }
 
+/**
+ * \brief Validates global slot map state before per-module range checks.
+ * \param moduleName Name used for reporting validation errors.
+ * \return `true` if slot map is valid.
+ */
 bool ModuleRegistry::validateSlotMap(const char* moduleName) {
     const auto& slotMap = TropicSlotMap::instance();
     if (!slotMap.isValid()) {
@@ -625,6 +777,15 @@ bool ModuleRegistry::validateSlotMap(const char* moduleName) {
     return true;
 }
 
+/**
+ * \brief Validates required ECC slot range and applies it to module range.
+ * \param mapName Slot map logical name.
+ * \param moduleName Module name used for error reporting.
+ * \param minSlots Minimum required ECC slots.
+ * \param range In/out slot range result.
+ * \param moduleId In/out resolved module ID.
+ * \return `true` if ECC requirements are satisfied.
+ */
 bool ModuleRegistry::validateEccRange(const char* mapName, const char* moduleName,
                                       uint16_t minSlots, IModule::SlotRange& range,
                                       uint8_t& moduleId) {
@@ -653,6 +814,15 @@ bool ModuleRegistry::validateEccRange(const char* mapName, const char* moduleNam
     return true;
 }
 
+/**
+ * \brief Validates required RMEM slot range and applies it to module range.
+ * \param mapName Slot map logical name.
+ * \param moduleName Module name used for error reporting.
+ * \param minSlots Minimum required RMEM slots.
+ * \param range In/out slot range result.
+ * \param moduleId In/out resolved module ID.
+ * \return `true` if RMEM requirements are satisfied.
+ */
 bool ModuleRegistry::validateRmemRange(const char* mapName, const char* moduleName,
                                        uint16_t minSlots, IModule::SlotRange& range,
                                        uint8_t& moduleId) {
@@ -689,10 +859,16 @@ bool ModuleRegistry::validateRmemRange(const char* mapName, const char* moduleNa
     return true;
 }
 
-// =============================================================================
-// Slot Request Application (Orchestrator)
-// =============================================================================
+/**
+ * \brief Slot request application orchestrator.
+ */
 
+/**
+ * \brief Validates and applies slot request declared by a module.
+ * \param module Module instance.
+ * \param index Module index in registry.
+ * \return `true` if request validation and assignment succeeded.
+ */
 bool ModuleRegistry::applySlotRequest(IModule* module, uint8_t index) {
     if (!module) return false;
 

@@ -1,6 +1,6 @@
 # BLE vCard Protocol (Badge2Badge)
 
-> **Note:** This document is a design snapshot and may not reflect the current implementation. Features described here may have changed significantly. Always refer to the source code for accurate details.
+Protocol specification for BLE-based contact exchange between CDC Badges.
 
 This document defines the BLE beacon (mini-card) and the BLE vCard exchange (full vCard), and explains how to implement it on your own device.
 

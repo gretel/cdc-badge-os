@@ -5,6 +5,7 @@
  */
 
 #include "cdc_views/ToastView.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_hal/IDisplay.h"
 #include <goodisplay/gdey029T94.h>
@@ -13,6 +14,14 @@
 
 namespace cdc::ui {
 
+/**
+ * \brief Initializes toast message content and timing behavior.
+ * \param message Toast message text.
+ * \param icon Icon type to display.
+ * \param durationMs Auto-dismiss duration in milliseconds.
+ * \param dismissible Whether key presses can dismiss the toast.
+ * \return void
+ */
 void ToastView::init(const char* message, Icon icon, uint16_t durationMs, bool dismissible) {
     if (message) {
         strncpy(message_, message, MAX_MSG_LEN - 1);
@@ -29,6 +38,11 @@ void ToastView::init(const char* message, Icon icon, uint16_t durationMs, bool d
     dirty_ = true;
 }
 
+/**
+ * \brief Updates auto-dismiss timeout state.
+ * \param nowMs Current monotonic time in milliseconds.
+ * \return void
+ */
 void ToastView::onTick(uint32_t nowMs) {
     if (durationMs_ > 0 && !expired_) {
         if (nowMs - startMs_ >= durationMs_) {
@@ -38,6 +52,11 @@ void ToastView::onTick(uint32_t nowMs) {
     }
 }
 
+/**
+ * \brief Handles key input for optional toast dismissal.
+ * \param key Pressed key code.
+ * \return Input handling result for the view stack.
+ */
 InputResult ToastView::onKey(char key) {
     // Any Y or N key dismisses the toast (if dismissible)
     if (dismissible_ && (key == 'Y' || key == 'N')) {
@@ -48,6 +67,11 @@ InputResult ToastView::onKey(char key) {
     return InputResult::IGNORED;
 }
 
+/**
+ * \brief Renders the toast overlay.
+ * \param partial Indicates partial/full redraw mode.
+ * \return void
+ */
 void ToastView::render(bool partial) {
     (void)partial;
 
@@ -65,9 +89,7 @@ void ToastView::render(bool partial) {
     int boxY = (height - BOX_HEIGHT) / 2;
 
     // Draw white box with double black border
-    gfx->fillRect(boxX, boxY, BOX_WIDTH, BOX_HEIGHT, EPD_WHITE);
-    gfx->drawRect(boxX, boxY, BOX_WIDTH, BOX_HEIGHT, EPD_BLACK);
-    gfx->drawRect(boxX + 1, boxY + 1, BOX_WIDTH - 2, BOX_HEIGHT - 2, EPD_BLACK);
+    render::drawDialogFrame(gfx, boxX, boxY, BOX_WIDTH, BOX_HEIGHT);
 
     gfx->setTextColor(EPD_BLACK);
     gfx->setTextSize(1);
@@ -136,12 +158,20 @@ void ToastView::render(bool partial) {
     dirty_ = false;
 }
 
-// ============================================================================
-// Convenience Functions
-// ============================================================================
+/**
+ * \brief Convenience helper functions.
+ */
 
 static ToastView s_sharedToast;
 
+/**
+ * \brief Shows the shared toast instance with custom icon and behavior.
+ * \param message Toast message text.
+ * \param icon Icon type to display.
+ * \param durationMs Auto-dismiss duration in milliseconds.
+ * \param dismissible Whether key presses can dismiss the toast.
+ * \return void
+ */
 static void showToastInternal(const char* message, ToastView::Icon icon, uint16_t durationMs,
                               bool dismissible = true) {
     s_sharedToast.init(message, icon, durationMs, dismissible);
@@ -149,30 +179,71 @@ static void showToastInternal(const char* message, ToastView::Icon icon, uint16_
     ViewStack::instance().render();  // Immediate render for toast
 }
 
+/**
+ * \brief Shows a plain toast message.
+ * \param message Toast message text.
+ * \param durationMs Auto-dismiss duration in milliseconds.
+ * \return void
+ */
 void showToast(const char* message, uint16_t durationMs) {
     showToastInternal(message, ToastView::Icon::NONE, durationMs);
 }
 
+/**
+ * \brief Shows a success toast message.
+ * \param message Toast message text.
+ * \param durationMs Auto-dismiss duration in milliseconds.
+ * \return void
+ */
 void showToastSuccess(const char* message, uint16_t durationMs) {
     showToastInternal(message, ToastView::Icon::SUCCESS, durationMs);
 }
 
+/**
+ * \brief Shows an error toast message.
+ * \param message Toast message text.
+ * \param durationMs Auto-dismiss duration in milliseconds.
+ * \return void
+ */
 void showToastError(const char* message, uint16_t durationMs) {
     showToastInternal(message, ToastView::Icon::ERROR, durationMs);
 }
 
+/**
+ * \brief Shows an informational toast message.
+ * \param message Toast message text.
+ * \param durationMs Auto-dismiss duration in milliseconds.
+ * \return void
+ */
 void showToastInfo(const char* message, uint16_t durationMs) {
     showToastInternal(message, ToastView::Icon::INFO, durationMs);
 }
 
+/**
+ * \brief Shows a task/progress toast message.
+ * \param message Toast message text.
+ * \param durationMs Auto-dismiss duration in milliseconds.
+ * \return void
+ */
 void showToastTask(const char* message, uint16_t durationMs) {
     showToastInternal(message, ToastView::Icon::TASK, durationMs);
 }
 
+/**
+ * \brief Shows an alert toast message.
+ * \param message Toast message text.
+ * \param durationMs Auto-dismiss duration in milliseconds.
+ * \return void
+ */
 void showToastAlert(const char* message, uint16_t durationMs) {
     showToastInternal(message, ToastView::Icon::ALERT, durationMs);
 }
 
+/**
+ * \brief Shows a non-dismissible alert toast.
+ * \param message Toast message text.
+ * \return void
+ */
 void showToastAlertSticky(const char* message) {
     showToastInternal(message, ToastView::Icon::ALERT, 0, false);
 }

@@ -5,6 +5,7 @@
  */
 
 #include "cdc_views/DateInputView.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_hal/IDisplay.h"
 #include "cdc_log.h"
@@ -13,7 +14,9 @@
 
 static const char* TAG = "DateInputView";
 
-// Display constants
+/**
+ * \brief Display layout constants.
+ */
 static constexpr int TITLE_Y = 20;
 static constexpr int DATE_Y = 60;
 static constexpr int UNDERLINE_Y = DATE_Y + 20;
@@ -21,6 +24,14 @@ static constexpr int HINT_Y = 90;
 
 namespace cdc::ui {
 
+/**
+ * \brief Initializes date input state.
+ * \param title View title text.
+ * \param day Initial day value.
+ * \param month Initial month value.
+ * \param year Initial year value.
+ * \return void
+ */
 void DateInputView::init(const char* title, uint8_t day, uint8_t month, uint16_t year) {
     title_ = title;
     day_ = (day >= 1 && day <= 31) ? day : 1;
@@ -31,6 +42,10 @@ void DateInputView::init(const char* title, uint8_t day, uint8_t month, uint16_t
     dirty_ = true;
 }
 
+/**
+ * \brief Moves focus to the next date field.
+ * \return void
+ */
 void DateInputView::nextField() {
     if (currentField_ == Field::DAY) {
         currentField_ = Field::MONTH;
@@ -41,6 +56,10 @@ void DateInputView::nextField() {
     dirty_ = true;
 }
 
+/**
+ * \brief Moves focus to the previous date field.
+ * \return void
+ */
 void DateInputView::prevField() {
     if (currentField_ == Field::YEAR) {
         currentField_ = Field::MONTH;
@@ -51,6 +70,10 @@ void DateInputView::prevField() {
     dirty_ = true;
 }
 
+/**
+ * \brief Clears the currently selected date field.
+ * \return void
+ */
 void DateInputView::clearField() {
     switch (currentField_) {
         case Field::DAY:
@@ -67,6 +90,11 @@ void DateInputView::clearField() {
     dirty_ = true;
 }
 
+/**
+ * \brief Inserts a numeric digit into the active date field.
+ * \param digit Numeric character (`'0'`..`'9'`).
+ * \return void
+ */
 void DateInputView::enterDigit(char digit) {
     uint8_t d = digit - '0';
 
@@ -116,6 +144,10 @@ void DateInputView::enterDigit(char digit) {
     dirty_ = true;
 }
 
+/**
+ * \brief Validates and clamps date values to supported bounds.
+ * \return `true` after values were normalized.
+ */
 bool DateInputView::validateAndClamp() {
     if (day_ < 1) day_ = 1;
     if (day_ > 31) day_ = 31;
@@ -126,6 +158,11 @@ bool DateInputView::validateAndClamp() {
     return true;
 }
 
+/**
+ * \brief Handles key input for the date editor.
+ * \param key Pressed key code.
+ * \return Input handling result for the view stack.
+ */
 InputResult DateInputView::onKey(char key) {
     // Digit input (all 0-9 keys are digits, auto-advances between fields)
     if (key >= '0' && key <= '9') {
@@ -157,10 +194,19 @@ InputResult DateInputView::onKey(char key) {
     }
 }
 
+/**
+ * \brief Returns localized footer hint text.
+ * \return Footer hint string.
+ */
 const char* DateInputView::getFooterHint() const {
     return tr(StringId::HINT_DATE_INPUT);
 }
 
+/**
+ * \brief Renders the date input view.
+ * \param partial Indicates partial/full redraw mode.
+ * \return void
+ */
 void DateInputView::render(bool partial) {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;
@@ -179,11 +225,7 @@ void DateInputView::render(bool partial) {
 
     if (title_) {
         gfx->setTextSize(1);
-        int16_t x1, y1;
-        uint16_t w, h;
-        gfx->getTextBounds(title_, 0, 0, &x1, &y1, &w, &h);
-        gfx->setCursor((width - w) / 2, TITLE_Y);
-        gfx->print(title_);
+        render::drawHeaderCentered(gfx, title_, TITLE_Y, width);
     }
 
     char dateStr[20];
@@ -221,12 +263,7 @@ void DateInputView::render(bool partial) {
     gfx->fillRect(underlineX, UNDERLINE_Y, underlineW, 3, EPD_BLACK);
 
     const char* hint = getFooterHint();
-    if (hint) {
-        gfx->fillRect(0, height - 16, width, 16, EPD_BLACK);
-        gfx->setTextColor(EPD_WHITE);
-        gfx->setCursor(4, height - 12);
-        gfx->print(hint);
-    }
+    render::drawFooterBar(gfx, width, height, nullptr, hint, false);
 
     dirty_ = false;
 }

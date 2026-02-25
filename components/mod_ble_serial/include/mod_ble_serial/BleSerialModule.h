@@ -67,6 +67,12 @@ private:
     void registerConsoleHooks();
     void unregisterConsoleHooks();
 
+    // Pairing UI
+    uint16_t pairingConnHandle_ = 0xFFFF;
+    void registerPairingCallback();
+    static void onPairingConfirm(void* userData);
+    static void onPairingReject(void* userData);
+
     // Settings
     void loadSettings();
     void saveSettings();

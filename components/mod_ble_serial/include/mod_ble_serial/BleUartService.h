@@ -9,7 +9,7 @@ namespace cdc::mod_ble_serial {
 /**
  * BLE UART Service (Nordic UART Service compatible)
  *
- * Provides serial communication over BLE using:
+ * Provides serial communication over BLE using IBluetoothController API only.
  * - Service UUID: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
  * - RX UUID: 6E400002-... (Write, Write Without Response)
  * - TX UUID: 6E400003-... (Notify)
@@ -17,7 +17,7 @@ namespace cdc::mod_ble_serial {
 class BleUartService {
 public:
     /**
-     * Initialize the GATT service
+     * Initialize the GATT service via IBluetoothController API
      * @return true if successful
      */
     bool init();
@@ -83,12 +83,19 @@ public:
      */
     bool isConnected() const;
 
-    /**
-     * Get current MTU
-     */
-    uint16_t getMtu() const { return mtu_; }
+    // === Callbacks (invoked by API) ===
 
-    // === Callbacks ===
+    /**
+     * Handle incoming RX data (called from GATT write callback)
+     */
+    void onRxData(const uint8_t* data, size_t len);
+
+    /**
+     * Handle connection state change (called from BLE connection callbacks)
+     */
+    void onConnectionChange(bool connected);
+
+    // === Application Callbacks ===
 
     using ConnectCallback = std::function<void()>;
     using DisconnectCallback = std::function<void()>;
@@ -103,7 +110,9 @@ private:
     BleUartService() = default;
 
     bool initialized_ = false;
-    uint16_t mtu_ = 20;  // Default BLE MTU for data
+
+    // GATT handle for TX characteristic (populated by registerGattService)
+    uint16_t txCharHandle_ = 0;
 
     // Callbacks
     ConnectCallback onConnect_;
@@ -118,19 +127,6 @@ private:
     // TX state
     volatile bool txCongested_ = false;
     volatile bool txInProgress_ = false;  // Recursion guard
-
-    // Internal methods (called by NimBLE callbacks)
-    void onRxData(const uint8_t* data, size_t len);
-    void onMtuUpdate(uint16_t mtu);
-    void onConnectionChange(bool connected);
-
-    // NimBLE GATT callback (static) - signature uses void* for portability
-    // Implementation casts to ble_gatt_access_ctxt* when NimBLE is enabled
-    static int gattAccessCallback(uint16_t connHandle, uint16_t attrHandle,
-                                   void* ctxt, void* arg);
-
-    // GATT handles
-    uint16_t txCharHandle_ = 0;
 };
 
 } // namespace cdc::mod_ble_serial

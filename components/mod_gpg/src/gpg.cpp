@@ -17,10 +17,22 @@ static bool s_initialized = false;
 static gpg_metadata_t s_metadata = {};
 static char s_pending_user_id[GPG_USER_ID_MAX] = {};
 
+/**
+ * \brief Returns the current Unix timestamp in seconds.
+ * \return Current POSIX time.
+ */
 static uint32_t get_unix_time(void) {
     return static_cast<uint32_t>(time(nullptr));
 }
 
+/**
+ * \brief Reads a public key from the secure element and normalizes layout per curve.
+ * \param slot Secure element slot containing the key.
+ * \param pubkey Destination buffer for the public key bytes.
+ * \param max_len Size of `pubkey` in bytes.
+ * \param curve_out Optional destination for the exported CDC curve identifier.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool se_get_pubkey(uint8_t slot, uint8_t* pubkey, size_t max_len, uint8_t* curve_out) {
     auto* se = cdc::hal::getSecureElementInstance();
     if (!se || !pubkey) return false;
@@ -40,6 +52,12 @@ static bool se_get_pubkey(uint8_t slot, uint8_t* pubkey, size_t max_len, uint8_t
     return true;
 }
 
+/**
+ * \brief Generates a key pair in the secure element for the requested curve.
+ * \param slot Secure element slot to populate.
+ * \param curve CDC curve identifier.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool se_generate_key(uint8_t slot, uint8_t curve) {
     auto* se = cdc::hal::getSecureElementInstance();
     if (!se) return false;
@@ -48,24 +66,50 @@ static bool se_generate_key(uint8_t slot, uint8_t curve) {
     return se->eccGenerate(slot, c) == cdc::hal::SeResult::OK;
 }
 
+/**
+ * \brief Deletes a key from the secure element.
+ * \param slot Secure element slot to erase.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool se_delete_key(uint8_t slot) {
     auto* se = cdc::hal::getSecureElementInstance();
     if (!se) return false;
     return se->eccDelete(slot) == cdc::hal::SeResult::OK;
 }
 
+/**
+ * \brief Signs a digest with a P-256 key stored in the secure element.
+ * \param slot Secure element slot holding the signing key.
+ * \param hash Digest bytes to sign.
+ * \param hash_len Length of `hash` in bytes.
+ * \param sig Destination buffer for DER-encoded ECDSA signature.
+ * \param sig_len In/out signature length value.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool se_sign_p256(uint8_t slot, const uint8_t* hash, size_t hash_len, uint8_t* sig, size_t* sig_len) {
     auto* se = cdc::hal::getSecureElementInstance();
     if (!se || !hash || !sig || !sig_len) return false;
     return se->ecdsaSign(slot, hash, hash_len, sig, sig_len) == cdc::hal::SeResult::OK;
 }
 
+/**
+ * \brief Signs a message with an Ed25519 key stored in the secure element.
+ * \param slot Secure element slot holding the signing key.
+ * \param msg Message bytes to sign.
+ * \param msg_len Length of `msg` in bytes.
+ * \param sig Destination buffer for the 64-byte signature.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool se_sign_ed25519(uint8_t slot, const uint8_t* msg, size_t msg_len, uint8_t* sig) {
     auto* se = cdc::hal::getSecureElementInstance();
     if (!se || !msg || !sig) return false;
     return se->eddsaSign(slot, msg, msg_len, sig) == cdc::hal::SeResult::OK;
 }
 
+/**
+ * \brief Loads persisted GPG metadata from NVS.
+ * \return `true` when valid metadata was loaded, otherwise `false`.
+ */
 static bool load_metadata(void) {
     nvs_handle_t handle;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
@@ -86,6 +130,10 @@ static bool load_metadata(void) {
     return true;
 }
 
+/**
+ * \brief Persists the current GPG metadata to NVS.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool save_metadata(void) {
     s_metadata.magic = GPG_METADATA_MAGIC;
     s_metadata.version = GPG_METADATA_VERSION;
@@ -101,6 +149,15 @@ static bool save_metadata(void) {
     return err == ESP_OK;
 }
 
+/**
+ * \brief Calculates the OpenPGP v4 fingerprint for a public key packet body.
+ * \param pubkey Raw public key bytes.
+ * \param pubkey_len Length of `pubkey` in bytes.
+ * \param curve CDC curve identifier.
+ * \param created_at Key creation timestamp.
+ * \param fp_out Destination buffer for the 20-byte fingerprint.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool calculate_fingerprint(const uint8_t *pubkey, size_t pubkey_len,
                                   uint8_t curve, uint32_t created_at,
                                   uint8_t *fp_out) {
@@ -161,6 +218,15 @@ static bool calculate_fingerprint(const uint8_t *pubkey, size_t pubkey_len,
     return true;
 }
 
+/**
+ * \brief Calculates the OpenPGP v5 fingerprint for a public key packet body.
+ * \param pubkey Raw public key bytes.
+ * \param pubkey_len Length of `pubkey` in bytes.
+ * \param curve CDC curve identifier.
+ * \param created_at Key creation timestamp.
+ * \param fp_out Destination buffer for the 32-byte fingerprint.
+ * \return `true` on success, otherwise `false`.
+ */
 static bool calculate_fingerprint_v5(const uint8_t *pubkey, size_t pubkey_len,
                                      uint8_t curve, uint32_t created_at,
                                      uint8_t *fp_out) {
@@ -221,6 +287,10 @@ static bool calculate_fingerprint_v5(const uint8_t *pubkey, size_t pubkey_len,
     return true;
 }
 
+/**
+ * \brief Initializes the GPG module and attempts to load persisted key metadata.
+ * \return `true` when storage is reachable, otherwise `false`.
+ */
 bool gpg_init(void) {
     if (!gpg_storage_ready()) {
         return false;
@@ -230,10 +300,19 @@ bool gpg_init(void) {
     return true;
 }
 
+/**
+ * \brief Reports whether valid GPG metadata is currently loaded.
+ * \return `true` when the module is initialized, otherwise `false`.
+ */
 bool gpg_is_initialized(void) {
     return s_initialized;
 }
 
+/**
+ * \brief Returns current GPG status snapshot.
+ * \param status Destination status structure.
+ * \return `true` on success, otherwise `false`.
+ */
 bool gpg_get_status(gpg_status_t *status) {
     if (!status) return false;
     if (!s_initialized) return false;
@@ -247,6 +326,11 @@ bool gpg_get_status(gpg_status_t *status) {
     return true;
 }
 
+/**
+ * \brief Stores a user ID that will be bound to the next generated key set.
+ * \param user_id User ID string to stage.
+ * \return `true` on success, otherwise `false`.
+ */
 bool gpg_set_pending_user_id(const char *user_id) {
     if (!user_id || !user_id[0]) return false;
     strncpy(s_pending_user_id, user_id, sizeof(s_pending_user_id) - 1);
@@ -254,10 +338,19 @@ bool gpg_set_pending_user_id(const char *user_id) {
     return true;
 }
 
+/**
+ * \brief Indicates whether a pending user ID is staged for key generation.
+ * \return `true` when a pending user ID exists, otherwise `false`.
+ */
 bool gpg_has_pending_user_id(void) {
     return s_pending_user_id[0] != '\0';
 }
 
+/**
+ * \brief Generates SIG/DEC/AUT key material and updates persisted metadata.
+ * \param curve Primary signing/authentication curve identifier.
+ * \return `true` on success, otherwise `false`.
+ */
 bool gpg_generate_key(uint8_t curve) {
     if (!gpg_storage_ready()) return false;
     if (!gpg_has_pending_user_id() && !s_initialized) return false;
@@ -329,6 +422,10 @@ bool gpg_generate_key(uint8_t curve) {
     return true;
 }
 
+/**
+ * \brief Removes all GPG keys and metadata from secure element and NVS.
+ * \return `true` on success, otherwise `false`.
+ */
 bool gpg_reset(void) {
     if (!gpg_storage_ready()) return false;
     se_delete_key(gpg_storage_sig_slot());
@@ -349,6 +446,13 @@ bool gpg_reset(void) {
     return true;
 }
 
+/**
+ * \brief Exports the current public key as PEM SubjectPublicKeyInfo.
+ * \param buf Destination string buffer.
+ * \param size Size of `buf` in bytes.
+ * \param out_len Destination for generated PEM length.
+ * \return `true` on success, otherwise `false`.
+ */
 bool gpg_export_pubkey_pem(char *buf, size_t size, size_t *out_len) {
     if (!buf || size < 256 || !out_len) {
         return false;
@@ -428,6 +532,13 @@ bool gpg_export_pubkey_pem(char *buf, size_t size, size_t *out_len) {
     return true;
 }
 
+/**
+ * \brief Exports the raw public key bytes and associated curve identifier.
+ * \param pubkey Destination buffer for key bytes.
+ * \param pubkey_len Destination for key length.
+ * \param curve Destination for CDC curve identifier.
+ * \return `true` on success, otherwise `false`.
+ */
 bool gpg_export_pubkey_raw(uint8_t *pubkey, size_t *pubkey_len, uint8_t *curve) {
     if (!pubkey || !pubkey_len || !curve) return false;
     if (!s_initialized) return false;
@@ -437,18 +548,36 @@ bool gpg_export_pubkey_raw(uint8_t *pubkey, size_t *pubkey_len, uint8_t *curve) 
     return true;
 }
 
+/**
+ * \brief Returns the OpenPGP v4 fingerprint of the current signing key.
+ * \param fp_out Destination buffer for fingerprint bytes.
+ * \return `true` on success, otherwise `false`.
+ */
 bool gpg_get_fingerprint(uint8_t *fp_out) {
     if (!fp_out || !s_initialized) return false;
     memcpy(fp_out, s_metadata.fingerprint, sizeof(s_metadata.fingerprint));
     return true;
 }
 
+/**
+ * \brief Returns the OpenPGP v5 fingerprint of the current signing key.
+ * \param fp_out Destination buffer for fingerprint bytes.
+ * \return `true` on success, otherwise `false`.
+ */
 bool gpg_get_fingerprint_v5(uint8_t *fp_out) {
     if (!fp_out || !s_initialized) return false;
     memcpy(fp_out, s_metadata.fingerprint_v5, sizeof(s_metadata.fingerprint_v5));
     return true;
 }
 
+/**
+ * \brief Signs input data using the currently active signing key.
+ * \param hash Input data or digest to sign.
+ * \param hash_len Length of `hash` in bytes.
+ * \param sig_out Destination buffer for signature bytes.
+ * \param sig_len In/out signature length value.
+ * \return `true` on success, otherwise `false`.
+ */
 bool gpg_sign_hash(const uint8_t *hash, size_t hash_len,
                    uint8_t *sig_out, size_t *sig_len) {
     if (!hash || !sig_out || !sig_len) return false;

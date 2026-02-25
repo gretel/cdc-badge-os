@@ -1,6 +1,6 @@
 # CDC Badge OS
 
-Modular firmware for the CDC Badge v1.0 hardware security key featuring TROPIC01 secure element.
+Modular firmware for the CDC Badge v1.0/v1.1 hardware security key featuring TROPIC01 secure element.
 
 ![CDC Badge Demo](docs/demo.jpg)
 
@@ -16,22 +16,22 @@ Modular firmware for the CDC Badge v1.0 hardware security key featuring TROPIC01
 | **SSH Hardware Keys** | Working | Native SSH via ed25519-sk (OpenSSH 8.2+) |
 | **U2F** | Working | Legacy two-factor authentication |
 | **TOTP Authenticator** | Working | Time-based OTP (100 accounts, Google Authenticator compatible) |
-| **Password Vault** | Working | Secure password storage (362 entries) |
+| **Password Vault** | Working | Secure password storage (353 entries) |
 | **GPG/CCID** | WIP | OpenPGP smartcard via USB CCID with TROPIC01 key storage |
+| **BLE vCard** | WIP | Badge-to-badge contact exchange via BLE |
+| **BLE HID** | WIP | Bluetooth keyboard for auto-type |
 | **WiFi + NTP** | Working | Time synchronization over WiFi |
-| **BLE Serial** | Framework | Bluetooth serial console (Nordic UART Service) - GATT pending |
+| **BLE Serial** | WIP | Bluetooth serial console (Nordic UART Service) |
+| **SAO Detection** | Working | Shitty Add-On port detection and info |
 | **E-Paper Display** | Working | 2.9" low-power display with backlight |
 | **12-Button Keypad** | Working | Phone-style T9 input |
 | **Multi-Language** | Working | English and German UI |
 | **Secure Serial** | Working | PIN authentication for serial commands |
 
-### Not Yet Ported
+### Planned
 
-- Badge Mode (QR Code vCard display)
-- BLE vCard (Badge2Badge exchange)
-- Certificate Authority (CA)
-- SAO Port detection
-- USB Keyboard auto-type
+- [ ] Badge Mode (QR code vCard display)
+- [ ] Certificate Authority (CA) module
 
 ## Architecture
 
@@ -51,7 +51,11 @@ components/
   mod_totp/       TOTP authenticator module
   mod_password/   Password vault module
   mod_gpg/        OpenPGP smartcard (CCID) module
+  mod_vcard/      BLE vCard exchange (Badge2Badge)
+  mod_hid/        BLE HID keyboard for auto-type
   mod_ble_serial/ BLE Serial console (Nordic UART Service)
+  mod_sao/        SAO port detection
+  mod_nvsedit/    NVS editor (privileged)
 ```
 
 Modules are self-contained and can be enabled/disabled in `main/CMakeLists.txt`.
@@ -64,7 +68,7 @@ See [Module Development Guide](docs/MODULE_DEVELOPMENT.md) for creating new modu
 |---------|----------------|
 | **Key Storage** | All private keys in TROPIC01 secure element |
 | **Key Generation** | P-256 and Ed25519 generated on-chip, never exported |
-| **PIN Protection** | 4-6 digit PIN with 3 attempt lockout |
+| **PIN Protection** | 4-8 digit PIN with 3 attempt lockout |
 | **FIDO2 ClientPIN** | Protocol 2 with HKDF-SHA256 |
 | **Attestation** | Self-signed (device-unique AAGUID) |
 
@@ -106,9 +110,41 @@ Schematics and PCB: https://github.com/riatlabs/cdc-badge
 
 ## Getting Started
 
-### Build & Flash
+### Flash Pre-built Firmware
 
-Requires PlatformIO with ESP-IDF framework.
+No build environment needed. Flash a release directly to the badge.
+
+**Option A: Web Flasher (easiest)**
+
+Use the browser-based flasher at [CDC Badge Web Flasher](https://krim404.github.io/cdc-badge-os/) - requires Chrome/Edge with Web Serial support.
+
+**Option B: Python Flash Tool**
+
+```bash
+# Install dependencies
+pip install -r tools/requirements.txt
+
+# Flash the latest release from GitHub
+python tools/flash_firmware.py --release latest
+
+# Flash a specific version
+python tools/flash_firmware.py --release v0.4.1
+
+# Flash from a local directory
+python tools/flash_firmware.py --dir ./artifacts/
+
+# Specify port manually (auto-detected by default)
+python tools/flash_firmware.py --release latest --port /dev/cu.usbmodem1101
+
+# Erase all settings (NVS) after flashing
+python tools/flash_firmware.py --release latest --erase-nvs
+```
+
+If the device is not detected, hold **BOOT** while pressing **RESET** to enter download mode.
+
+### Build from Source
+
+Requires [PlatformIO](https://platformio.org/) with ESP-IDF framework.
 
 ```bash
 # Initialize submodules
@@ -132,12 +168,14 @@ Feature flags in `components/cdc_core/include/cdc_core/feature_flags.h`:
 |------|---------|-------------|
 | `DEBUG_MODE` | 1 | Disables PIN lockouts and increases log verbosity. **Set to 0 for production!** |
 | `FEATURE_SECURE_SERIAL` | 0 | Require PIN authentication for serial commands |
+| `FEATURE_NVS_EDIT` | 0 | Enable NVS delete operations in the privileged NVS editor |
 
 Set via build flags in `platformio.ini`:
 ```ini
 build_flags =
     -DDEBUG_MODE=0
     -DFEATURE_SECURE_SERIAL=1
+    -DFEATURE_NVS_EDIT=1
 ```
 
 Or via Kconfig menuconfig:
@@ -186,52 +224,18 @@ ssh user@server
 
 ## Serial Commands
 
-Connect at 115200 baud via USB CDC. Use `HELP` to list all commands.
+Connect at 115200 baud via USB CDC. Type `HELP` to list all available commands.
 
-### System
-| Command | Description |
-|---------|-------------|
-| `HELP` | Show all commands |
-| `PING` | Connection test |
-| `STATUS` | Badge status |
-| `MEM` | Memory usage (Heap/PSRAM/NVS) |
+The [Web Flasher](https://krim404.github.io/cdc-badge-os/) also provides a serial console for configuration.
 
-### Time
-| Command | Description |
-|---------|-------------|
-| `SET_TIME HH:MM:SS` | Set time |
-| `SET_DATE YYYY-MM-DD` | Set date |
-| `SET_DATE <timestamp>` | Set from Unix timestamp |
-
-### FIDO2
-| Command | Description |
-|---------|-------------|
-| `FIDO_STATUS` | Module status |
-| `FIDO_LIST` | List credentials |
-| `FIDO_DEL <index>` | Delete credential |
-
-### TOTP
-| Command | Description |
-|---------|-------------|
-| `TOTP_LIST` | List accounts |
-| `TOTP_ADD name secret [issuer] [digits] [period]` | Add account |
-| `TOTP_DEL <index>` | Delete account |
-| `TOTP_GET <index>` | Generate code |
-
-### Password Vault
-| Command | Description |
-|---------|-------------|
-| `PASS_LIST` | List entries |
-| `PASS_ADD name user url password [notes]` | Add entry |
-| `PASS_GET <index>` | Show entry |
-| `PASS_DEL <index>` | Delete entry |
+See [Serial Commands Reference](docs/SERIAL_COMMANDS.md) for the full command list.
 
 ## Power Management
 
 | Mode | Trigger | Wake |
 |------|---------|------|
 | Active | Normal use | - |
-| Light Sleep | Lock screen idle | Any key |
+| Light Sleep | Lock screen idle | Any key except [3] (Menu) |
 | Deep Sleep | Hold N 5s on lock | Any key (reset) |
 | Shipping | Hold BOOT 3s | USB power |
 

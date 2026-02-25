@@ -16,14 +16,27 @@ static const char* TAG = "SleepMgr";
 
 namespace cdc::ui {
 
-// Forward declaration for status icon update
+/**
+ * \brief Forward declaration for lock-screen power status icon refresh.
+ */
 void updatePowerStatusIcons();
 
+/**
+ * \brief Returns singleton sleep manager instance.
+ * \return Reference to global `SleepManager` instance.
+ */
 SleepManager& SleepManager::instance() {
     static SleepManager s_instance;
     return s_instance;
 }
 
+/**
+ * \brief Initializes sleep-manager dependencies and state.
+ * \param sleep Sleep controller dependency.
+ * \param power Power manager dependency.
+ * \param lockScreen Lock-screen view dependency.
+ * \return void
+ */
 void SleepManager::init(hal::ISleepController* sleep, hal::IPowerManager* power, LockScreenView* lockScreen) {
     sleep_ = sleep;
     power_ = power;
@@ -32,14 +45,28 @@ void SleepManager::init(hal::ISleepController* sleep, hal::IPowerManager* power,
     inLightSleep_ = false;
 }
 
+/**
+ * \brief Resets lock-screen sleep timer using explicit timestamp.
+ * \param nowMs Current monotonic time in milliseconds.
+ * \return void
+ */
 void SleepManager::resetTimer(uint32_t nowMs) {
     lockScreenEnteredMs_ = nowMs;
 }
 
+/**
+ * \brief Resets lock-screen sleep timer using current system tick.
+ * \return void
+ */
 void SleepManager::resetTimer() {
     lockScreenEnteredMs_ = esp_timer_get_time() / 1000;
 }
 
+/**
+ * \brief Evaluates whether lock-screen light sleep should be entered.
+ * \param nowMs Current monotonic time in milliseconds.
+ * \return void
+ */
 void SleepManager::checkLockScreenSleep(uint32_t nowMs) {
     // Only on lock screen (depth == 1)
     if (ViewStack::instance().depth() != 1) return;
@@ -74,6 +101,10 @@ void SleepManager::checkLockScreenSleep(uint32_t nowMs) {
     }
 }
 
+/**
+ * \brief Enters lock-screen light sleep flow and handles wakeup.
+ * \return void
+ */
 void SleepManager::enterLockScreenSleep() {
     if (!lockScreen_ || !sleep_) return;
 
@@ -94,6 +125,10 @@ void SleepManager::enterLockScreenSleep() {
     handleWakeup();
 }
 
+/**
+ * \brief Handles wakeup behavior after light sleep.
+ * \return void
+ */
 void SleepManager::handleWakeup() {
     if (!sleep_ || !lockScreen_) return;
 
@@ -156,10 +191,15 @@ void SleepManager::handleWakeup() {
     }
 }
 
-// =============================================================================
-// Sleep Inhibitor API
-// =============================================================================
+/**
+ * \brief Sleep inhibitor API implementation.
+ */
 
+/**
+ * \brief Adds a sleep inhibitor reason.
+ * \param reason Inhibitor identifier string.
+ * \return `true` if added, otherwise `false`.
+ */
 bool SleepManager::addSleepInhibitor(const char* reason) {
     if (!reason) return false;
 
@@ -185,6 +225,11 @@ bool SleepManager::addSleepInhibitor(const char* reason) {
     return true;
 }
 
+/**
+ * \brief Removes a sleep inhibitor reason.
+ * \param reason Inhibitor identifier string.
+ * \return `true` if removed, otherwise `false`.
+ */
 bool SleepManager::removeSleepInhibitor(const char* reason) {
     if (!reason) return false;
 
@@ -208,6 +253,10 @@ bool SleepManager::removeSleepInhibitor(const char* reason) {
     return false;  // Not found
 }
 
+/**
+ * \brief Updates caffeinated icon visibility on lock screen.
+ * \return void
+ */
 void SleepManager::updateCaffeinatedIcon() {
     if (!lockScreen_) return;
 

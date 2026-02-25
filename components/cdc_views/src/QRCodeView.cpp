@@ -17,14 +17,18 @@
 
 static const char* TAG = "QRCodeView";
 
-// Display dimensions (Gdey029T94)
+/**
+ * \brief Display dimensions for Gdey029T94 panel.
+ */
 static constexpr int DISPLAY_WIDTH = 296;
 static constexpr int DISPLAY_HEIGHT = 128;
 static constexpr int QR_MARGIN = 0;  // No margin - maximize QR size
 
 namespace cdc::ui {
 
-// QR code rendering context (for callback)
+/**
+ * \brief QR rendering context used by callback-driven rendering.
+ */
 static struct {
     int offsetX;
     int offsetY;
@@ -34,7 +38,11 @@ static struct {
     Gdey029T94* display;
 } s_qrCtx;
 
-// QR code display callback - draws directly to e-paper (or just measures)
+/**
+ * \brief Renders or measures the QR code through the ESP QR callback.
+ * \param qrcode QR handle provided by the ESP QR generator.
+ * \return void
+ */
 static void qrDisplayCallback(esp_qrcode_handle_t qrcode) {
     int size = esp_qrcode_get_size(qrcode);
     s_qrCtx.actualSize = size;
@@ -67,6 +75,13 @@ static void qrDisplayCallback(esp_qrcode_handle_t qrcode) {
     }
 }
 
+/**
+ * \brief Initializes QR code content and layout state.
+ * \param data QR payload text.
+ * \param title Optional title text.
+ * \param subtitle Optional subtitle text.
+ * \return void
+ */
 void QRCodeView::init(const char* data, const char* title, const char* subtitle) {
     data_ = data;
     title_ = title;
@@ -82,12 +97,21 @@ void QRCodeView::init(const char* data, const char* title, const char* subtitle)
              data ? data : "(null)", title ? title : "(null)");
 }
 
+/**
+ * \brief Handles key input by closing the QR view.
+ * \param key Pressed key code.
+ * \return Always requests pop from view stack.
+ */
 InputResult QRCodeView::onKey(char key) {
     (void)key;
     // Any key closes the QR view
     return InputResult::REQUEST_POP;
 }
 
+/**
+ * \brief Returns footer hint text.
+ * \return Footer hint string.
+ */
 const char* QRCodeView::getFooterHint() const {
     if (customHint_) {
         return customHint_;
@@ -95,6 +119,10 @@ const char* QRCodeView::getFooterHint() const {
     return tr(StringId::HINT_BACK);
 }
 
+/**
+ * \brief Computes QR module count, scale, and offsets for rendering.
+ * \return void
+ */
 void QRCodeView::calculateLayout() {
     if (!data_) return;
 
@@ -138,6 +166,10 @@ void QRCodeView::calculateLayout() {
              qrModuleCount_, qrScale_, qrPixelSize, qrPixelSize);
 }
 
+/**
+ * \brief Renders the QR matrix onto the display.
+ * \return void
+ */
 void QRCodeView::renderQrCode() {
     if (!data_) return;
 
@@ -170,6 +202,10 @@ void QRCodeView::renderQrCode() {
     }
 }
 
+/**
+ * \brief Renders title/subtitle/footer text beside the QR area.
+ * \return void
+ */
 void QRCodeView::renderText() {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;
@@ -239,6 +275,11 @@ void QRCodeView::renderText() {
     }
 }
 
+/**
+ * \brief Renders the complete QR code view.
+ * \param partial Indicates partial/full redraw mode.
+ * \return void
+ */
 void QRCodeView::render(bool partial) {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;
@@ -273,12 +314,20 @@ void QRCodeView::render(bool partial) {
     dirty_ = false;
 }
 
-// ============================================================================
-// Convenience Function
-// ============================================================================
+/**
+ * \brief Convenience factory/helper function.
+ */
 
 static QRCodeView s_sharedQRCodeView;
 
+/**
+ * \brief Shows a shared QR code view instance.
+ * \param data QR payload text.
+ * \param title Optional title text.
+ * \param subtitle Optional subtitle text.
+ * \param hint Optional custom footer hint.
+ * \return Pointer to the shared `QRCodeView` instance.
+ */
 QRCodeView* showQRCode(const char* data, const char* title,
                        const char* subtitle, const char* hint) {
     s_sharedQRCodeView.init(data, title, subtitle);

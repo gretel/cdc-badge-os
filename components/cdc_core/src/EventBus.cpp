@@ -8,11 +8,20 @@ static const char* TAG = "EventBus";
 
 namespace cdc::core {
 
+/**
+ * \brief Returns singleton event-bus instance.
+ * \return Reference to global `EventBus` instance.
+ */
 EventBus& EventBus::instance() {
     static EventBus instance;
     return instance;
 }
 
+/**
+ * \brief Initializes event queue and internal state.
+ * \param queueSize Queue capacity in number of `Event` objects.
+ * \return `true` on success.
+ */
 bool EventBus::init(size_t queueSize) {
     if (initialized_) {
         LOG_W(TAG, "Already initialized");
@@ -30,6 +39,12 @@ bool EventBus::init(size_t queueSize) {
     return true;
 }
 
+/**
+ * \brief Subscribes an event handler with optional type mask.
+ * \param handler Callback function.
+ * \param mask Event-type bitmask (`0` = all events).
+ * \return 1-based subscription ID, or `0` on failure.
+ */
 uint8_t EventBus::subscribe(EventHandler handler, uint32_t mask) {
     if (!handler) return 0;
 
@@ -47,6 +62,11 @@ uint8_t EventBus::subscribe(EventHandler handler, uint32_t mask) {
     return 0;
 }
 
+/**
+ * \brief Removes subscription by handler ID.
+ * \param id 1-based handler subscription ID.
+ * \return void
+ */
 void EventBus::unsubscribe(uint8_t id) {
     if (id == 0 || id > MAX_HANDLERS) return;
 
@@ -55,6 +75,12 @@ void EventBus::unsubscribe(uint8_t id) {
     LOG_D(TAG, "Handler %u unsubscribed", id);
 }
 
+/**
+ * \brief Publishes an event to the queue.
+ * \param event Event object to queue.
+ * \param fromISR Set `true` when called from ISR context.
+ * \return `true` if queueing succeeded.
+ */
 bool EventBus::publish(const Event& event, bool fromISR) {
     if (!initialized_ || !queue_) return false;
 
@@ -74,6 +100,12 @@ bool EventBus::publish(const Event& event, bool fromISR) {
     return result == pdTRUE;
 }
 
+/**
+ * \brief Publishes a lightweight value event.
+ * \param type Event type.
+ * \param value Payload value.
+ * \return `true` if queueing succeeded.
+ */
 bool EventBus::publish(EventType type, uint8_t value) {
     Event event = {};
     event.type = type;
@@ -82,6 +114,10 @@ bool EventBus::publish(EventType type, uint8_t value) {
     return publish(event);
 }
 
+/**
+ * \brief Drains queued events and dispatches matching handlers.
+ * \return void
+ */
 void EventBus::process() {
     if (!initialized_ || !queue_) return;
 

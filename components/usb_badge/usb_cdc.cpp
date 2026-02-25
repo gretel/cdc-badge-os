@@ -29,9 +29,9 @@ extern "C" {
 
 static const char* TAG = "USB";
 
-// ============================================================================
-// State
-// ============================================================================
+/**
+ * \brief Internal USB CDC startup and task state.
+ */
 
 static bool g_usb_prepared = false;    // PHY and descriptors ready
 static bool g_usb_started = false;     // TinyUSB running
@@ -40,6 +40,10 @@ static TaskHandle_t g_usb_task = nullptr;
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0) && defined(CONFIG_SOC_USB_OTG_SUPPORTED) && CONFIG_SOC_USB_OTG_SUPPORTED
 static usb_phy_handle_t g_usb_phy = nullptr;
 
+/**
+ * \brief Initializes USB PHY once on supported platforms.
+ * \return `true` if PHY is ready.
+ */
 static bool usb_phy_init_once(void) {
     if (g_usb_phy) return true;
 
@@ -61,10 +65,14 @@ static bool usb_phy_init_once(void) {
 }
 #endif
 
-// ============================================================================
-// USB Task
-// ============================================================================
+/**
+ * \brief TinyUSB device task.
+ */
 
+/**
+ * \brief TinyUSB device task loop.
+ * \param arg Task parameter (unused).
+ */
 static void usb_device_task(void* arg) {
     (void)arg;
     while (1) {
@@ -73,11 +81,14 @@ static void usb_device_task(void* arg) {
     }
 }
 
-// ============================================================================
-// Public API
-// ============================================================================
+/**
+ * \brief Public USB CDC API implementation.
+ */
 
-// Internal: Start the USB stack (TinyUSB init + task)
+/**
+ * \brief Starts the TinyUSB stack and creates the USB device task.
+ * \return `true` if USB stack startup succeeded, otherwise `false`.
+ */
 static bool usb_start_stack(void) {
     if (g_usb_started) return true;
 
@@ -129,6 +140,10 @@ bool usb_cdc_init(void) {
     return true;
 }
 
+/**
+ * \brief Starts USB CDC runtime (or triggers re-enumeration in early-debug mode).
+ * \return `true` if USB is running after call.
+ */
 bool usb_cdc_start(void) {
     if (!g_usb_prepared) {
         // Not initialized yet
@@ -155,10 +170,20 @@ bool usb_cdc_start(void) {
     return true;
 }
 
+/**
+ * \brief Returns whether USB CDC is connected and ready.
+ * \return `true` if host CDC connection is active.
+ */
 bool usb_cdc_ready(void) {
     return g_usb_started && tud_cdc_connected();
 }
 
+/**
+ * \brief Writes byte buffer to USB CDC endpoint.
+ * \param data Data buffer.
+ * \param len Number of bytes to write.
+ * \return Number of bytes written.
+ */
 size_t usb_cdc_write(const uint8_t* data, size_t len) {
     if (!g_usb_started || !data || len == 0) return 0;
 
@@ -182,16 +207,31 @@ size_t usb_cdc_write(const uint8_t* data, size_t len) {
     return written;
 }
 
+/**
+ * \brief Writes null-terminated string to USB CDC.
+ * \param str String to write.
+ * \return Number of bytes written.
+ */
 size_t usb_cdc_print(const char* str) {
     if (!str) return 0;
     return usb_cdc_write((const uint8_t*)str, strlen(str));
 }
 
+/**
+ * \brief Reads bytes from USB CDC endpoint.
+ * \param data Output buffer.
+ * \param len Maximum bytes to read.
+ * \return Number of bytes read.
+ */
 size_t usb_cdc_read(uint8_t* data, size_t len) {
     if (!g_usb_started || !data || len == 0) return 0;
     return tud_cdc_read(data, len);
 }
 
+/**
+ * \brief Reads one character from USB CDC stream.
+ * \return Character value or `-1` if unavailable.
+ */
 int usb_cdc_getchar(void) {
     if (!g_usb_started) return -1;
 
@@ -202,11 +242,18 @@ int usb_cdc_getchar(void) {
     return -1;
 }
 
+/**
+ * \brief Returns number of bytes available for read.
+ * \return Pending byte count.
+ */
 size_t usb_cdc_available(void) {
     if (!g_usb_started) return 0;
     return tud_cdc_available();
 }
 
+/**
+ * \brief Flushes pending USB CDC writes.
+ */
 void usb_cdc_flush(void) {
     if (!g_usb_started) return;
     tud_cdc_write_flush();

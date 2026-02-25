@@ -7,25 +7,45 @@ static const char* TAG = "UsbManager";
 
 namespace cdc::core {
 
+/**
+ * \brief Returns singleton USB manager instance.
+ * \return Manager singleton reference.
+ */
 UsbManager& UsbManager::instance() {
     static UsbManager s_instance;
     return s_instance;
 }
 
+/**
+ * \brief Initializes USB manager service state.
+ * \return Always `true`.
+ */
 bool UsbManager::init() {
     state_ = ServiceState::INITIALIZED;
     return true;
 }
 
+/**
+ * \brief Starts USB manager service state.
+ * \return Always `true`.
+ */
 bool UsbManager::start() {
     state_ = ServiceState::STARTED;
     return true;
 }
 
+/**
+ * \brief Stops USB manager service state.
+ */
 void UsbManager::stop() {
     state_ = ServiceState::STOPPED;
 }
 
+/**
+ * \brief Checks whether another HID interface can be activated.
+ * \param type Requested interface type (currently unused in check).
+ * \return `true` when active-interface limit is not exceeded.
+ */
 bool UsbManager::canActivate(UsbHidInterface type) const {
     (void)type;
     uint8_t count = 0;
@@ -35,6 +55,13 @@ bool UsbManager::canActivate(UsbHidInterface type) const {
     return count < MAX_ACTIVE_HID;
 }
 
+/**
+ * \brief Registers a HID interface request from a module.
+ * \param type HID interface slot.
+ * \param moduleName Owning module name.
+ * \param def Interface descriptor definition.
+ * \return `true` on successful registration.
+ */
 bool UsbManager::registerInterface(UsbHidInterface type, const char* moduleName,
                                    const UsbInterfaceSpec& def) {
     const uint8_t idx = static_cast<uint8_t>(type);
@@ -63,6 +90,11 @@ bool UsbManager::registerInterface(UsbHidInterface type, const char* moduleName,
     return true;
 }
 
+/**
+ * \brief Unregisters a previously registered HID interface.
+ * \param type HID interface slot.
+ * \param moduleName Requesting module name.
+ */
 void UsbManager::unregisterInterface(UsbHidInterface type, const char* moduleName) {
     const uint8_t idx = static_cast<uint8_t>(type);
     if (idx >= (sizeof(entries_) / sizeof(entries_[0]))) return;
@@ -83,6 +115,10 @@ void UsbManager::unregisterInterface(UsbHidInterface type, const char* moduleNam
     applyConfiguration();
 }
 
+/**
+ * \brief Applies current interface set to USB HID stack.
+ * \return `true` when configuration call succeeded.
+ */
 bool UsbManager::applyConfiguration() {
     needsReplug_ = false;
     ::UsbInterfaceDef defs[3] = {};

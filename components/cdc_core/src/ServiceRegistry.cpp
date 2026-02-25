@@ -6,11 +6,35 @@ static const char* TAG = "ServiceRegistry";
 
 namespace cdc::core {
 
+/**
+ * \brief Converts a service type enum to a log-friendly string.
+ * \param type Service type to convert.
+ * \return Constant string representation of the service type.
+ */
+static const char* serviceTypeName(ServiceType type) {
+    switch (type) {
+        case ServiceType::KEYBOARD:     return "keyboard";
+        case ServiceType::CLIPBOARD:    return "clipboard";
+        case ServiceType::NOTIFICATION: return "notification";
+        default:                        return "unknown";
+    }
+}
+
+/**
+ * \brief Returns singleton service registry instance.
+ * \return Reference to global `ServiceRegistry`.
+ */
 ServiceRegistry& ServiceRegistry::instance() {
     static ServiceRegistry instance;
     return instance;
 }
 
+/**
+ * \brief Registers a named service instance.
+ * \param name Service name key.
+ * \param service Service implementation pointer.
+ * \return `true` if registration succeeded.
+ */
 bool ServiceRegistry::registerService(const char* name, IService* service) {
     if (!name || !service) {
         LOG_E(TAG, "Invalid parameters");
@@ -38,6 +62,11 @@ bool ServiceRegistry::registerService(const char* name, IService* service) {
     return true;
 }
 
+/**
+ * \brief Looks up a service by name.
+ * \param name Service name key.
+ * \return Matching service pointer or `nullptr`.
+ */
 IService* ServiceRegistry::getService(const char* name) {
     if (!name) return nullptr;
 
@@ -50,6 +79,58 @@ IService* ServiceRegistry::getService(const char* name) {
     return nullptr;
 }
 
+/**
+ * \brief Typed service retrieval and registration helpers.
+ */
+
+/**
+ * \brief Registers typed service pointer.
+ * \param type Typed service slot.
+ * \param service Service implementation pointer.
+ * \return `true` if registration succeeded.
+ */
+bool ServiceRegistry::registerTypedService(ServiceType type, void* service) {
+    size_t idx = static_cast<size_t>(type);
+    if (idx >= MAX_TYPED_SERVICES) {
+        LOG_E(TAG, "Invalid service type %d", static_cast<int>(type));
+        return false;
+    }
+
+    if (typedServices_[idx] != nullptr) {
+        LOG_W(TAG, "Replacing existing %s service", serviceTypeName(type));
+    }
+
+    typedServices_[idx] = service;
+    LOG_I(TAG, "Provided %s service", serviceTypeName(type));
+    return true;
+}
+
+/**
+ * \brief Returns typed service pointer.
+ * \param type Typed service slot.
+ * \return Stored pointer or `nullptr`.
+ */
+void* ServiceRegistry::getTypedService(ServiceType type) const {
+    size_t idx = static_cast<size_t>(type);
+    if (idx >= MAX_TYPED_SERVICES) {
+        return nullptr;
+    }
+    return typedServices_[idx];
+}
+
+/**
+ * \brief Checks whether typed service exists.
+ * \param type Typed service slot.
+ * \return `true` if available.
+ */
+bool ServiceRegistry::isAvailable(ServiceType type) const {
+    return getTypedService(type) != nullptr;
+}
+
+/**
+ * \brief Initializes all registered services in registration order.
+ * \return `true` if all services initialized successfully.
+ */
 bool ServiceRegistry::initAll() {
     LOG_I(TAG, "Initializing %u services...", count_);
 
@@ -66,6 +147,10 @@ bool ServiceRegistry::initAll() {
     return true;
 }
 
+/**
+ * \brief Starts all initialized services.
+ * \return `true` if all services started successfully.
+ */
 bool ServiceRegistry::startAll() {
     LOG_I(TAG, "Starting %u services...", count_);
 
@@ -84,6 +169,10 @@ bool ServiceRegistry::startAll() {
     return true;
 }
 
+/**
+ * \brief Stops started services in reverse registration order.
+ * \return void
+ */
 void ServiceRegistry::stopAll() {
     LOG_I(TAG, "Stopping %u services...", count_);
 

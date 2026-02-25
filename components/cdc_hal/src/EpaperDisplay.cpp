@@ -23,49 +23,56 @@
 
 static const char* TAG = "EpaperDisplay";
 
-// Splash screen text
+/** \brief Splash-screen text defaults. */
 static constexpr const char* SPLASH_TITLE = "CDC Badge";
 static constexpr const char* SPLASH_VERSION = "v0.5";
 
 namespace cdc::hal {
 
-// LEDC configuration for backlight
+/** \brief LEDC backlight PWM configuration constants. */
 static constexpr ledc_timer_t LEDC_TIMER = LEDC_TIMER_0;
 static constexpr ledc_mode_t LEDC_MODE = LEDC_LOW_SPEED_MODE;
 static constexpr ledc_channel_t LEDC_CHANNEL = LEDC_CHANNEL_0;
 static constexpr ledc_timer_bit_t LEDC_DUTY_RES = LEDC_TIMER_10_BIT;
 static constexpr uint32_t LEDC_FREQUENCY = 10000;
 
-// NVS keys
+/** \brief NVS namespace and keys for display settings. */
 static constexpr const char* NVS_NAMESPACE = "display";
 static constexpr const char* NVS_KEY_BACKLIGHT = "backlight";
 
-// Display constants
+/** \brief Display timing and geometry constants. */
 static constexpr uint16_t WIDTH = 296;
 static constexpr uint16_t HEIGHT = 128;
 static constexpr uint16_t BACKLIGHT_DEFAULT = 512;
 static constexpr uint16_t BACKLIGHT_MAX = 1023;
 
-// LAZY initialized display objects - NO global constructors!
+/** \brief Lazily initialized display objects to avoid global constructors. */
 static EpdSpi* s_epd_spi = nullptr;
 static Gdey029T94* s_epd_display = nullptr;
 
-// Display state
+/** \brief Mutable display state cache. */
 static bool s_initialized = false;
 static uint16_t s_backlightLevel = BACKLIGHT_DEFAULT;
 static bool s_backlightOn = true;
 
-// Render task
+/** \brief Render-task runtime state. */
 static SemaphoreHandle_t s_renderMutex = nullptr;
 static TaskHandle_t s_renderTask = nullptr;
 static volatile bool s_renderPending = false;
 static volatile bool s_renderFull = false;
 
+/**
+ * \brief Applies backlight PWM duty level.
+ * \param level Duty value in LEDC resolution units.
+ */
 static void applyBacklight(uint16_t level) {
     ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, level);
     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
 }
 
+/**
+ * \brief Loads persisted backlight level from NVS.
+ */
 static void loadBacklight() {
     nvs_handle_t nvs;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
@@ -77,6 +84,10 @@ static void loadBacklight() {
     }
 }
 
+/**
+ * \brief Persists backlight level to NVS.
+ * \param level Backlight level to store.
+ */
 static void persistBacklight(uint16_t level) {
     nvs_handle_t nvs;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
@@ -87,6 +98,10 @@ static void persistBacklight(uint16_t level) {
     }
 }
 
+/**
+ * \brief Render worker task processing async flush requests.
+ * \param arg Task parameter (unused).
+ */
 static void renderTask(void* arg) {
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -130,7 +145,7 @@ public:
     void backlightOn() override;
     void backlightOff() override;
     void* getNativeHandle() override { return s_epd_display; }
-    void showSplash() override;
+    void showSplash(const char* subtitle = nullptr) override;
 
     // GFX Drawing Methods
     void drawPixel(int16_t x, int16_t y, uint16_t color) override;
@@ -148,6 +163,10 @@ private:
     core::ServiceState state_ = core::ServiceState::UNINITIALIZED;
 };
 
+/**
+ * \brief Initializes display hardware, backlight, and render task.
+ * \return `true` on successful initialization.
+ */
 bool EpaperDisplay::init() {
     if (s_initialized) {
         return true;
@@ -221,6 +240,10 @@ bool EpaperDisplay::init() {
     return true;
 }
 
+/**
+ * \brief Starts display service and enables backlight.
+ * \return `true` if display is started after the call.
+ */
 bool EpaperDisplay::start() {
     if (state_ == core::ServiceState::INITIALIZED) {
         state_ = core::ServiceState::STARTED;
@@ -231,6 +254,9 @@ bool EpaperDisplay::start() {
     return state_ == core::ServiceState::STARTED;
 }
 
+/**
+ * \brief Stops display service and disables backlight.
+ */
 void EpaperDisplay::stop() {
     if (state_ == core::ServiceState::STARTED) {
         s_backlightOn = false;
@@ -239,12 +265,19 @@ void EpaperDisplay::stop() {
     }
 }
 
+/**
+ * \brief Clears framebuffer to white.
+ */
 void EpaperDisplay::clear() {
     if (s_epd_display) {
         s_epd_display->fillScreen(EPD_WHITE);
     }
 }
 
+/**
+ * \brief Requests asynchronous display refresh.
+ * \param mode Refresh mode.
+ */
 void EpaperDisplay::flush(RefreshMode mode) {
     // If no render task, fall back to sync
     if (!s_renderTask) {
@@ -265,6 +298,10 @@ void EpaperDisplay::flush(RefreshMode mode) {
     xTaskNotifyGive(s_renderTask);
 }
 
+/**
+ * \brief Performs synchronous display refresh.
+ * \param mode Refresh mode.
+ */
 void EpaperDisplay::flushSync(RefreshMode mode) {
     if (!s_epd_display) return;
     if (mode == RefreshMode::FULL) {
@@ -274,6 +311,10 @@ void EpaperDisplay::flushSync(RefreshMode mode) {
     }
 }
 
+/**
+ * \brief Sets current backlight level and applies immediately.
+ * \param level New backlight level.
+ */
 void EpaperDisplay::setBacklight(uint16_t level) {
     if (level > BACKLIGHT_MAX) level = BACKLIGHT_MAX;
     s_backlightLevel = level;
@@ -285,23 +326,36 @@ void EpaperDisplay::setBacklight(uint16_t level) {
     applyBacklight(level);
 }
 
+/**
+ * \brief Persists current backlight level.
+ */
 void EpaperDisplay::saveBacklight() {
     persistBacklight(s_backlightLevel);
 }
 
+/**
+ * \brief Enables backlight using current configured level.
+ */
 void EpaperDisplay::backlightOn() {
     s_backlightOn = true;
     applyBacklight(s_backlightLevel);
     LOG_I(TAG, "Backlight ON (level=%u)", s_backlightLevel);
 }
 
+/**
+ * \brief Disables backlight output.
+ */
 void EpaperDisplay::backlightOff() {
     s_backlightOn = false;
     applyBacklight(0);
     LOG_I(TAG, "Backlight OFF");
 }
 
-void EpaperDisplay::showSplash() {
+/**
+ * \brief Renders and displays boot splash screen.
+ * \param subtitle Optional subtitle override.
+ */
+void EpaperDisplay::showSplash(const char* subtitle) {
     if (!s_epd_display) return;
 
     LOG_I(TAG, "Showing splash screen");
@@ -318,12 +372,13 @@ void EpaperDisplay::showSplash() {
     s_epd_display->setCursor(name_x, 55);
     s_epd_display->print(SPLASH_TITLE);
 
-    // Version - smaller, centered below name
+    // Subtitle or version - smaller, centered below name
+    const char* sub = subtitle ? subtitle : SPLASH_VERSION;
     s_epd_display->setFont(&FreeMonoBold9pt7b);
-    s_epd_display->getTextBounds(SPLASH_VERSION, 0, 0, &x1, &y1, &w, &h);
+    s_epd_display->getTextBounds(sub, 0, 0, &x1, &y1, &w, &h);
     int ver_x = (s_epd_display->width() - w) / 2;
     s_epd_display->setCursor(ver_x, 80);
-    s_epd_display->print(SPLASH_VERSION);
+    s_epd_display->print(sub);
 
     // Small text at bottom - built-in font (6x8)
     s_epd_display->setFont(nullptr);
@@ -346,44 +401,99 @@ void EpaperDisplay::showSplash() {
     LOG_I(TAG, "Splash screen displayed");
 }
 
-// === GFX Drawing Method Implementations ===
+/** \brief Adafruit-GFX method implementations. */
 
+/**
+ * \brief Draws a single pixel on framebuffer.
+ * \param x X coordinate.
+ * \param y Y coordinate.
+ * \param color Pixel color.
+ */
 void EpaperDisplay::drawPixel(int16_t x, int16_t y, uint16_t color) {
     if (s_epd_display) s_epd_display->drawPixel(x, y, color);
 }
 
+/**
+ * \brief Draws a line on framebuffer.
+ * \param x0 Start x.
+ * \param y0 Start y.
+ * \param x1 End x.
+ * \param y1 End y.
+ * \param color Line color.
+ */
 void EpaperDisplay::drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color) {
     if (s_epd_display) s_epd_display->drawLine(x0, y0, x1, y1, color);
 }
 
+/**
+ * \brief Draws rectangle outline on framebuffer.
+ * \param x Left coordinate.
+ * \param y Top coordinate.
+ * \param w Width.
+ * \param h Height.
+ * \param color Outline color.
+ */
 void EpaperDisplay::drawRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
     if (s_epd_display) s_epd_display->drawRect(x, y, w, h, color);
 }
 
+/**
+ * \brief Draws filled rectangle on framebuffer.
+ * \param x Left coordinate.
+ * \param y Top coordinate.
+ * \param w Width.
+ * \param h Height.
+ * \param color Fill color.
+ */
 void EpaperDisplay::fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
     if (s_epd_display) s_epd_display->fillRect(x, y, w, h, color);
 }
 
+/**
+ * \brief Sets text cursor position.
+ * \param x Cursor x.
+ * \param y Cursor y.
+ */
 void EpaperDisplay::setCursor(int16_t x, int16_t y) {
     if (s_epd_display) s_epd_display->setCursor(x, y);
 }
 
+/**
+ * \brief Sets active text color.
+ * \param color Text color.
+ */
 void EpaperDisplay::setTextColor(uint16_t color) {
     if (s_epd_display) s_epd_display->setTextColor(color);
 }
 
+/**
+ * \brief Sets active text scale.
+ * \param size Text size factor.
+ */
 void EpaperDisplay::setTextSize(uint8_t size) {
     if (s_epd_display) s_epd_display->setTextSize(size);
 }
 
+/**
+ * \brief Sets active font pointer.
+ * \param font Font pointer cast-compatible with `GFXfont`.
+ */
 void EpaperDisplay::setFont(const void* font) {
     if (s_epd_display) s_epd_display->setFont(static_cast<const GFXfont*>(font));
 }
 
+/**
+ * \brief Prints text at current cursor position.
+ * \param text Null-terminated string.
+ */
 void EpaperDisplay::print(const char* text) {
     if (s_epd_display && text) s_epd_display->print(text);
 }
 
+/**
+ * \brief Formatted print helper for display text output.
+ * \param fmt Printf-style format string.
+ */
 void EpaperDisplay::printf(const char* fmt, ...) {
     if (!s_epd_display || !fmt) return;
     char buf[128];
@@ -394,9 +504,13 @@ void EpaperDisplay::printf(const char* fmt, ...) {
     s_epd_display->print(buf);
 }
 
-// Singleton - LAZY created on first call
+/** \brief Lazily created singleton display instance. */
 static EpaperDisplay* s_display = nullptr;
 
+/**
+ * \brief Returns lazily created singleton display instance.
+ * \return Pointer to global display service.
+ */
 IDisplay* getDisplayInstance() {
     if (!s_display) {
         s_display = new EpaperDisplay();

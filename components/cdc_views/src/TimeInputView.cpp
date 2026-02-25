@@ -5,6 +5,7 @@
  */
 
 #include "cdc_views/TimeInputView.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_hal/IDisplay.h"
 #include "cdc_log.h"
@@ -13,7 +14,9 @@
 
 static const char* TAG = "TimeInputView";
 
-// Display constants
+/**
+ * \brief Display layout constants.
+ */
 static constexpr int TITLE_Y = 20;
 static constexpr int TIME_Y = 55;
 static constexpr int UNDERLINE_Y = TIME_Y + 25;
@@ -21,6 +24,13 @@ static constexpr int HINT_Y = 90;
 
 namespace cdc::ui {
 
+/**
+ * \brief Initializes time input state.
+ * \param title View title text.
+ * \param hour Initial hour value.
+ * \param minute Initial minute value.
+ * \return void
+ */
 void TimeInputView::init(const char* title, uint8_t hour, uint8_t minute) {
     title_ = title;
     hour_ = (hour <= 23) ? hour : 0;
@@ -30,6 +40,10 @@ void TimeInputView::init(const char* title, uint8_t hour, uint8_t minute) {
     dirty_ = true;
 }
 
+/**
+ * \brief Moves focus to the next time field.
+ * \return void
+ */
 void TimeInputView::nextField() {
     if (currentField_ == Field::HOUR) {
         currentField_ = Field::MINUTE;
@@ -38,6 +52,10 @@ void TimeInputView::nextField() {
     }
 }
 
+/**
+ * \brief Moves focus to the previous time field.
+ * \return void
+ */
 void TimeInputView::prevField() {
     if (currentField_ == Field::MINUTE) {
         currentField_ = Field::HOUR;
@@ -46,6 +64,10 @@ void TimeInputView::prevField() {
     }
 }
 
+/**
+ * \brief Clears the currently selected time field.
+ * \return void
+ */
 void TimeInputView::clearField() {
     switch (currentField_) {
         case Field::HOUR:
@@ -59,6 +81,11 @@ void TimeInputView::clearField() {
     dirty_ = true;
 }
 
+/**
+ * \brief Inserts a numeric digit into the active time field.
+ * \param digit Numeric character (`'0'`..`'9'`).
+ * \return void
+ */
 void TimeInputView::enterDigit(char digit) {
     uint8_t d = digit - '0';
 
@@ -90,6 +117,11 @@ void TimeInputView::enterDigit(char digit) {
     dirty_ = true;
 }
 
+/**
+ * \brief Handles key input for the time editor.
+ * \param key Pressed key code.
+ * \return Input handling result for the view stack.
+ */
 InputResult TimeInputView::onKey(char key) {
     // Digit input (all 0-9 keys are digits, auto-advances between fields)
     if (key >= '0' && key <= '9') {
@@ -121,10 +153,19 @@ InputResult TimeInputView::onKey(char key) {
     }
 }
 
+/**
+ * \brief Returns localized footer hint text.
+ * \return Footer hint string.
+ */
 const char* TimeInputView::getFooterHint() const {
     return tr(StringId::HINT_TIME_INPUT);
 }
 
+/**
+ * \brief Renders the time input view.
+ * \param partial Indicates partial/full redraw mode.
+ * \return void
+ */
 void TimeInputView::render(bool partial) {
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;
@@ -143,11 +184,7 @@ void TimeInputView::render(bool partial) {
 
     if (title_) {
         gfx->setTextSize(1);
-        int16_t x1, y1;
-        uint16_t w, h;
-        gfx->getTextBounds(title_, 0, 0, &x1, &y1, &w, &h);
-        gfx->setCursor((width - w) / 2, TITLE_Y);
-        gfx->print(title_);
+        render::drawHeaderCentered(gfx, title_, TITLE_Y, width);
     }
 
     char timeStr[12];
@@ -179,12 +216,7 @@ void TimeInputView::render(bool partial) {
     gfx->fillRect(underlineX, UNDERLINE_Y, underlineW, 3, EPD_BLACK);
 
     const char* hint = getFooterHint();
-    if (hint) {
-        gfx->fillRect(0, height - 16, width, 16, EPD_BLACK);
-        gfx->setTextColor(EPD_WHITE);
-        gfx->setCursor(4, height - 12);
-        gfx->print(hint);
-    }
+    render::drawFooterBar(gfx, width, height, nullptr, hint, false);
 
     dirty_ = false;
 }

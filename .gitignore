@@ -34,6 +34,13 @@ components/*/.patched
 # Legacy code
 legacy/
 
+# Web flasher local test files
+web-flasher/*.bin
+web-flasher/manifest.json
+
+# Doxygen output
+doxygen_output/
+
 # Claude / AI config (not for public repo)
 CLAUDE.md
 agents.md

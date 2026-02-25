@@ -1,8 +1,6 @@
 /**
- * CDC Log Implementation
- *
- * Outputs to both TinyUSB CDC and UART.
- * Error log stores WARNING/ERROR in PSRAM for later inspection.
+ * \file
+ * \brief Logging and console I/O implementation with optional hook transports.
  */
 #include "cdc_log.h"
 #include <string.h>
@@ -19,7 +17,7 @@
 static log_level_t s_log_level = CDC_LOG_LEVEL_DEBUG;
 static bool s_initialized = false;
 
-// Console hooks for additional I/O transports (e.g., BLE)
+/** \brief Optional console hooks for additional I/O transports (for example BLE). */
 static console_output_hook_t s_output_hook = nullptr;
 static console_input_available_hook_t s_input_avail_hook = nullptr;
 static console_input_getchar_hook_t s_input_getchar_hook = nullptr;
@@ -33,15 +31,16 @@ static const char* level_str[] = {
     "V"      // VERBOSE
 };
 
-// ============================================================================
-// Error Log (PSRAM-backed ring buffer)
-// ============================================================================
-
-// Static array in PSRAM - no heap allocation needed
+/** \brief PSRAM-backed error/warn ring log storage (no heap allocation). */
 EXT_RAM_BSS_ATTR static error_log_entry_t s_error_log[ERROR_LOG_MAX_ENTRIES];
 static size_t s_error_log_head = 0;  // Next write position
 static size_t s_error_log_count = 0; // Number of entries
 
+/**
+ * \brief Adds warning/error entry to PSRAM-backed ring log.
+ * \param level Log level.
+ * \param message Formatted message text.
+ */
 static void error_log_add(log_level_t level, const char* message) {
     if (level != CDC_LOG_LEVEL_ERROR && level != CDC_LOG_LEVEL_WARN) return;
     if (!message) return;
@@ -60,6 +59,12 @@ static void error_log_add(log_level_t level, const char* message) {
     }
 }
 
+/**
+ * \brief Copies stored error-log entries in chronological order.
+ * \param entries Output entry buffer.
+ * \param max_entries Maximum writable entries.
+ * \return Number of copied entries.
+ */
 size_t error_log_get_entries(error_log_entry_t* entries, size_t max_entries) {
     if (!entries || max_entries == 0) return 0;
 
@@ -74,15 +79,25 @@ size_t error_log_get_entries(error_log_entry_t* entries, size_t max_entries) {
     return count;
 }
 
+/**
+ * \brief Returns number of buffered error-log entries.
+ * \return Entry count.
+ */
 size_t error_log_get_count(void) {
     return s_error_log_count;
 }
 
+/**
+ * \brief Clears error-log ring buffer state.
+ */
 void error_log_clear(void) {
     s_error_log_head = 0;
     s_error_log_count = 0;
 }
 
+/**
+ * \brief Dumps buffered error-log entries to console.
+ */
 void error_log_dump(void) {
     if (s_error_log_count == 0) {
         console_printf("Error log: (empty)\r\n");
@@ -106,23 +121,38 @@ void error_log_dump(void) {
     }
 }
 
-// ============================================================================
-// Logging
-// ============================================================================
+/** \brief Logging API implementation. */
 
+/**
+ * \brief Initializes logging subsystem and console backend.
+ */
 void log_init(void) {
     s_log_level = CDC_LOG_LEVEL_DEBUG;
     console_init();
 }
 
+/**
+ * \brief Sets runtime log verbosity threshold.
+ * \param level New log level.
+ */
 void log_set_level(log_level_t level) {
     s_log_level = level;
 }
 
+/**
+ * \brief Returns current log verbosity threshold.
+ * \return Active log level.
+ */
 log_level_t log_get_level(void) {
     return s_log_level;
 }
 
+/**
+ * \brief Writes formatted tagged log line with optional suppression.
+ * \param level Log level.
+ * \param tag Log tag.
+ * \param fmt Printf-style format string.
+ */
 void log_write(log_level_t level, const char* tag, const char* fmt, ...) {
     // Always capture ERROR/WARN to error log
     bool capture = (level == CDC_LOG_LEVEL_ERROR || level == CDC_LOG_LEVEL_WARN);
@@ -150,6 +180,10 @@ void log_write(log_level_t level, const char* tag, const char* fmt, ...) {
     }
 }
 
+/**
+ * \brief Writes untagged raw formatted text to console.
+ * \param fmt Printf-style format string.
+ */
 void log_raw(const char* fmt, ...) {
     char buf[256];
     va_list args;
@@ -159,6 +193,13 @@ void log_raw(const char* fmt, ...) {
     console_print(buf);
 }
 
+/**
+ * \brief Logs binary buffer as grouped hexadecimal bytes.
+ * \param tag Log tag.
+ * \param label Data label.
+ * \param data Input byte buffer.
+ * \param len Buffer length.
+ */
 void log_hex(const char* tag, const char* label, const uint8_t* data, size_t len) {
     console_printf("[D][%s] %s (%zu bytes): ", tag ? tag : "HEX", label ? label : "data", len);
     for (size_t i = 0; i < len; i++) {
@@ -172,10 +213,9 @@ void log_hex(const char* tag, const char* label, const uint8_t* data, size_t len
     console_print("\n");
 }
 
-// ============================================================================
-// Console I/O
-// ============================================================================
-
+/**
+ * \brief Initializes console I/O transport state.
+ */
 void console_init(void) {
     if (s_initialized) return;
 
@@ -188,6 +228,10 @@ void console_init(void) {
     s_initialized = true;
 }
 
+/**
+ * \brief Returns whether any console input source has pending data.
+ * \return `true` if input is available.
+ */
 bool console_available(void) {
     if (!s_initialized) return false;
 
@@ -205,6 +249,10 @@ bool console_available(void) {
     return false;
 }
 
+/**
+ * \brief Reads one character from available console input source.
+ * \return Character value or `-1` when no data is available.
+ */
 int console_getchar(void) {
     if (!s_initialized) return -1;
 
@@ -231,6 +279,10 @@ int console_getchar(void) {
     return -1;
 }
 
+/**
+ * \brief Writes string to active console outputs.
+ * \param str Null-terminated string.
+ */
 void console_print(const char* str) {
     if (!str) return;
     size_t len = strlen(str);
@@ -263,6 +315,10 @@ void console_print(const char* str) {
     }
 }
 
+/**
+ * \brief Formatted write helper for console output.
+ * \param fmt Printf-style format string.
+ */
 void console_printf(const char* fmt, ...) {
     if (!fmt) return;
 
@@ -274,6 +330,10 @@ void console_printf(const char* fmt, ...) {
     console_print(buf);
 }
 
+/**
+ * \brief Writes single character to active console outputs.
+ * \param c Character to output.
+ */
 void console_putchar(char c) {
     putchar(c);
     fflush(stdout);  // Immediate echo for serial terminal
@@ -291,6 +351,9 @@ void console_putchar(char c) {
     }
 }
 
+/**
+ * \brief Flushes buffered console output transports.
+ */
 void console_flush(void) {
 #if CONFIG_TINYUSB_CDC_ENABLED
     if (s_initialized && tud_cdc_connected()) {
@@ -300,14 +363,20 @@ void console_flush(void) {
     fflush(stdout);
 }
 
-// ============================================================================
-// Console Hooks
-// ============================================================================
-
+/** \brief Console hook registration API. */
+/**
+ * \brief Registers optional additional output transport hook.
+ * \param hook Output callback.
+ */
 void console_register_output_hook(console_output_hook_t hook) {
     s_output_hook = hook;
 }
 
+/**
+ * \brief Registers optional additional input transport hooks.
+ * \param avail_hook Input-available callback.
+ * \param getchar_hook Character-read callback.
+ */
 void console_register_input_hook(console_input_available_hook_t avail_hook,
                                   console_input_getchar_hook_t getchar_hook) {
     s_input_avail_hook = avail_hook;

@@ -10,8 +10,10 @@ idf_component_register(
         "src/openpgp/apdu.cpp"
         "src/openpgp/ccid.cpp"
         "src/openpgp/openpgp.cpp"
+        "src/openpgp/ecdh.cpp"
     INCLUDE_DIRS
         "include"
+        "src/openpgp"
         "${CMAKE_SOURCE_DIR}/components/serial_cmd/include"
     REQUIRES
         cdc_core

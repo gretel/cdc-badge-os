@@ -20,6 +20,12 @@
 
 namespace cdc::ui {
 
+/**
+ * \brief Builds localized hardware info text into a caller-provided buffer.
+ * \param buf Destination character buffer.
+ * \param bufSize Size of destination buffer.
+ * \return void
+ */
 static void buildHardwareInfoText(char* buf, size_t bufSize) {
     if (!buf || bufSize == 0) return;
     size_t pos = 0;
@@ -137,6 +143,10 @@ static void buildHardwareInfoText(char* buf, size_t bufSize) {
     append("%s: %llu s\n", tr(StringId::HW_UPTIME), (unsigned long long)uptimeS);
 }
 
+/**
+ * \brief Opens hardware info screen using shared info view.
+ * \return void
+ */
 void showHardwareInfo() {
     static char hwInfo[512];
     buildHardwareInfoText(hwInfo, sizeof(hwInfo));

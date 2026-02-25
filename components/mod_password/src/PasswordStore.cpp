@@ -24,6 +24,12 @@ struct PasswordPayload {
 
 static_assert(sizeof(PasswordPayload) == PasswordStore::PAYLOAD_MAX, "Password payload size mismatch");
 
+/**
+ * \brief Copies text into bounded destination buffer.
+ * \param dst Destination buffer.
+ * \param dstSize Destination size.
+ * \param src Source string.
+ */
 static void copyText(char* dst, size_t dstSize, const char* src) {
     if (!dst || dstSize == 0) return;
     if (!src) {
@@ -34,11 +40,21 @@ static void copyText(char* dst, size_t dstSize, const char* src) {
     dst[dstSize - 1] = '\0';
 }
 
+/**
+ * \brief Returns singleton password store instance.
+ * \return Store singleton reference.
+ */
 PasswordStore& PasswordStore::instance() {
     static PasswordStore inst;
     return inst;
 }
 
+/**
+ * \brief Configures logical-to-physical slot mapping for password entries.
+ * \param start First RMEM slot.
+ * \param end Last RMEM slot.
+ * \param moduleId Owning module identifier.
+ */
 void PasswordStore::setSlotRange(uint16_t start, uint16_t end, uint8_t moduleId) {
     if (start > end || start == 0 || end == 0) {
         hasSlotRange_ = false;
@@ -53,11 +69,21 @@ void PasswordStore::setSlotRange(uint16_t start, uint16_t end, uint8_t moduleId)
     moduleId_ = moduleId;
 }
 
+/**
+ * \brief Returns available entry capacity from configured slot range.
+ * \return Number of addressable logical entries.
+ */
 uint16_t PasswordStore::capacity() const {
     if (!hasSlotRange_) return 0;
     return static_cast<uint16_t>(rmemEnd_ - rmemStart_ + 1);
 }
 
+/**
+ * \brief Converts logical entry index to physical RMEM slot.
+ * \param logicalIndex Logical index.
+ * \param slotOut Output physical slot.
+ * \return `true` on valid mapping.
+ */
 bool PasswordStore::toPhysicalSlot(uint16_t logicalIndex, uint16_t* slotOut) const {
     if (!slotOut) return false;
     if (!hasSlotRange_) return false;
@@ -67,6 +93,12 @@ bool PasswordStore::toPhysicalSlot(uint16_t logicalIndex, uint16_t* slotOut) con
     return true;
 }
 
+/**
+ * \brief Converts physical RMEM slot to logical entry index.
+ * \param slot Physical slot.
+ * \param logicalIndexOut Output logical index.
+ * \return `true` on valid mapping.
+ */
 bool PasswordStore::toLogicalSlot(uint16_t slot, uint16_t* logicalIndexOut) const {
     if (!logicalIndexOut) return false;
     if (!hasSlotRange_) return false;
@@ -75,6 +107,12 @@ bool PasswordStore::toLogicalSlot(uint16_t slot, uint16_t* logicalIndexOut) cons
     return true;
 }
 
+/**
+ * \brief Reads one password entry from secure-element storage.
+ * \param slot Logical slot index.
+ * \param out Output entry.
+ * \return `true` on success.
+ */
 bool PasswordStore::readEntry(uint16_t slot, PasswordEntry* out) const {
     if (!out) return false;
     if (!hasSlotRange_) return false;
@@ -114,6 +152,11 @@ bool PasswordStore::readEntry(uint16_t slot, PasswordEntry* out) const {
     return true;
 }
 
+/**
+ * \brief Finds first free physical slot in configured range.
+ * \param slotOut Output physical slot.
+ * \return `true` if a free slot exists.
+ */
 bool PasswordStore::findFreeSlot(uint16_t* slotOut) const {
     if (!slotOut) return false;
     if (!hasSlotRange_) return false;
@@ -156,6 +199,11 @@ bool PasswordStore::findFreeSlot(uint16_t* slotOut) const {
     return false;
 }
 
+/**
+ * \brief Adds a new password entry into first free slot.
+ * \param entry Entry data.
+ * \return `true` on successful write.
+ */
 bool PasswordStore::addEntry(const PasswordEntry& entry) {
     if (!hasSlotRange_) return false;
     uint16_t slot = 0;
@@ -201,6 +249,12 @@ bool PasswordStore::addEntry(const PasswordEntry& entry) {
     return true;
 }
 
+/**
+ * \brief Updates existing password entry.
+ * \param slot Logical slot index.
+ * \param entry New entry data.
+ * \return `true` on successful write.
+ */
 bool PasswordStore::updateEntry(uint16_t slot, const PasswordEntry& entry) {
     if (!hasSlotRange_) return false;
     uint16_t physSlot = 0;
@@ -243,6 +297,11 @@ bool PasswordStore::updateEntry(uint16_t slot, const PasswordEntry& entry) {
     return true;
 }
 
+/**
+ * \brief Deletes entry at logical slot index.
+ * \param slot Logical slot index.
+ * \return `true` on successful erase.
+ */
 bool PasswordStore::deleteEntry(uint16_t slot) {
     if (!hasSlotRange_) return false;
     uint16_t physSlot = 0;
@@ -260,6 +319,12 @@ bool PasswordStore::deleteEntry(uint16_t slot) {
     return true;
 }
 
+/**
+ * \brief Case-insensitive title comparison helper.
+ * \param a First title.
+ * \param b Second title.
+ * \return Negative, zero, or positive compare result.
+ */
 int PasswordStore::compareTitles(const char* a, const char* b) {
     if (!a) return b ? -1 : 0;
     if (!b) return 1;
@@ -273,6 +338,13 @@ int PasswordStore::compareTitles(const char* a, const char* b) {
     return 0;
 }
 
+/**
+ * \brief Lists entries sorted alphabetically by title.
+ * \param entries Output entry index array.
+ * \param maxEntries Maximum writable entries.
+ * \param countOut Output number of entries.
+ * \return `true` on successful listing.
+ */
 bool PasswordStore::listEntriesSorted(EntryIndex* entries, uint16_t maxEntries, uint16_t* countOut) const {
     if (!entries || !countOut) return false;
     if (!hasSlotRange_) return false;

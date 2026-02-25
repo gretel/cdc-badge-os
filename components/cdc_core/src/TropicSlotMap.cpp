@@ -29,15 +29,26 @@ static const SlotMapEntry kSlotMap[] = {
 
 static constexpr size_t kSlotMapCount = sizeof(kSlotMap) / sizeof(kSlotMap[0]);
 
+/**
+ * \brief Returns singleton Tropic slot-map instance.
+ * \return Slot-map singleton reference.
+ */
 TropicSlotMap& TropicSlotMap::instance() {
     static TropicSlotMap inst;
     return inst;
 }
 
+/**
+ * \brief Constructs slot map and performs one-time validation.
+ */
 TropicSlotMap::TropicSlotMap() {
     validateOnce();
 }
 
+/**
+ * \brief Marks slot map invalid and stores error message.
+ * \param message Error message text.
+ */
 void TropicSlotMap::setError(const char* message) {
     if (!valid_) return;
     valid_ = false;
@@ -45,6 +56,9 @@ void TropicSlotMap::setError(const char* message) {
     LOG_E(TAG, "%s", message ? message : "slot map error");
 }
 
+/**
+ * \brief Validates static slot-map entries for consistency and bounds.
+ */
 void TropicSlotMap::validateOnce() {
     valid_ = true;
     errorMessage_ = nullptr;
@@ -116,6 +130,13 @@ void TropicSlotMap::validateOnce() {
     }
 }
 
+/**
+ * \brief Retrieves slot range by module name and slot type.
+ * \param moduleName Module map name.
+ * \param type Slot type.
+ * \param out Output range descriptor.
+ * \return `true` when range is found.
+ */
 bool TropicSlotMap::getRangeByName(const char* moduleName, SlotType type, SlotRange* out) const {
     if (!moduleName || !out) return false;
     for (size_t i = 0; i < kSlotMapCount; i++) {
@@ -133,6 +154,13 @@ bool TropicSlotMap::getRangeByName(const char* moduleName, SlotType type, SlotRa
     return false;
 }
 
+/**
+ * \brief Retrieves slot range by module id and slot type.
+ * \param moduleId Module identifier.
+ * \param type Slot type.
+ * \param out Output range descriptor.
+ * \return `true` when range is found.
+ */
 bool TropicSlotMap::getRangeByModuleId(uint8_t moduleId, SlotType type, SlotRange* out) const {
     if (!out) return false;
     for (size_t i = 0; i < kSlotMapCount; i++) {
@@ -150,6 +178,12 @@ bool TropicSlotMap::getRangeByModuleId(uint8_t moduleId, SlotType type, SlotRang
     return false;
 }
 
+/**
+ * \brief Checks whether RMEM slot is allowed for given module id.
+ * \param slot RMEM slot.
+ * \param moduleId Module identifier.
+ * \return `true` if slot is inside module's RMEM range.
+ */
 bool TropicSlotMap::isRmemAllowedForModuleId(uint16_t slot, uint8_t moduleId) const {
     SlotRange range;
     if (!getRangeByModuleId(moduleId, SlotType::RMEM, &range)) {
@@ -158,10 +192,18 @@ bool TropicSlotMap::isRmemAllowedForModuleId(uint16_t slot, uint8_t moduleId) co
     return slot >= range.start && slot <= range.end;
 }
 
+/**
+ * \brief Returns maximum RMEM slot index.
+ * \return Maximum RMEM slot value.
+ */
 uint16_t TropicSlotMap::rmemMax() const {
     return cdc::tropic_map::RMEM_SLOT_MAX;
 }
 
+/**
+ * \brief Computes deterministic signature over static map constants and ranges.
+ * \return 32-bit signature hash.
+ */
 uint32_t TropicSlotMap::computeMapSignature() const {
     uint32_t hash = 2166136261u;
     auto mix = [&hash](uint32_t v) {

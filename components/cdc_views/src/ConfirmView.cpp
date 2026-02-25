@@ -5,6 +5,7 @@
  */
 
 #include "cdc_views/ConfirmView.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_hal/IDisplay.h"
 #include <goodisplay/gdey029T94.h>
@@ -12,6 +13,12 @@
 
 namespace cdc::ui {
 
+/**
+ * \brief Initializes confirm dialog message and icon.
+ * \param message Dialog message text.
+ * \param icon Icon type to display in the dialog.
+ * \return void
+ */
 void ConfirmView::init(const char* message, Icon icon) {
     if (message) {
         strncpy(message_, message, MAX_MSG_LEN - 1);
@@ -23,6 +30,11 @@ void ConfirmView::init(const char* message, Icon icon) {
     dirty_ = true;
 }
 
+/**
+ * \brief Handles key input for the confirmation dialog.
+ * \param key Pressed key code.
+ * \return Input handling result for the view stack.
+ */
 InputResult ConfirmView::onKey(char key) {
     if (key == 'Y') {
         ViewStack::instance().hideModal();
@@ -43,6 +55,11 @@ InputResult ConfirmView::onKey(char key) {
     return InputResult::IGNORED;
 }
 
+/**
+ * \brief Renders the confirmation dialog.
+ * \param partial Indicates partial/full redraw mode.
+ * \return void
+ */
 void ConfirmView::render(bool partial) {
     (void)partial;
 
@@ -60,9 +77,7 @@ void ConfirmView::render(bool partial) {
     int boxY = (height - BOX_HEIGHT) / 2;
 
     // Draw white box with double black border
-    gfx->fillRect(boxX, boxY, BOX_WIDTH, BOX_HEIGHT, EPD_WHITE);
-    gfx->drawRect(boxX, boxY, BOX_WIDTH, BOX_HEIGHT, EPD_BLACK);
-    gfx->drawRect(boxX + 1, boxY + 1, BOX_WIDTH - 2, BOX_HEIGHT - 2, EPD_BLACK);
+    render::drawDialogFrame(gfx, boxX, boxY, BOX_WIDTH, BOX_HEIGHT);
 
     gfx->setTextColor(EPD_BLACK);
     gfx->setTextSize(1);
@@ -172,12 +187,21 @@ void ConfirmView::render(bool partial) {
     dirty_ = false;
 }
 
-// ============================================================================
-// Convenience Functions
-// ============================================================================
+/**
+ * \brief Convenience helper functions.
+ */
 
 static ConfirmView s_sharedConfirm;
 
+/**
+ * \brief Shows a shared modal confirmation dialog instance.
+ * \param message Dialog message text.
+ * \param onConfirm Callback for confirmation action.
+ * \param onCancel Callback for cancel action.
+ * \param icon Icon type to display.
+ * \param userData User context passed to callbacks.
+ * \return void
+ */
 void showConfirm(const char* message,
                  ConfirmView::ConfirmCallback onConfirm,
                  ConfirmView::CancelCallback onCancel,

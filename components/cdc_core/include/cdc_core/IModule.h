@@ -17,7 +17,8 @@ enum class MenuLocation : uint8_t {
     TOOLS_MENU,      // Under Tools submenu
     SETTINGS_MENU,   // Under Settings submenu
     BLUETOOTH_MENU,  // Under Bluetooth submenu (for BLE services)
-    WIFI_MENU        // Under WiFi submenu (for WiFi-related features)
+    WIFI_MENU,       // Under WiFi submenu (for WiFi-related features)
+    EXPERT_MENU      // Under Expert submenu (for advanced tools)
 };
 
 /**
@@ -26,10 +27,11 @@ enum class MenuLocation : uint8_t {
 struct ModuleMenuItem {
     const char* label;              // Display label (use I18n for translation)
     uint8_t priority;               // Sort order (lower = higher in list)
-    ui::IView* (*getView)();        // Factory function to get the view
+    ui::IView* (*getView)();        // Factory function to get the view (push view on select)
     bool (*isVisible)();            // Optional visibility check (nullptr = always visible)
     const char* moduleName;         // Owner module name (set automatically)
     MenuLocation location;          // Where to show this item
+    void (*onSelect)();             // Toggle/action callback (used when getView is nullptr)
 };
 
 /**

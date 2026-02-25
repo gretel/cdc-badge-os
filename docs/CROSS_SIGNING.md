@@ -1,8 +1,8 @@
 # GPG Cross-Signing Protocol (Badge2Badge)
 
-> **Note:** This document is a design snapshot and may not reflect the current implementation. Features described here may have changed significantly. Always refer to the source code for accurate details.
+Protocol specification for exchanging and cross-signing GPG public keys between CDC Badges via BLE.
 
-Protocol for exchanging and cross-signing GPG public keys between CDC Badges via BLE.
+> **Related:** [GPG Module](GPG.md) | [BLE vCard Protocol](ble_vcard_protocol.md)
 
 ## Overview
 

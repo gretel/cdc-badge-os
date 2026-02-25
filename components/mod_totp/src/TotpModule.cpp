@@ -2,6 +2,7 @@
 #include "mod_totp/TotpStore.h"
 #include "cdc_core/ModuleRegistry.h"
 #include "cdc_core/TropicStorage.h"
+#include "cdc_core/IKeyboardProvider.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_views/ListView.h"
@@ -20,7 +21,7 @@ static const char* TAG = "TOTP";
 
 namespace cdc::mod_totp {
 
-// Module-specific string IDs
+/** \brief Module-specific i18n string offsets. */
 static uint16_t s_strIdBase = 0;
 static constexpr uint16_t STR_TOTP = 0;
 static constexpr uint16_t STR_ADD_ACCOUNT = 1;
@@ -34,12 +35,22 @@ static constexpr uint16_t STR_CODE = 8;
 static constexpr uint16_t STR_TIME_INVALID = 9;
 static constexpr uint16_t STR_INVALID_INPUT = 10;
 static constexpr uint16_t STR_HINT_EDIT = 11;
-static constexpr uint16_t STR_COUNT = 12;
+static constexpr uint16_t STR_HINT_TYPE = 12;
+static constexpr uint16_t STR_NO_KEYBOARD = 13;
+static constexpr uint16_t STR_COUNT = 14;
 
+/**
+ * \brief Resolves a module-localized string by offset.
+ * \param offset Module string-table offset.
+ * \return Translated string pointer.
+ */
 static const char* mstr(uint16_t offset) {
     return ui::tr(s_strIdBase + offset);
 }
 
+/**
+ * \brief Registers all TOTP module translations for supported languages.
+ */
 static void registerStrings() {
     auto& i18n = ui::I18n::instance();
     s_strIdBase = i18n.registerModule("mod_totp", STR_COUNT);
@@ -60,6 +71,8 @@ static void registerStrings() {
     i18n.registerTranslation(s_strIdBase + STR_TIME_INVALID, ui::Language::EN, "Time not set");
     i18n.registerTranslation(s_strIdBase + STR_INVALID_INPUT, ui::Language::EN, "Invalid input");
     i18n.registerTranslation(s_strIdBase + STR_HINT_EDIT, ui::Language::EN, "[3] Edit  [N] Back");
+    i18n.registerTranslation(s_strIdBase + STR_HINT_TYPE, ui::Language::EN, "[Y] Type  [3] Edit  [N] Back");
+    i18n.registerTranslation(s_strIdBase + STR_NO_KEYBOARD, ui::Language::EN, "No keyboard connected");
 
     i18n.registerTranslation(s_strIdBase + STR_TOTP, ui::Language::DE, "TOTP");
     i18n.registerTranslation(s_strIdBase + STR_ADD_ACCOUNT, ui::Language::DE, "Account hinzufuegen");
@@ -73,15 +86,22 @@ static void registerStrings() {
     i18n.registerTranslation(s_strIdBase + STR_TIME_INVALID, ui::Language::DE, "Zeit nicht gesetzt");
     i18n.registerTranslation(s_strIdBase + STR_INVALID_INPUT, ui::Language::DE, "Ungueltige Eingabe");
     i18n.registerTranslation(s_strIdBase + STR_HINT_EDIT, ui::Language::DE, "[3] Edit  [N] Zurueck");
+    i18n.registerTranslation(s_strIdBase + STR_HINT_TYPE, ui::Language::DE, "[Y] Tippen  [3] Edit  [N] Zurueck");
+    i18n.registerTranslation(s_strIdBase + STR_NO_KEYBOARD, ui::Language::DE, "Keine Tastatur verbunden");
 
     LOG_I(TAG, "Registered i18n strings (base=%d)", s_strIdBase);
 }
 
-// === Serial Commands ===
+/** \brief Serial command handlers for TOTP module. */
 
 static constexpr const char* CMD_MODULE = "totp";
 static bool s_commandsRegistered = false;
 
+/**
+ * \brief Advances over leading ASCII whitespace in a C string.
+ * \param s Input string pointer.
+ * \return Pointer to first non-whitespace character.
+ */
 static const char* skipSpaces(const char* s) {
     while (s && *s && std::isspace(static_cast<unsigned char>(*s))) {
         s++;
@@ -89,6 +109,13 @@ static const char* skipSpaces(const char* s) {
     return s;
 }
 
+/**
+ * \brief Extracts one whitespace-delimited token from a string.
+ * \param s Input cursor position.
+ * \param out Output token buffer.
+ * \param outSize Output buffer size.
+ * \return Pointer to the next unread input position or `nullptr` when no token exists.
+ */
 static const char* nextToken(const char* s, char* out, size_t outSize) {
     if (!out || outSize == 0) return nullptr;
     s = skipSpaces(s);
@@ -101,6 +128,11 @@ static const char* nextToken(const char* s, char* out, size_t outSize) {
     return s;
 }
 
+/**
+ * \brief Parses textual or numeric algorithm identifiers into store values.
+ * \param token Algorithm token (`sha1`, `sha256`, `sha512`, or numeric).
+ * \return Encoded algorithm value used by `TotpStore`.
+ */
 static uint8_t parseAlgo(const char* token) {
     if (!token || !*token) return static_cast<uint8_t>(TotpAlgorithm::SHA1);
     char buf[8] = {};
@@ -115,6 +147,12 @@ static uint8_t parseAlgo(const char* token) {
     return static_cast<uint8_t>(atoi(buf));
 }
 
+/**
+ * \brief Resolves a displayed list index to the logical TOTP slot number.
+ * \param index UI list index.
+ * \param slotOut Output logical slot.
+ * \return `true` if a matching slot was found.
+ */
 static bool findSlotByIndex(uint16_t index, uint16_t* slotOut) {
     if (!slotOut) return false;
     auto& store = TotpStore::instance();
@@ -150,6 +188,10 @@ static bool findSlotByIndex(uint16_t index, uint16_t* slotOut) {
     return true;
 }
 
+/**
+ * \brief Serial command handler printing all configured TOTP accounts.
+ * \param args Unused command arguments.
+ */
 static void cmd_totp_list(const char* args) {
     (void)args;
     if (!TotpStore::instance().hasSlotRange()) {
@@ -178,6 +220,10 @@ static void cmd_totp_list(const char* args) {
     }
 }
 
+/**
+ * \brief Serial command handler adding a TOTP account from tokens.
+ * \param args Command arguments (`name secret [issuer] [digits] [period] [algo]`).
+ */
 static void cmd_totp_add(const char* args) {
     char name[TotpStore::NAME_LEN + 1] = {};
     char secret[128] = {};
@@ -216,6 +262,10 @@ static void cmd_totp_add(const char* args) {
     cdc::serial::Console::printf(ok ? "OK\r\n" : "ERROR\r\n");
 }
 
+/**
+ * \brief Serial command handler deleting a TOTP account by index.
+ * \param args Command arguments (`<index>`).
+ */
 static void cmd_totp_del(const char* args) {
     if (!args || !*args) {
         cdc::serial::Console::printf("Usage: TOTP_DEL <index>\r\n");
@@ -231,6 +281,10 @@ static void cmd_totp_del(const char* args) {
     cdc::serial::Console::printf(ok ? "OK\r\n" : "ERROR\r\n");
 }
 
+/**
+ * \brief Serial command handler generating one TOTP code by index.
+ * \param args Command arguments (`<index>`).
+ */
 static void cmd_totp_get(const char* args) {
     if (!args || !*args) {
         cdc::serial::Console::printf("Usage: TOTP_GET <index>\r\n");
@@ -260,6 +314,9 @@ static void cmd_totp_get(const char* args) {
     }
 }
 
+/**
+ * \brief Registers serial commands exposed by the TOTP module.
+ */
 static void registerCommands() {
     if (s_commandsRegistered) return;
     auto& reg = cdc::serial::getCommandRegistry();
@@ -270,13 +327,18 @@ static void registerCommands() {
     s_commandsRegistered = true;
 }
 
-// === TOTP Code View ===
+/** \brief TOTP code detail view implementation. */
 
-// Forward declaration for edit wizard
+/** \brief Forward declaration for edit wizard entry point. */
 static void wizardEdit(uint16_t slot);
 
 class TotpCodeView : public ui::ViewBase {
 public:
+    /**
+     * \brief Initializes the code view for a specific account slot.
+     * \param slot Logical TOTP slot.
+     * \param name Account display name.
+     */
     void init(uint16_t slot, const char* name) {
         slot_ = slot;
         strncpy(name_, name ? name : "", sizeof(name_) - 1);
@@ -285,6 +347,10 @@ public:
         updateCode();
     }
 
+    /**
+     * \brief Refreshes code state when the view is entered.
+     * \param context Optional enter context (unused).
+     */
     void onEnter(void* context) override {
         (void)context;
         updateCode();
@@ -294,6 +360,9 @@ public:
         dirty_ = true;
     }
 
+    /**
+     * \brief Refreshes code state when the view resumes.
+     */
     void onResume() override {
         updateCode();
         if (!timeValid_) {
@@ -302,6 +371,10 @@ public:
         dirty_ = true;
     }
 
+    /**
+     * \brief Updates countdown and code display once per second.
+     * \param nowMs Current uptime in milliseconds.
+     */
     void onTick(uint32_t nowMs) override {
         if (nowMs - lastUpdateMs_ >= 1000) {
             lastUpdateMs_ = nowMs;
@@ -310,6 +383,10 @@ public:
         }
     }
 
+    /**
+     * \brief Renders account metadata, TOTP code, and validity/progress UI.
+     * \param partial `true` for partial redraw, `false` for full redraw.
+     */
     void render(bool partial) override {
         auto* display = hal::getDisplayInstance();
         if (!display) return;
@@ -369,6 +446,11 @@ public:
         clearDirty();
     }
 
+    /**
+     * \brief Handles key actions for back, edit, and keyboard typing.
+     * \param key Pressed key code.
+     * \return Input handling result for the view stack.
+     */
     ui::InputResult onKey(char key) override {
         if (key == 'N') {
             return ui::InputResult::REQUEST_POP;
@@ -377,13 +459,43 @@ public:
             wizardEdit(slot_);
             return ui::InputResult::CONSUMED;
         }
+        if (key == 'Y') {
+            auto* kb = core::getKeyboard();
+            if (kb && kb->isConnected()) {
+                if (timeValid_ && code_[0] != '-') {
+                    kb->typeString(code_);
+                    ui::showToastSuccess("Typed");
+                }
+            } else {
+                ui::showToastError(mstr(STR_NO_KEYBOARD));
+            }
+            return ui::InputResult::CONSUMED;
+        }
         return ui::InputResult::IGNORED;
     }
 
+    /**
+     * \brief Returns the static view identifier.
+     * \return View name string.
+     */
     const char* getName() const override { return "TotpCodeView"; }
-    const char* getFooterHint() const override { return mstr(STR_HINT_EDIT); }
+
+    /**
+     * \brief Returns context-aware footer hint text.
+     * \return Footer hint string.
+     */
+    const char* getFooterHint() const override {
+        auto* kb = core::getKeyboard();
+        if (kb && kb->isConnected()) {
+            return mstr(STR_HINT_TYPE);
+        }
+        return mstr(STR_HINT_EDIT);
+    }
 
 private:
+    /**
+     * \brief Recomputes the current code, issuer label, and remaining seconds.
+     */
     void updateCode() {
         TotpStore& store = TotpStore::instance();
         timeValid_ = store.isTimeValid();
@@ -426,9 +538,9 @@ private:
     uint32_t lastUpdateMs_ = 0;
 };
 
-// === UI State ===
+/** \brief TOTP module UI state. */
 
-// Static view instances (no dynamic allocation, no leaks)
+/** \brief Static view instances (no dynamic allocation, no leaks). */
 static ui::ListView s_listView;
 static ui::T9InputView s_t9Input;
 static ui::ListView s_digitsMenu;
@@ -437,7 +549,7 @@ static ui::ListView s_periodMenu;
 static TotpCodeView s_codeView;
 static bool s_viewsInitialized = false;
 
-// Dynamic list buffers (cleaned up in freeListBuffers)
+/** \brief Dynamic list buffers released by `freeListBuffers`. */
 static ui::ListItem* s_listItems = nullptr;
 static char (*s_listLabels)[24] = nullptr;
 static uint16_t* s_listSlots = nullptr;
@@ -457,7 +569,14 @@ struct WizardState {
 
 static WizardState s_wizard = {};
 
-// Helper: Push T9 input view for wizard step
+/** \brief Pushes T9 input view for current wizard step. */
+/**
+ * \brief Pushes a configured T9 input step for the account wizard flow.
+ * \param title Step title.
+ * \param initialText Initial input text.
+ * \param maxLen Maximum accepted text length.
+ * \param onSave Save callback for the step.
+ */
 static void pushT9WizardStep(const char* title, const char* initialText,
                               uint16_t maxLen, ui::T9InputView::SaveCallback onSave) {
     s_t9Input.init(title, initialText, maxLen);
@@ -465,7 +584,10 @@ static void pushT9WizardStep(const char* title, const char* initialText,
     ui::ViewStack::instance().push(&s_t9Input);
 }
 
-// Helper: Free dynamically allocated list buffers
+/**
+ * \brief Frees dynamically allocated list buffers used by the TOTP account list.
+ * \return void
+ */
 static void freeListBuffers() {
     delete[] s_listItems;
     delete[] s_listLabels;
@@ -489,6 +611,13 @@ static void onWizardAlgo(uint16_t index, void* userData);
 static void onWizardPeriod(uint16_t index, void* userData);
 static void wizardFinish();
 
+/**
+ * \brief Encodes binary secret bytes into unpadded Base32 text.
+ * \param data Input binary payload.
+ * \param dataLen Input length in bytes.
+ * \param out Output Base32 buffer.
+ * \param outMax Output buffer size.
+ */
 static void base32Encode(const uint8_t* data, size_t dataLen, char* out, size_t outMax) {
     static const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
     if (!out || outMax == 0) return;
@@ -519,6 +648,10 @@ static void base32Encode(const uint8_t* data, size_t dataLen, char* out, size_t 
     out[outPos] = '\0';
 }
 
+/**
+ * \brief Ensures account list backing buffers are allocated for current capacity.
+ * \return `true` if buffers are ready for use.
+ */
 static bool ensureListBuffers() {
     uint16_t cap = TotpStore::instance().capacity();
     if (cap == 0) return false;
@@ -549,6 +682,9 @@ static bool ensureListBuffers() {
     return true;
 }
 
+/**
+ * \brief Rebuilds the TOTP list view content from Tropic storage cache.
+ */
 static void rebuildList() {
     if (!ensureListBuffers()) {
         cdc::core::ModuleRegistry::instance().reportModuleError(TotpModule::instance().getName(),
@@ -583,6 +719,11 @@ static void rebuildList() {
     s_listView.init(mstr(STR_TOTP), s_listItems, static_cast<uint16_t>(s_accountCount + 1));
 }
 
+/**
+ * \brief Handles selection from the TOTP account list.
+ * \param index Selected row index.
+ * \param userData Optional user pointer (unused).
+ */
 static void onListSelect(uint16_t index, void* userData) {
     (void)userData;
     if (index == 0) {
@@ -597,6 +738,9 @@ static void onListSelect(uint16_t index, void* userData) {
     ui::ViewStack::instance().push(&s_codeView);
 }
 
+/**
+ * \brief Starts the add-account wizard with default values.
+ */
 static void wizardStart() {
     memset(&s_wizard, 0, sizeof(s_wizard));
     s_wizard.digits = TotpStore::DEFAULT_DIGITS;
@@ -608,6 +752,10 @@ static void wizardStart() {
     pushT9WizardStep(mstr(STR_ACCOUNT_NAME), nullptr, TotpStore::NAME_LEN, onWizardName);
 }
 
+/**
+ * \brief Starts edit wizard prefilled with an existing account.
+ * \param slot Logical slot to edit.
+ */
 static void wizardEdit(uint16_t slot) {
     TotpAccount account = {};
     if (!TotpStore::instance().readAccount(slot, &account)) {
@@ -628,16 +776,28 @@ static void wizardEdit(uint16_t slot) {
     pushT9WizardStep(mstr(STR_ACCOUNT_NAME), s_wizard.name, TotpStore::NAME_LEN, onWizardName);
 }
 
+/**
+ * \brief Saves wizard account name and opens secret step.
+ * \param text Entered account name.
+ */
 static void onWizardName(const char* text) {
     strncpy(s_wizard.name, text ? text : "", sizeof(s_wizard.name) - 1);
     pushT9WizardStep(mstr(STR_SECRET), s_wizard.secret, 64, onWizardSecret);
 }
 
+/**
+ * \brief Saves wizard secret and opens issuer step.
+ * \param text Entered Base32 secret.
+ */
 static void onWizardSecret(const char* text) {
     strncpy(s_wizard.secret, text ? text : "", sizeof(s_wizard.secret) - 1);
     pushT9WizardStep(mstr(STR_ISSUER), s_wizard.issuer, TotpStore::ISSUER_LEN, onWizardIssuer);
 }
 
+/**
+ * \brief Saves wizard issuer and opens digit-selection step.
+ * \param text Entered issuer string.
+ */
 static void onWizardIssuer(const char* text) {
     strncpy(s_wizard.issuer, text ? text : "", sizeof(s_wizard.issuer) - 1);
 
@@ -653,6 +813,11 @@ static void onWizardIssuer(const char* text) {
     ui::ViewStack::instance().push(&s_digitsMenu);
 }
 
+/**
+ * \brief Saves selected code length and opens algorithm-selection step.
+ * \param index Selected list index.
+ * \param userData Optional user pointer (unused).
+ */
 static void onWizardDigits(uint16_t index, void* userData) {
     (void)userData;
     static const uint8_t digitMap[3] = {6, 7, 8};
@@ -670,6 +835,11 @@ static void onWizardDigits(uint16_t index, void* userData) {
     ui::ViewStack::instance().push(&s_algoMenu);
 }
 
+/**
+ * \brief Saves selected algorithm and opens period-selection step.
+ * \param index Selected list index.
+ * \param userData Optional user pointer (unused).
+ */
 static void onWizardAlgo(uint16_t index, void* userData) {
     (void)userData;
     s_wizard.algorithm = static_cast<uint8_t>(index % 3);
@@ -685,12 +855,20 @@ static void onWizardAlgo(uint16_t index, void* userData) {
     ui::ViewStack::instance().push(&s_periodMenu);
 }
 
+/**
+ * \brief Saves selected period and finalizes add/edit operation.
+ * \param index Selected list index.
+ * \param userData Optional user pointer (unused).
+ */
 static void onWizardPeriod(uint16_t index, void* userData) {
     (void)userData;
     s_wizard.period = (index == 0) ? 30 : 60;
     wizardFinish();
 }
 
+/**
+ * \brief Validates wizard data and persists account changes.
+ */
 static void wizardFinish() {
     if (strlen(s_wizard.name) == 0 || strlen(s_wizard.secret) == 0) {
         ui::showToastError(mstr(STR_INVALID_INPUT));
@@ -735,11 +913,19 @@ static void wizardFinish() {
     }
 }
 
+/**
+ * \brief Returns singleton TOTP module instance.
+ * \return Module singleton reference.
+ */
 TotpModule& TotpModule::instance() {
     static TotpModule inst;
     return inst;
 }
 
+/**
+ * \brief Initializes module resources, translations, commands, and slot mapping.
+ * \return `true` if module initialization succeeded.
+ */
 bool TotpModule::init() {
     LOG_I(TAG, "Initializing TOTP module");
     registerStrings();
@@ -758,6 +944,10 @@ bool TotpModule::init() {
     return true;
 }
 
+/**
+ * \brief Starts the TOTP module service.
+ * \return `true` if start transition succeeded.
+ */
 bool TotpModule::start() {
     if (state_ != core::ServiceState::INITIALIZED &&
         state_ != core::ServiceState::STOPPED) {
@@ -767,15 +957,26 @@ bool TotpModule::start() {
     return true;
 }
 
+/**
+ * \brief Stops the TOTP module and releases list buffers.
+ */
 void TotpModule::stop() {
     freeListBuffers();
     state_ = core::ServiceState::STOPPED;
 }
 
+/**
+ * \brief Stores assigned Tropic slot range for the module.
+ * \param range Slot assignment from module registry.
+ */
 void TotpModule::setSlotRange(const core::IModule::SlotRange& range) {
     slotRange_ = range;
 }
 
+/**
+ * \brief Declares minimum slot requirements for the TOTP module.
+ * \return Slot request structure for registry planning.
+ */
 core::IModule::SlotRequest TotpModule::getSlotRequest() const {
     core::IModule::SlotRequest req = {};
     req.mapName = getName();
@@ -783,6 +984,12 @@ core::IModule::SlotRequest TotpModule::getSlotRequest() const {
     return req;
 }
 
+/**
+ * \brief Provides main-menu entry for the TOTP module.
+ * \param items Output array for menu items.
+ * \param maxItems Maximum number of writable entries in `items`.
+ * \return Number of populated menu items.
+ */
 uint8_t TotpModule::getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems) {
     if (!items || maxItems == 0) return 0;
 
@@ -793,13 +1000,16 @@ uint8_t TotpModule::getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems) 
         }
         rebuildList();
         return &s_listView;
-    }, nullptr, getName(), core::MenuLocation::MAIN_MENU};
+    }, nullptr, getName(), core::MenuLocation::MAIN_MENU, nullptr};
 
     return 1;
 }
 
 } // namespace cdc::mod_totp
 
+/**
+ * \brief Registers TOTP module initializer in the global module registry.
+ */
 extern "C" void mod_totp_register() {
     cdc::core::ModuleRegistry::instance().registerInitializer([]() {
         auto& module = cdc::mod_totp::TotpModule::instance();
