@@ -10,6 +10,10 @@ extern "C" {
 #define VCARD_BLE_NAME_MAX   32
 #define VCARD_BLE_SLOGAN_MAX 32
 
+#ifdef __DOXYGEN__
+namespace cdc::mod_vcard {
+#endif
+
 typedef struct {
     char name[VCARD_BLE_NAME_MAX];
     char slogan[VCARD_BLE_SLOGAN_MAX];
@@ -18,6 +22,10 @@ typedef struct {
     uint8_t addr_type;
     bool exchange_ready;
 } vcard_peer_t;
+
+#ifdef __DOXYGEN__
+} // namespace cdc::mod_vcard
+#endif
 
 // Exchange state machine
 typedef enum {

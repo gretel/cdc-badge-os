@@ -35,6 +35,10 @@ extern "C" {
 // CBOR Writer
 // ============================================================================
 
+#ifdef __DOXYGEN__
+namespace cdc::mod_fido2 {
+#endif
+
 typedef struct {
     uint8_t *buffer;
     size_t size;
@@ -102,6 +106,10 @@ typedef struct {
     const uint8_t *bytes;   // Pointer to byte/text data
     size_t length;      // Length of byte/text data
 } cbor_item_t;
+
+#ifdef __DOXYGEN__
+} // namespace cdc::mod_fido2
+#endif
 
 /**
  * Initialize CBOR reader.

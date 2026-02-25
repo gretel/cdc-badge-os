@@ -13,7 +13,7 @@
 #include <freertos/task.h>
 #include <string.h>
 
-/** \brief USB transport hooks implemented by Fido2Module.cpp. */
+// USB transport hooks implemented by Fido2Module.cpp.
 namespace cdc::mod_fido2 {
     bool fido2_usb_available();
     bool fido2_usb_ready();

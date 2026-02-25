@@ -42,6 +42,10 @@ typedef enum {
     FIDO2_ACTION_SELECT         // Browser probe (make.me.blink/.dummy) - no PIN required
 } fido2_action_t;
 
+#ifdef __DOXYGEN__
+namespace cdc::mod_fido2 {
+#endif
+
 // Credential info (for listing - no private key data)
 typedef struct {
     uint8_t slot;                           // Logical slot index (0..count-1)
@@ -55,6 +59,10 @@ typedef struct {
     uint8_t cred_protect;                   // Credential protection level
     uint8_t curve;                          // CDC_CURVE_P256 or CDC_CURVE_ED25519
 } fido2_credential_info_t;
+
+#ifdef __DOXYGEN__
+} // namespace cdc::mod_fido2
+#endif
 
 // User presence callback type
 typedef fido2_user_presence_result_t (*fido2_user_presence_cb_t)(

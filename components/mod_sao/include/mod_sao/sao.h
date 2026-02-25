@@ -14,6 +14,10 @@
 #define SAO_MAX_DRIVER_DATA_LEN 64
 #define SAO_MAX_EXTRA_DRIVERS   4
 
+#ifdef __DOXYGEN__
+namespace cdc::mod_sao {
+#endif
+
 // SAO Driver Information
 typedef struct {
     char name[SAO_MAX_DRIVER_NAME_LEN + 1];
@@ -28,6 +32,10 @@ typedef struct {
     sao_driver_info_t extra_drivers[SAO_MAX_EXTRA_DRIVERS];
     uint8_t extra_driver_count;
 } sao_descriptor_t;
+
+#ifdef __DOXYGEN__
+} // namespace cdc::mod_sao
+#endif
 
 // Initialize SAO module (call after i2c bus is ready)
 bool sao_init(void);

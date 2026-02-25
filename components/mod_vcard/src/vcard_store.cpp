@@ -17,12 +17,20 @@ static char g_own_vcard[VCARD_MAX_LEN + 1];
 static bool g_own_loaded = false;
 static bool g_own_present = false;
 
+#ifdef __DOXYGEN__
+namespace cdc::mod_vcard {
+#endif
+
 typedef struct {
     bool used;
     uint32_t hash;
     char last_name[32];
     char display[64];
 } vcard_meta_t;
+
+#ifdef __DOXYGEN__
+} // namespace cdc::mod_vcard
+#endif
 
 static vcard_meta_t g_cards[VCARD_MAX_CARDS];
 static bool g_cards_loaded = false;

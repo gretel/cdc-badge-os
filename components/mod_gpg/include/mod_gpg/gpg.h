@@ -20,6 +20,10 @@ extern "C" {
 #define GPG_METADATA_MAGIC      0x4750
 #define GPG_METADATA_VERSION    2
 
+#ifdef __DOXYGEN__
+namespace cdc::mod_gpg {
+#endif
+
 typedef struct {
     bool initialized;
     uint8_t curve;
@@ -41,6 +45,10 @@ typedef struct __attribute__((packed)) {
     uint32_t sign_count;
     uint8_t fingerprint_v5[GPG_FINGERPRINT_V5_LEN];
 } gpg_metadata_t;
+
+#ifdef __DOXYGEN__
+} // namespace cdc::mod_gpg
+#endif
 
 bool gpg_init(void);
 bool gpg_is_initialized(void);

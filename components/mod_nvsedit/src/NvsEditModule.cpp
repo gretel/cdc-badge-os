@@ -23,7 +23,7 @@ using namespace cdc::core;
 
 static const char* TAG = "NvsEdit";
 
-namespace mod_nvsedit {
+namespace cdc::mod_nvsedit {
 
 /** \brief Returns the NVS editor entry view callback target. */
 static IView* getNvsEditorView();
@@ -581,14 +581,14 @@ uint8_t NvsEditModule::getMenuItems(ModuleMenuItem* items, uint8_t maxItems) {
 /** \brief Static module instance used by registration callback. */
 static NvsEditModule s_module;
 
-} // namespace mod_nvsedit
+} // namespace cdc::mod_nvsedit
 
 /**
  * \brief Registers NVS editor initializer with module registry.
  */
 extern "C" void mod_nvsedit_register() {
     cdc::core::ModuleRegistry::instance().registerInitializer([]() {
-        auto& module = mod_nvsedit::s_module;
+        auto& module = cdc::mod_nvsedit::s_module;
         if (module.init()) {
             module.start();
         }

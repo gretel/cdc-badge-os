@@ -6,6 +6,7 @@ on:
   push:
     branches: [main, release]
     paths:
+      - '.github/workflows/deploy-pages.yml'
       - 'components/**'
       - 'main/**'
       - 'Doxyfile'
@@ -26,7 +27,7 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
@@ -34,8 +35,34 @@ jobs:
         with:
           submodules: false
 
-      - name: Install Doxygen
-        run: sudo apt-get install -y doxygen
+      - name: Install Doxygen 1.16.1
+        run: |
+          set -euo pipefail
+          DOXYGEN_VERSION="1.16.1"
+          DOXYGEN_ARCHIVE="/tmp/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz"
+
+          for URL in \
+            "https://www.doxygen.nl/files/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz" \
+            "https://downloads.sourceforge.net/project/doxygen/rel-${DOXYGEN_VERSION}/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz"
+          do
+            echo "Downloading ${URL}"
+            if curl --fail --location --retry 3 --retry-delay 5 --output "${DOXYGEN_ARCHIVE}" "${URL}"; then
+              break
+            fi
+          done
+
+          test -s "${DOXYGEN_ARCHIVE}"
+          tar -tzf "${DOXYGEN_ARCHIVE}" > /dev/null
+          sudo rm -rf /opt/doxygen-1.16.1
+          sudo mkdir -p /opt/doxygen-1.16.1
+          sudo tar -xzf "${DOXYGEN_ARCHIVE}" -C /opt/doxygen-1.16.1 --strip-components=1
+          sudo ln -sf /opt/doxygen-1.16.1/bin/doxygen /usr/local/bin/doxygen
+
+      - name: Verify Doxygen version
+        run: |
+          DOXYGEN_VERSION="$(doxygen --version)"
+          echo "Using Doxygen ${DOXYGEN_VERSION}"
+          echo "${DOXYGEN_VERSION}" | grep -E '^1\.16\.1([[:space:]].*)?$'
 
       - name: Build Doxygen documentation
         run: doxygen Doxyfile

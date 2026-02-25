@@ -2,7 +2,7 @@
 
 #include "cdc_core/IModule.h"
 
-namespace mod_nvsedit {
+namespace cdc::mod_nvsedit {
 
 /**
  * NVS Editor Module
@@ -28,7 +28,7 @@ private:
     cdc::core::ServiceState state_ = cdc::core::ServiceState::UNINITIALIZED;
 };
 
-} // namespace mod_nvsedit
+} // namespace cdc::mod_nvsedit
 
 // Registration function (called by auto-generated code)
 extern "C" void mod_nvsedit_register();

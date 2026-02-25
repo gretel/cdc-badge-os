@@ -46,6 +46,10 @@ static constexpr size_t TOTAL_SIZE = MAGIC_SIZE + NONCE_SIZE + PRIVKEY_SIZE + TA
  */
 static constexpr char HKDF_INFO[] = "GPG-DEC-KEY-V1";
 
+#ifdef __DOXYGEN__
+namespace cdc::mod_gpg {
+#endif
+
 #pragma pack(push, 1)
 struct DecKeyStorage {
     uint8_t magic[MAGIC_SIZE];     // "ECDH"
@@ -54,6 +58,10 @@ struct DecKeyStorage {
     uint8_t tag[TAG_SIZE];         // GCM authentication tag
 };
 #pragma pack(pop)
+
+#ifdef __DOXYGEN__
+} // namespace cdc::mod_gpg
+#endif
 
 static_assert(sizeof(DecKeyStorage) == TOTAL_SIZE, "DecKeyStorage size mismatch");
 

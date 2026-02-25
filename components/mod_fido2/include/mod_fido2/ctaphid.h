@@ -51,6 +51,10 @@ extern "C" {
 #define CTAPHID_CAP_WINK   0x01
 #define CTAPHID_CAP_CBOR   0x04
 
+#ifdef __DOXYGEN__
+namespace cdc::mod_fido2 {
+#endif
+
 typedef struct {
     uint32_t cid;
     uint8_t cmd;
@@ -62,6 +66,10 @@ typedef struct {
     bool active;
     uint32_t last_activity;
 } ctaphid_channel_t;
+
+#ifdef __DOXYGEN__
+} // namespace cdc::mod_fido2
+#endif
 
 bool ctaphid_init(void);
 bool ctaphid_process_packet(const uint8_t* packet);

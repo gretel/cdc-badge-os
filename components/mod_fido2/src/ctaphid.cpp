@@ -10,8 +10,8 @@
 #include "cdc_core/feature_flags.h"
 #include <esp_attr.h>
 
-/** \brief USB transport callback implemented in Fido2Module.cpp. */
 namespace cdc::mod_fido2 {
+    // USB transport callback implemented in Fido2Module.cpp.
     bool fido2_usb_write(const uint8_t* buffer);
 }
 using cdc::mod_fido2::fido2_usb_write;

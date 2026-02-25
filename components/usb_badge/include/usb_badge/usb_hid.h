@@ -15,6 +15,10 @@ extern "C" {
 // TinyUSB init is performed by usb_cdc_init().
 bool usb_hid_init(void);
 
+#ifdef __DOXYGEN__
+namespace cdc::usb_badge {
+#endif
+
 enum class UsbInterfaceClass : uint8_t {
     Hid = 0,
     Ccid = 1,
@@ -42,6 +46,10 @@ struct UsbInterfaceDef {
     uint16_t epOutSize;
     UsbHidCallbacks callbacks;
 };
+
+#ifdef __DOXYGEN__
+} // namespace cdc::usb_badge
+#endif
 
 // Apply active interface list (ordered). Attempts soft reconnect; sets needs_replug
 // if host may require replug.

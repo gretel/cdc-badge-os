@@ -12,9 +12,7 @@
 
 static const char* TAG = "BT-Ctrl";
 
-/**
- * \brief Uses the full implementation only when NimBLE support is enabled in sdkconfig.
- */
+// Full implementation is compiled only when NimBLE support is enabled.
 #if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BT_NIMBLE_ENABLED)
 
 #include "esp_bt.h"

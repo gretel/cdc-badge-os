@@ -645,6 +645,10 @@ uint8_t ctap2_get_info(uint8_t *response, uint16_t *response_len) {
     return CTAP2_OK;
 }
 
+#ifdef __DOXYGEN__
+namespace cdc::mod_fido2 {
+#endif
+
 /** \brief Parsed parameters for `authenticatorMakeCredential`. */
 struct MakeCredentialParams {
     uint8_t client_data_hash[32];
@@ -1282,6 +1286,10 @@ struct AssertionCredentials {
     bool appid_used;
     uint8_t* hash_in_use;  // Points to rp_id_hash or appid_hash
 };
+
+#ifdef __DOXYGEN__
+} // namespace cdc::mod_fido2
+#endif
 
 /**
  * \brief Parses one allowList credential descriptor and extracts credential ID.

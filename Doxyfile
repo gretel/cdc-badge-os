@@ -66,6 +66,7 @@ PREDEFINED             = ESP_OK=0 \
                          ESP_FAIL=-1 \
                          EXT_RAM_BSS_ATTR= \
                          IRAM_ATTR= \
+                         __DOXYGEN__=1 \
                          CONFIG_TINYUSB_ENABLED=1
 
 # Optimization

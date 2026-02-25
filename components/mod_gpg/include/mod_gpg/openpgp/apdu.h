@@ -41,6 +41,10 @@ extern "C" {
 #define PSO_DEC                 0x8086  // Decipher
 #define PSO_ENC                 0x8680  // Encipher
 
+#ifdef __DOXYGEN__
+namespace cdc::mod_gpg::openpgp {
+#endif
+
 // Parsed APDU structure
 typedef struct {
     uint8_t  cla;           // Class byte
@@ -52,6 +56,10 @@ typedef struct {
     uint32_t le;            // Expected response length (Ne)
     bool     extended;      // Extended APDU format
 } apdu_t;
+
+#ifdef __DOXYGEN__
+} // namespace cdc::mod_gpg::openpgp
+#endif
 
 // Parse raw APDU bytes into structure
 // Returns true on success

@@ -22,6 +22,10 @@ using cdc::mod_fido2::sha256;
 #define NVS_NAMESPACE           "fido2"
 #define NVS_KEY_COUNTER         "auth_cnt"
 
+#ifdef __DOXYGEN__
+namespace cdc::mod_fido2 {
+#endif
+
 #pragma pack(push, 1)
 typedef struct {
     uint8_t magic[FIDO2_RMEM_MAGIC_LEN];    // "FID2"
@@ -38,6 +42,10 @@ typedef struct {
     uint8_t reserved[7];                    // Reserved for future use
 } fido2_stored_cred_t;                      // Total: ~180 bytes
 #pragma pack(pop)
+
+#ifdef __DOXYGEN__
+} // namespace cdc::mod_fido2
+#endif
 
 #define FIDO2_STORED_SIZE sizeof(fido2_stored_cred_t)
 

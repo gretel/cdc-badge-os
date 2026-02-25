@@ -16,6 +16,10 @@
 extern "C" {
 #endif
 
+#ifdef __DOXYGEN__
+namespace cdc::log {
+#endif
+
 // Log levels (prefixed with CDC_ to avoid NimBLE conflicts)
 typedef enum {
     CDC_LOG_LEVEL_NONE = 0,
@@ -37,6 +41,10 @@ typedef struct {
     log_level_t level;
     char message[ERROR_LOG_LINE_LEN];
 } error_log_entry_t;
+
+#ifdef __DOXYGEN__
+} // namespace cdc::log
+#endif
 
 // Get error log entries (returns count, fills entries array)
 size_t error_log_get_entries(error_log_entry_t* entries, size_t max_entries);
