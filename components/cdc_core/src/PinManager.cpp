@@ -15,6 +15,9 @@
 
 static const char* TAG = "PinManager";
 
+/** \brief Size of a SHA-256 digest in bytes (FIPS 180-4). */
+static constexpr size_t SHA256_DIGEST_SIZE = 32;
+
 namespace cdc::core {
 
 /**
@@ -221,7 +224,7 @@ bool PinManager::saveToStorage() {
 bool PinManager::computeBadgeHash(const char* pin, uint8_t* hashOut) {
     if (!pin || !hashOut) return false;
 
-    uint8_t fullHash[32];
+    uint8_t fullHash[SHA256_DIGEST_SIZE];
     mbedtls_sha256_context ctx;
     mbedtls_sha256_init(&ctx);
     mbedtls_sha256_starts(&ctx, 0);
@@ -293,39 +296,103 @@ bool PinManager::compareHash(const uint8_t* h1, const uint8_t* h2, size_t len) c
  */
 
 /**
+ * \brief Unified PIN verification routine for Badge, PW1, and PW3 slots.
+ *
+ * Centralizes retry-counter management, lockout handling, and persistence so
+ * the per-slot wrappers stay thin. Hash computation and storage routing depend
+ * on the requested slot.
+ *
+ * \param slot Target PIN slot.
+ * \param pin Candidate PIN string.
+ * \return `true` if PIN matches the stored hash for the requested slot.
+ */
+bool PinManager::verifyPin(PinSlot slot, const char* pin) {
+    if (!pin) return false;
+    if (!pinLoaded_) init();
+
+    // Resolve slot-specific state.
+    const char* label = nullptr;
+    uint8_t* retries = nullptr;
+    uint8_t* storedHash = nullptr;
+    size_t hashSize = 0;
+    uint8_t inputHash[KDF_HASH_SIZE];  // Sized for the largest hash (KDF >= Badge).
+    bool hashOk = false;
+
+    switch (slot) {
+        case PinSlot::BADGE:
+            label = "Badge PIN";
+            retries = &badgeRetries_;
+            storedHash = badgeHash_;
+            hashSize = BADGE_HASH_SIZE;
+            // Allow expired lockout to clear before evaluating block state.
+            checkAndResetExpiredLockout();
+            if (isBadgeBlocked()) {
+                LOG_W(TAG, "%s blocked", label);
+                return false;
+            }
+            hashOk = computeBadgeHash(pin, inputHash);
+            break;
+        case PinSlot::PW1:
+            label = "PW1";
+            retries = &pw1Retries_;
+            storedHash = pw1Hash_;
+            hashSize = KDF_HASH_SIZE;
+            if (*retries == 0) {
+                LOG_W(TAG, "%s blocked", label);
+                return false;
+            }
+            hashOk = computeKdfHash(pin, pw1Salt_, inputHash);
+            break;
+        case PinSlot::PW3:
+            label = "PW3";
+            retries = &pw3Retries_;
+            storedHash = pw3Hash_;
+            hashSize = KDF_HASH_SIZE;
+            if (*retries == 0) {
+                LOG_W(TAG, "%s blocked", label);
+                return false;
+            }
+            hashOk = computeKdfHash(pin, pw3Salt_, inputHash);
+            break;
+    }
+
+    if (!hashOk) return false;
+
+    if (compareHash(storedHash, inputHash, hashSize)) {
+        switch (slot) {
+            case PinSlot::BADGE:
+                resetBadgeRetries();
+                lockoutActive_ = false;  // Clear lockout on success
+                break;
+            case PinSlot::PW1:
+                resetPW1Retries();
+                break;
+            case PinSlot::PW3:
+                resetPW3Retries();
+                break;
+        }
+        LOG_I(TAG, "%s verified", label);
+        return true;
+    }
+
+    (*retries)--;
+    saveToStorage();  // Persist retry count
+    LOG_W(TAG, "Wrong %s, %d retries left", label, *retries);
+
+    // Start lockout timer when badge retries are exhausted.
+    if (slot == PinSlot::BADGE && *retries == 0) {
+        startLockout();
+    }
+    return false;
+}
+
+/**
  * \brief Verifies badge PIN, updates retries, and handles lockout transitions.
  * \param pin Candidate badge PIN.
  * \return `true` if PIN is valid.
  */
 bool PinManager::verifyBadgePin(const char* pin) {
-    if (!pin) return false;
-    if (!pinLoaded_) init();
-
-    // Check if blocked (retries=0 or lockout active)
-    if (isBadgeBlocked()) {
-        LOG_W(TAG, "Badge PIN blocked");
-        return false;
-    }
-
-    uint8_t inputHash[BADGE_HASH_SIZE];
-    if (!computeBadgeHash(pin, inputHash)) return false;
-
-    if (compareHash(badgeHash_, inputHash, BADGE_HASH_SIZE)) {
-        resetBadgeRetries();
-        lockoutActive_ = false;  // Clear lockout on success
-        LOG_I(TAG, "Badge PIN verified");
-        return true;
-    }
-
-    badgeRetries_--;
-    saveToStorage();  // Persist retry count
-    LOG_W(TAG, "Wrong badge PIN, %d retries left", badgeRetries_);
-
-    // Start lockout timer when retries exhausted
-    if (badgeRetries_ == 0) {
-        startLockout();
-    }
-    return false;
+    return verifyPin(PinSlot::BADGE, pin);
 }
 
 /**
@@ -411,26 +478,7 @@ bool PinManager::verifyBadgePinHash(const uint8_t* hashIn) const {
  * \return `true` if PW1 is valid.
  */
 bool PinManager::verifyPW1(const char* pin) {
-    if (!pin) return false;
-    if (!pinLoaded_) init();
-    if (pw1Retries_ == 0) {
-        LOG_W(TAG, "PW1 blocked");
-        return false;
-    }
-
-    uint8_t inputHash[KDF_HASH_SIZE];
-    if (!computeKdfHash(pin, pw1Salt_, inputHash)) return false;
-
-    if (compareHash(pw1Hash_, inputHash, KDF_HASH_SIZE)) {
-        resetPW1Retries();
-        LOG_I(TAG, "PW1 verified");
-        return true;
-    }
-
-    pw1Retries_--;
-    saveToStorage();  // Persist retry count
-    LOG_W(TAG, "Wrong PW1, %d retries left", pw1Retries_);
-    return false;
+    return verifyPin(PinSlot::PW1, pin);
 }
 
 /**
@@ -509,26 +557,7 @@ void PinManager::resetPW1Retries() {
  * \return `true` if PW3 is valid.
  */
 bool PinManager::verifyPW3(const char* pin) {
-    if (!pin) return false;
-    if (!pinLoaded_) init();
-    if (pw3Retries_ == 0) {
-        LOG_W(TAG, "PW3 blocked");
-        return false;
-    }
-
-    uint8_t inputHash[KDF_HASH_SIZE];
-    if (!computeKdfHash(pin, pw3Salt_, inputHash)) return false;
-
-    if (compareHash(pw3Hash_, inputHash, KDF_HASH_SIZE)) {
-        resetPW3Retries();
-        LOG_I(TAG, "PW3 verified");
-        return true;
-    }
-
-    pw3Retries_--;
-    saveToStorage();
-    LOG_W(TAG, "Wrong PW3, %d retries left", pw3Retries_);
-    return false;
+    return verifyPin(PinSlot::PW3, pin);
 }
 
 /**
@@ -640,24 +669,33 @@ uint32_t PinManager::getLockoutRemainingMs() const {
 }
 
 /**
- * \brief Returns whether lockout is currently active and lazily clears expired lockout.
+ * \brief Returns whether lockout is currently active without mutating state.
  * \return `true` if lockout is still active.
  */
 bool PinManager::isLockoutActive() const {
     if (!lockoutActive_) {
         return false;
     }
+    return getLockoutRemainingMs() > 0;
+}
 
-    uint32_t remaining = getLockoutRemainingMs();
-    if (remaining == 0) {
-        // Lockout expired - reset retries (const_cast needed for lazy update)
-        const_cast<PinManager*>(this)->lockoutActive_ = false;
-        const_cast<PinManager*>(this)->badgeRetries_ = MAX_RETRIES;
-        const_cast<PinManager*>(this)->saveToStorage();
-        LOG_I(TAG, "Lockout expired, retries reset");
-        return false;
+/**
+ * \brief Clears expired lockout state and persists updated retry counter.
+ *
+ * This is the non-const counterpart to `isLockoutActive()`. Callers in
+ * non-const contexts use this to perform the lazy state update without
+ * needing `const_cast`.
+ */
+void PinManager::checkAndResetExpiredLockout() {
+    if (!lockoutActive_) {
+        return;
     }
-    return true;
+    if (getLockoutRemainingMs() == 0) {
+        lockoutActive_ = false;
+        badgeRetries_ = MAX_RETRIES;
+        saveToStorage();
+        LOG_I(TAG, "Lockout expired, retries reset");
+    }
 }
 
 } // namespace cdc::core

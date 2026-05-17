@@ -7,6 +7,7 @@
 #include "cdc_os_ui/views/LockScreenView.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_views/ContextMenuView.h"
+#include "cdc_views/KeyCodes.h"
 #include "cdc_hal/IDisplay.h"
 #include "cdc_hal/IKeypad.h"
 #include "cdc_hal/ISleepController.h"
@@ -311,8 +312,8 @@ static void (*const s_moduleCallbacks[])() = {
  * \return Input consumption result.
  */
 InputResult LockScreenView::onKey(char key) {
-    // Key 3 opens context menu for light toggle + module items
-    if (key == '3') {
+    // KEY_BACK ('3') opens context menu for light toggle + module items
+    if (key == KEY_BACK) {
         uint8_t itemCount = 0;
 
         // First item: Light toggle (built-in)
@@ -476,10 +477,12 @@ void LockScreenView::renderStatusIcons(void* gfxPtr, int x, int y) {
         gfx->drawLine(cx - 4, cy - 5, cx - 2, cy - 7, EPD_BLACK);
         gfx->drawLine(cx - 2, cy - 7, cx + 2, cy - 7, EPD_BLACK);
         gfx->drawLine(cx + 2, cy - 7, cx + 4, cy - 5, EPD_BLACK);
-        // Arc 3 (large)
-        gfx->drawLine(cx - 6, cy - 7, cx - 4, cy - 9, EPD_BLACK);
-        gfx->drawLine(cx - 4, cy - 9, cx + 4, cy - 9, EPD_BLACK);
-        gfx->drawLine(cx + 4, cy - 9, cx + 6, cy - 7, EPD_BLACK);
+        // Arc 3 (large) - rounded top to avoid the flat-roof look
+        gfx->drawLine(cx - 6, cy - 7, cx - 4, cy - 8, EPD_BLACK);
+        gfx->drawLine(cx - 4, cy - 8, cx - 2, cy - 9, EPD_BLACK);
+        gfx->drawLine(cx - 2, cy - 9, cx + 2, cy - 9, EPD_BLACK);
+        gfx->drawLine(cx + 2, cy - 9, cx + 4, cy - 8, EPD_BLACK);
+        gfx->drawLine(cx + 4, cy - 8, cx + 6, cy - 7, EPD_BLACK);
         iconX -= iconSpacing;
     }
 

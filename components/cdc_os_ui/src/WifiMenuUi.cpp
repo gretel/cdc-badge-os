@@ -300,7 +300,7 @@ static void wifiConnect() {
     }
 
     char msg[96];
-    snprintf(msg, sizeof(msg), "%s: %s", tr(StringId::WIFI_CONNECTING), wifiHandlers.config().ssid);
+    snprintf(msg, sizeof(msg), "%s\n%s", tr(StringId::WIFI_CONNECTING), wifiHandlers.config().ssid);
     showToastInfo(msg, 0);
 
     bool connected = wifiHandlers.connect();

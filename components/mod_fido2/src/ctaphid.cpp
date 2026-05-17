@@ -20,6 +20,8 @@ using cdc::mod_fido2::fido2_usb_write;
 #include <freertos/task.h>
 #include <freertos/semphr.h>
 
+static const char* TAG = "CTAPHID";
+
 /** \brief Enable verbose packet-level debug logging when feature flags allow it. */
 
 #ifndef CTAPHID_DEBUG_PACKETS
@@ -106,7 +108,7 @@ static ctaphid_channel_t *alloc_channel(uint32_t cid) {
     }
 
     if (oldest_idx >= 0) {
-        LOG_W("CTAPHID", "Evicting oldest channel 0x%08lX", g_ctaphid.channels[oldest_idx].cid);
+        LOG_W(TAG, "Evicting oldest channel 0x%08lX", g_ctaphid.channels[oldest_idx].cid);
         g_ctaphid.channels[oldest_idx].cid = cid;
         g_ctaphid.channels[oldest_idx].active = false;
         g_ctaphid.channels[oldest_idx].buffer = s_msg_buffers[oldest_idx];
@@ -197,7 +199,7 @@ static void prepare_response(uint32_t cid, uint8_t cmd, const uint8_t *data, uin
     if (data && len > 0) {
         // Bounds check to prevent buffer overflow
         if (len > CTAPHID_MAX_MSG_SIZE) {
-            LOG_E("CTAPHID", "Response too large: %u > %u", len, CTAPHID_MAX_MSG_SIZE);
+            LOG_E(TAG, "Response too large: %u > %u", len, CTAPHID_MAX_MSG_SIZE);
             len = CTAPHID_MAX_MSG_SIZE;
         }
         memcpy(s_response_buffer, data, len);
@@ -206,7 +208,7 @@ static void prepare_response(uint32_t cid, uint8_t cmd, const uint8_t *data, uin
     g_ctaphid.response_offset = 0;
     g_ctaphid.response_pending = true;
     if (cmd == CTAPHID_CBOR && len > 0) {
-        LOG_I("CTAPHID", "Prepared CBOR response len=%u status=0x%02X", len, data[0]);
+        LOG_I(TAG, "Prepared CBOR response len=%u status=0x%02X", len, data[0]);
     }
 }
 
@@ -221,6 +223,11 @@ static void handle_init(uint32_t cid, const uint8_t *data, uint16_t len) {
         ctaphid_send_error(cid, CTAPHID_ERR_INVALID_LEN);
         return;
     }
+
+    // A new channel is a clean slate: any pending cancel from a previous
+    // transaction must not abort this INIT response or the channel's first
+    // CBOR exchange.
+    ctap2_clear_cancel();
 
     // Allocate new channel
     uint32_t new_cid = (cid == CTAPHID_BROADCAST_CID) ? allocate_cid() : cid;
@@ -245,7 +252,7 @@ static void handle_init(uint32_t cid, const uint8_t *data, uint16_t len) {
     response[16] = CTAPHID_CAP_WINK | CTAPHID_CAP_CBOR;
 
     prepare_response(cid, CTAPHID_INIT, response, 17);
-    if (CTAPHID_DEBUG_PACKETS) LOG_D("CTAPHID", "INIT: allocated CID 0x%08lX", new_cid);
+    if (CTAPHID_DEBUG_PACKETS) LOG_D(TAG, "INIT: allocated CID 0x%08lX", new_cid);
 }
 
 /**
@@ -257,7 +264,7 @@ static void handle_init(uint32_t cid, const uint8_t *data, uint16_t len) {
 static void handle_ping(uint32_t cid, const uint8_t *data, uint16_t len) {
     // Echo back the data
     prepare_response(cid, CTAPHID_PING, data, len);
-    if (CTAPHID_DEBUG_PACKETS) LOG_D("CTAPHID", "PING: echoing %d bytes", len);
+    if (CTAPHID_DEBUG_PACKETS) LOG_D(TAG, "PING: echoing %d bytes", len);
 }
 
 /**
@@ -265,9 +272,13 @@ static void handle_ping(uint32_t cid, const uint8_t *data, uint16_t len) {
  * \param cid Request channel identifier.
  */
 static void handle_wink(uint32_t cid) {
-    // TODO: Visual feedback (LED blink or similar)
+    // TODO: Trigger visual identification feedback for the user (CTAPHID WINK).
+    // This handler runs in the FIDO2 transport task, so direct display rendering
+    // from here is not thread-safe. When implementing, dispatch a short-lived
+    // event to the UI task (for example via EventBus or a ToastView request) so
+    // the UI thread can show a "WINK" toast or blink an available indicator.
     prepare_response(cid, CTAPHID_WINK, NULL, 0);
-    if (CTAPHID_DEBUG_PACKETS) LOG_D("CTAPHID", "WINK");
+    if (CTAPHID_DEBUG_PACKETS) LOG_D(TAG, "WINK");
 }
 
 /**
@@ -277,7 +288,7 @@ static void handle_wink(uint32_t cid) {
 static void handle_cancel(uint32_t cid) {
     ctap2_cancel();
     // No response for CANCEL
-    if (CTAPHID_DEBUG_PACKETS) LOG_D("CTAPHID", "CANCEL");
+    if (CTAPHID_DEBUG_PACKETS) LOG_D(TAG, "CANCEL");
 }
 
 /**
@@ -303,7 +314,7 @@ static void handle_cbor(uint32_t cid, const uint8_t *data, uint16_t len) {
     // Prepare response (status byte + data)
     // Note: ctap2_process_command already includes status in response_buffer[0]
     prepare_response(cid, CTAPHID_CBOR, s_response_buffer, response_len);
-    if (CTAPHID_DEBUG_PACKETS) LOG_D("CTAPHID", "CBOR: cmd=0x%02X status=0x%02X len=%d", data[0], status, response_len);
+    if (CTAPHID_DEBUG_PACKETS) LOG_D(TAG, "CBOR: cmd=0x%02X status=0x%02X len=%d", data[0], status, response_len);
 }
 
 /**
@@ -316,7 +327,7 @@ static void process_complete_message(ctaphid_channel_t *ch) {
     uint8_t *data = ch->buffer;
     uint16_t len = ch->bcnt;
 
-    if (CTAPHID_DEBUG_PACKETS) LOG_D("CTAPHID", "Processing cmd=0x%02X len=%d", cmd, len);
+    if (CTAPHID_DEBUG_PACKETS) LOG_D(TAG, "Processing cmd=0x%02X len=%d", cmd, len);
 
     switch (cmd) {
         case CTAPHID_INIT:
@@ -344,7 +355,7 @@ static void process_complete_message(ctaphid_channel_t *ch) {
                 EXT_RAM_BSS_ATTR static uint8_t u2f_response[512];
                 uint16_t u2f_response_len = u2f_process_apdu(data, len, u2f_response, sizeof(u2f_response));
                 prepare_response(cid, CTAPHID_MSG, u2f_response, u2f_response_len);
-                if (CTAPHID_DEBUG_PACKETS) LOG_D("CTAPHID", "U2F: response len=%d", u2f_response_len);
+                if (CTAPHID_DEBUG_PACKETS) LOG_D(TAG, "U2F: response len=%d", u2f_response_len);
             }
             break;
         default:
@@ -367,19 +378,19 @@ static void process_complete_message(ctaphid_channel_t *ch) {
  * \return `true` on success, otherwise `false`.
  */
 bool ctaphid_init(void) {
-    LOG_I("CTAPHID", "Initializing...");
+    LOG_I(TAG, "Initializing...");
 
     memset(&g_ctaphid, 0, sizeof(g_ctaphid));
     g_ctaphid.next_cid = 1;
 
     g_ctaphid.mutex = xSemaphoreCreateMutex();
     if (!g_ctaphid.mutex) {
-        LOG_E("CTAPHID", "Mutex creation failed");
+        LOG_E(TAG, "Mutex creation failed");
         return false;
     }
 
     g_ctaphid.initialized = true;
-    LOG_I("CTAPHID", "Initialized");
+    LOG_I(TAG, "Initialized");
     return true;
 }
 
@@ -420,7 +431,7 @@ bool ctaphid_process_packet(const uint8_t *packet) {
     } else {
         g_ctaphid.rate_cmd_count++;
         if (g_ctaphid.rate_cmd_count > CTAPHID_RATE_LIMIT_MAX_CMDS) {
-            LOG_W("CTAPHID", "Rate limit exceeded (%d cmd/s)", g_ctaphid.rate_cmd_count);
+            LOG_W(TAG, "Rate limit exceeded (%d cmd/s)", g_ctaphid.rate_cmd_count);
             // Don't send error - just drop silently to avoid amplification
             xSemaphoreGive(g_ctaphid.mutex);
             return true;
@@ -437,11 +448,11 @@ bool ctaphid_process_packet(const uint8_t *packet) {
         uint8_t cmd = packet[4] & 0x7F;
         uint16_t bcnt = ((uint16_t)packet[5] << 8) | packet[6];
 
-        if (CTAPHID_DEBUG_PACKETS) LOG_D("CTAPHID", "Init packet: CID=0x%08lX CMD=0x%02X BCNT=%d", cid, cmd, bcnt);
+        if (CTAPHID_DEBUG_PACKETS) LOG_D(TAG, "Init packet: CID=0x%08lX CMD=0x%02X BCNT=%d", cid, cmd, bcnt);
 
         // Validate bcnt to prevent buffer overflow
         if (bcnt > CTAPHID_MAX_MSG_SIZE) {
-            LOG_W("CTAPHID", "bcnt exceeds max: %u > %u", bcnt, CTAPHID_MAX_MSG_SIZE);
+            LOG_W(TAG, "bcnt exceeds max: %u > %u", bcnt, CTAPHID_MAX_MSG_SIZE);
             ctaphid_send_error(cid, CTAPHID_ERR_INVALID_LEN);
             xSemaphoreGive(g_ctaphid.mutex);
             return true;
@@ -469,7 +480,7 @@ bool ctaphid_process_packet(const uint8_t *packet) {
         // Find or create channel
         ctaphid_channel_t *ch = find_channel(cid);
         if (!ch) {
-            LOG_W("CTAPHID", "Unknown CID 0x%08lX", cid);
+            LOG_W(TAG, "Unknown CID 0x%08lX", cid);
             ctaphid_send_error(cid, CTAPHID_ERR_INVALID_CHANNEL);
             xSemaphoreGive(g_ctaphid.mutex);
             return true;
@@ -477,7 +488,7 @@ bool ctaphid_process_packet(const uint8_t *packet) {
 
         // Check if another transaction is active on this channel
         if (ch->active) {
-            LOG_W("CTAPHID", "Channel busy");
+            LOG_W(TAG, "Channel busy");
             ctaphid_send_error(cid, CTAPHID_ERR_CHANNEL_BUSY);
             xSemaphoreGive(g_ctaphid.mutex);
             return true;
@@ -506,7 +517,7 @@ bool ctaphid_process_packet(const uint8_t *packet) {
 
         ctaphid_channel_t *ch = find_channel(cid);
         if (!ch || !ch->active) {
-            LOG_W("CTAPHID", "Continuation for inactive channel");
+            LOG_W(TAG, "Continuation for inactive channel");
             ctaphid_send_error(cid, CTAPHID_ERR_INVALID_CHANNEL);
             xSemaphoreGive(g_ctaphid.mutex);
             return true;
@@ -514,7 +525,7 @@ bool ctaphid_process_packet(const uint8_t *packet) {
 
         // Check sequence
         if (seq != ch->seq) {
-            LOG_W("CTAPHID", "Invalid sequence: got %d, expected %d", seq, ch->seq);
+            LOG_W(TAG, "Invalid sequence: got %d, expected %d", seq, ch->seq);
             ch->active = false;
             ctaphid_send_error(cid, CTAPHID_ERR_INVALID_SEQ);
             xSemaphoreGive(g_ctaphid.mutex);
@@ -554,6 +565,17 @@ bool ctaphid_has_response(void) {
  */
 bool ctaphid_get_response_packet(uint8_t *packet) {
     if (!g_ctaphid.response_pending || !packet) return false;
+
+    if (ctap2_is_cancelled()) {
+        xSemaphoreTake(g_ctaphid.mutex, portMAX_DELAY);
+        LOG_W(TAG, "Send aborted: CTAP2 cancelled by host (offset=%u/%u)",
+              g_ctaphid.response_offset, g_ctaphid.response_len);
+        g_ctaphid.response_pending = false;
+        g_ctaphid.response_offset = 0;
+        g_ctaphid.response_len = 0;
+        xSemaphoreGive(g_ctaphid.mutex);
+        return false;
+    }
 
     xSemaphoreTake(g_ctaphid.mutex, portMAX_DELAY);
 
@@ -607,7 +629,7 @@ void ctaphid_send_keepalive(uint32_t cid, uint8_t status) {
 void ctaphid_send_error(uint32_t cid, uint8_t error) {
     uint8_t data = error;
     prepare_response(cid, CTAPHID_ERROR, &data, 1);
-    LOG_W("CTAPHID", "Sending error 0x%02X to CID 0x%08lX", error, cid);
+    LOG_W(TAG, "Sending error 0x%02X to CID 0x%08lX", error, cid);
 }
 
 /**
@@ -623,7 +645,7 @@ void ctaphid_check_timeout(void) {
     for (int i = 0; i < CTAPHID_MAX_CHANNELS; i++) {
         ctaphid_channel_t *ch = &g_ctaphid.channels[i];
         if (ch->active && (now - ch->last_activity) > CTAPHID_MSG_TIMEOUT_MS) {
-            LOG_W("CTAPHID", "Channel 0x%08lX timed out", ch->cid);
+            LOG_W(TAG, "Channel 0x%08lX timed out", ch->cid);
             ctaphid_send_error(ch->cid, CTAPHID_ERR_MSG_TIMEOUT);
             ch->active = false;
         }

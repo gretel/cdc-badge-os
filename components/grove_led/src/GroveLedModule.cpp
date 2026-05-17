@@ -139,6 +139,9 @@ bool GroveLedModule::init() {
         return false;
     }
 
+    // Register module with registry after successful hardware init
+    core::ModuleRegistry::instance().registerModule(this);
+
     clearLeds();
     state_ = core::ServiceState::INITIALIZED;
     return true;
@@ -634,18 +637,9 @@ void GroveLedModule::saveSettings() {
  */
 extern "C" void grove_led_register() {
     cdc::core::ModuleRegistry::instance().registerInitializer([]() {
-        auto& moduleReg = cdc::core::ModuleRegistry::instance();
         auto& module = cdc::grove_led::GroveLedModule::instance();
-
-        // Register first so module appears in list (even if init fails)
-        moduleReg.registerModule(&module);
-
-        if (!module.init()) {
-            // Init failed - report error
-            moduleReg.reportModuleError(module.getName(), "LED strip init failed");
-            return;
+        if (module.init()) {
+            module.start();
         }
-
-        module.start();
     });
 }

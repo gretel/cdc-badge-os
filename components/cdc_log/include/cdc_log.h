@@ -1,5 +1,6 @@
 /**
- * CDC Log - Logging over TinyUSB CDC + UART
+ * \file
+ * \brief CDC Log: logging over TinyUSB CDC and UART.
  *
  * Logging system that outputs to both USB CDC and UART.
  * Includes error log (PSRAM-backed ring buffer for ERROR/WARN).
@@ -89,34 +90,34 @@ void console_flush(void);
 // ============================================================================
 
 /**
- * Output hook - called for every console output
- * @param data Output data
- * @param len Data length
+ * \brief Output hook called for every console output.
+ * \param data Output data.
+ * \param len Data length.
  */
 typedef void (*console_output_hook_t)(const char* data, size_t len);
 
 /**
- * Input available hook - check if additional input is available
- * @return true if data available
+ * \brief Input-available hook used to check if additional input is available.
+ * \return `true` if data is available.
  */
 typedef bool (*console_input_available_hook_t)(void);
 
 /**
- * Input getchar hook - get character from additional source
- * @return Character or -1 if none available
+ * \brief Input getchar hook used to fetch one character from an additional source.
+ * \return Character or -1 if none available.
  */
 typedef int (*console_input_getchar_hook_t)(void);
 
 /**
- * Register output hook (only one supported at a time)
- * @param hook Callback function, or NULL to unregister
+ * \brief Registers the console output hook (only one supported at a time).
+ * \param hook Callback function, or NULL to unregister.
  */
 void console_register_output_hook(console_output_hook_t hook);
 
 /**
- * Register input hooks (only one set supported at a time)
- * @param avail_hook Available check callback, or NULL to unregister
- * @param getchar_hook Getchar callback, or NULL to unregister
+ * \brief Registers the console input hooks (only one set supported at a time).
+ * \param avail_hook Available-check callback, or NULL to unregister.
+ * \param getchar_hook Getchar callback, or NULL to unregister.
  */
 void console_register_input_hook(console_input_available_hook_t avail_hook,
                                   console_input_getchar_hook_t getchar_hook);

@@ -5,6 +5,7 @@
  */
 
 #include "cdc_views/DateInputView.h"
+#include "cdc_views/KeyCodes.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_hal/IDisplay.h"
@@ -171,7 +172,7 @@ InputResult DateInputView::onKey(char key) {
     }
 
     switch (key) {
-        case 'N':  // Clear or cancel
+        case KEY_NO:  // Clear or cancel
             if (digitPos_ > 0 ||
                 (currentField_ == Field::DAY && day_ > 0) ||
                 (currentField_ == Field::MONTH && month_ > 0) ||
@@ -181,7 +182,7 @@ InputResult DateInputView::onKey(char key) {
             }
             return InputResult::REQUEST_POP;
 
-        case 'Y':  // Confirm
+        case KEY_YES:  // Confirm
             validateAndClamp();
             LOG_I(TAG, "Date confirmed: %02d.%02d.%04d", day_, month_, year_);
             if (onConfirm_) {

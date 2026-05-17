@@ -13,7 +13,7 @@
 #include "cdc_views/ToastView.h"
 #include "cdc_os_ui/views/PinChangeView.h"
 #include "cdc_core/PinManager.h"
-#include "pin_storage.h"
+#include "mod_gpg/pin_storage.h"
 #include "serial_cmd/ICommandRegistry.h"
 #include "serial_cmd/Console.h"
 #include "mod_gpg/gpg.h"

@@ -5,6 +5,7 @@
  */
 
 #include "cdc_os_ui/views/PinChangeView.h"
+#include "cdc_views/KeyCodes.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_core/PinManager.h"
 #include "cdc_ui/I18n.h"
@@ -267,7 +268,7 @@ InputResult PinChangeView::onKey(char key) {
     }
 
     switch (key) {
-        case 'N': // Backspace or cancel
+        case KEY_NO: // Backspace or cancel
             if (length_ > 0) {
                 backspace();
             } else if (step_ == Step::CURRENT_PIN) {
@@ -289,7 +290,7 @@ InputResult PinChangeView::onKey(char key) {
             }
             return InputResult::CONSUMED;
 
-        case 'Y': // Confirm
+        case KEY_YES: // Confirm
             if (length_ >= minLength_) {
                 confirmStep();
             }

@@ -1,4 +1,5 @@
 #include "cdc_core/TropicSlotMap.h"
+#include "cdc_core/Hash.h"
 #include "tropic_slot_map.h"
 #include "cdc_log.h"
 #include <cstring>
@@ -205,10 +206,9 @@ uint16_t TropicSlotMap::rmemMax() const {
  * \return 32-bit signature hash.
  */
 uint32_t TropicSlotMap::computeMapSignature() const {
-    uint32_t hash = 2166136261u;
+    uint32_t hash = cdc::core::hash::FNV1A_32_OFFSET_BASIS;
     auto mix = [&hash](uint32_t v) {
-        hash ^= v;
-        hash *= 16777619u;
+        cdc::core::hash::fnv1a_mix_u32(hash, v);
     };
 
     mix(cdc::tropic_map::ECC_SLOT_MIN);

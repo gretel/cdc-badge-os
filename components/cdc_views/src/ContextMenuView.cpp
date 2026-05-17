@@ -5,6 +5,7 @@
  */
 
 #include "cdc_views/ContextMenuView.h"
+#include "cdc_views/KeyCodes.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_hal/IDisplay.h"
@@ -105,19 +106,19 @@ void ContextMenuView::select() {
  */
 InputResult ContextMenuView::onKey(char key) {
     switch (key) {
-        case '2': // Up
+        case KEY_UP:
             navigate(false);
             return InputResult::CONSUMED;
 
-        case '8': // Down
+        case KEY_DOWN:
             navigate(true);
             return InputResult::CONSUMED;
 
-        case 'Y': // Select
+        case KEY_YES: // Select
             select();
             return InputResult::CONSUMED;
 
-        case 'N': // Cancel
+        case KEY_NO: // Cancel
             hideContextMenu();
             return InputResult::CONSUMED;
 

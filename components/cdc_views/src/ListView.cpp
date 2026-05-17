@@ -6,6 +6,8 @@
  */
 
 #include "cdc_views/ListView.h"
+#include "cdc_views/KeyCodes.h"
+#include "cdc_views/LayoutConstants.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_ui/I18n.h"
@@ -16,12 +18,15 @@
 static const char* TAG = "ListView";
 
 /**
- * \brief Display layout constants for 296x128 panels.
+ * \brief View-local layout constants for 296x128 panels.
+ *
+ * Shared SCROLL_INDICATOR_WIDTH comes from cdc::ui::layout in
+ * LayoutConstants.h.
  */
 static constexpr int TITLE_Y = 5;
 static constexpr int LIST_START_Y = 30;
 static constexpr int ITEM_PADDING_X = 10;
-static constexpr int SCROLL_INDICATOR_WIDTH = 8;
+using cdc::ui::layout::SCROLL_INDICATOR_WIDTH;
 
 /**
  * \brief Visible item count derived from available list area.
@@ -137,28 +142,28 @@ void ListView::ensureVisible() {
  */
 InputResult ListView::onKey(char key) {
     switch (key) {
-        case '2': // Up
+        case KEY_UP:
             navigate(false);
             return InputResult::CONSUMED;
 
-        case '8': // Down
+        case KEY_DOWN:
             navigate(true);
             return InputResult::CONSUMED;
 
-        case 'Y': // Select
+        case KEY_YES: // Select
             if (onSelect_ && items_ && selection_ < itemCount_) {
                 onSelect_(selection_, items_[selection_].userData);
             }
             return InputResult::CONSUMED;
 
-        case '3': // Context menu
+        case KEY_BACK: // Context menu
             if (onMenu_ && items_ && selection_ < itemCount_) {
                 onMenu_(selection_, items_[selection_].userData);
                 return InputResult::CONSUMED;
             }
             return InputResult::IGNORED;
 
-        case 'N': // Back
+        case KEY_NO: // Back
             return InputResult::REQUEST_POP;
 
         default:

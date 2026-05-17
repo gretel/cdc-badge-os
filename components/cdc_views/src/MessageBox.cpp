@@ -6,6 +6,7 @@
  */
 
 #include "cdc_views/MessageBox.h"
+#include "cdc_views/KeyCodes.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_hal/IDisplay.h"
@@ -73,7 +74,7 @@ void MessageBox::onTick(uint32_t nowMs) {
  */
 InputResult MessageBox::onKey(char key) {
     // Any key dismisses (Y or N)
-    if (key == 'Y' || key == 'N') {
+    if (key == KEY_YES || key == KEY_NO) {
         LOG_D(TAG, "Key '%c' pressed, hiding", key);
         if (onClose_) {
             onClose_();

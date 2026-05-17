@@ -187,52 +187,65 @@ void drawSignalBars(Gdey029T94* gfx, int x, int y, int8_t rssi, bool inverted) {
 }
 
 /**
+ * \brief Updates a single boolean-driven status icon on the lock screen.
+ *
+ * Adds the icon when transitioning to active, removes it when transitioning
+ * to inactive, and updates the cached previous state. Performs no work when
+ * the state is unchanged.
+ *
+ * \param icon Status icon identifier to toggle.
+ * \param active Current desired active state.
+ * \param last Reference to cached previous state, updated on change.
+ */
+static void updateStatusIcon(StatusIcon icon, bool active, bool& last) {
+    if (active == last) return;
+    if (active) {
+        s_lockScreen->addStatusIcon(icon);
+    } else {
+        s_lockScreen->removeStatusIcon(icon);
+    }
+    last = active;
+}
+
+/**
+ * \brief Updates the battery percentage indicator on the lock screen.
+ *
+ * Pushes the current percentage when a battery is present, otherwise sets
+ * the indicator to the no-battery sentinel value (-1).
+ */
+static void updateBatteryIndicator() {
+    bool present = s_deps.power->isBatteryPresent();
+    if (present != s_lastBatteryPresent) {
+        s_lockScreen->setBatteryPercent(present ? s_deps.power->getBatteryPercent() : -1);
+        s_lastBatteryPresent = present;
+    } else if (present) {
+        s_lockScreen->setBatteryPercent(s_deps.power->getBatteryPercent());
+    }
+}
+
+/**
  * \brief Synchronizes lock-screen status icons with current hardware state.
  */
 void updatePowerStatusIcons() {
     if (!s_lockScreen || !s_deps.power) return;
 
-    bool usbConnected = s_deps.power->isUsbConnected();
-    bool charging = (s_deps.power->getChargeStatus() == hal::ChargeStatus::FAST_CHARGE ||
-                     s_deps.power->getChargeStatus() == hal::ChargeStatus::PRE_CHARGE);
-    bool batteryPresent = s_deps.power->isBatteryPresent();
+    const bool usbConnected = s_deps.power->isUsbConnected();
+    const hal::ChargeStatus chargeStatus = s_deps.power->getChargeStatus();
+    const bool charging = (chargeStatus == hal::ChargeStatus::FAST_CHARGE ||
+                           chargeStatus == hal::ChargeStatus::PRE_CHARGE);
 
-    if (usbConnected != s_lastUsbConnected) {
-        if (usbConnected) s_lockScreen->addStatusIcon(StatusIcon::USB);
-        else s_lockScreen->removeStatusIcon(StatusIcon::USB);
-        s_lastUsbConnected = usbConnected;
-    }
-
-    if (charging != s_lastCharging) {
-        if (charging) s_lockScreen->addStatusIcon(StatusIcon::CHARGING);
-        else s_lockScreen->removeStatusIcon(StatusIcon::CHARGING);
-        s_lastCharging = charging;
-    }
-
-    if (batteryPresent != s_lastBatteryPresent) {
-        s_lockScreen->setBatteryPercent(batteryPresent ? s_deps.power->getBatteryPercent() : -1);
-        s_lastBatteryPresent = batteryPresent;
-    } else if (batteryPresent) {
-        s_lockScreen->setBatteryPercent(s_deps.power->getBatteryPercent());
-    }
-
-    // WiFi status
     auto* wifi = hal::getWifiControllerInstance();
-    bool wifiConnected = wifi && wifi->isConnected();
-    if (wifiConnected != s_lastWifiConnected) {
-        if (wifiConnected) s_lockScreen->addStatusIcon(StatusIcon::WIFI);
-        else s_lockScreen->removeStatusIcon(StatusIcon::WIFI);
-        s_lastWifiConnected = wifiConnected;
-    }
+    const bool wifiConnected = wifi && wifi->isConnected();
 
-    // BLE status
     auto* ble = hal::getBluetoothControllerInstance();
-    bool bleEnabled = ble && ble->isEnabled();
-    if (bleEnabled != s_lastBleEnabled) {
-        if (bleEnabled) s_lockScreen->addStatusIcon(StatusIcon::BLE);
-        else s_lockScreen->removeStatusIcon(StatusIcon::BLE);
-        s_lastBleEnabled = bleEnabled;
-    }
+    const bool bleEnabled = ble && ble->isEnabled();
+
+    updateStatusIcon(StatusIcon::USB, usbConnected, s_lastUsbConnected);
+    updateStatusIcon(StatusIcon::CHARGING, charging, s_lastCharging);
+    updateStatusIcon(StatusIcon::WIFI, wifiConnected, s_lastWifiConnected);
+    updateStatusIcon(StatusIcon::BLE, bleEnabled, s_lastBleEnabled);
+
+    updateBatteryIndicator();
 }
 
 /**

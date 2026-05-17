@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cdc_core/IModule.h"
+#include "cdc_core/ModuleBase.h"
 
 namespace cdc::mod_nvsedit {
 
@@ -11,21 +11,16 @@ namespace cdc::mod_nvsedit {
  * Privileged tool: delete actions are disabled by default and require
  * FEATURE_NVS_EDIT=1 at build time.
  */
-class NvsEditModule : public cdc::core::IModule {
+class NvsEditModule : public cdc::core::ModuleBase {
 public:
-    // IService
-    const char* getName() const override { return "mod_nvsedit"; }
-    cdc::core::ServiceState getState() const override { return state_; }
+    NvsEditModule() : ModuleBase("mod_nvsedit") {}
+
+    // IService - init is module-specific; start/stop inherited from ModuleBase
     bool init() override;
-    bool start() override;
-    void stop() override;
 
     // IModule
     const char* getVersion() const override { return "1.0.0"; }
     uint8_t getMenuItems(cdc::core::ModuleMenuItem* items, uint8_t maxItems) override;
-
-private:
-    cdc::core::ServiceState state_ = cdc::core::ServiceState::UNINITIALIZED;
 };
 
 } // namespace cdc::mod_nvsedit

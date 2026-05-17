@@ -6,6 +6,7 @@
  */
 
 #include "cdc_views/T9InputView.h"
+#include "cdc_views/KeyCodes.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_ui/I18n.h"
@@ -207,7 +208,7 @@ void T9InputView::onTick(uint32_t nowMs) {
  */
 InputResult T9InputView::onKey(char key) {
     switch (key) {
-        case 'Y':  // Confirm
+        case KEY_YES:  // Confirm
             commitCharacter();
             if (onSave_) {
                 // Pop ourselves FIRST, then call callback
@@ -217,7 +218,7 @@ InputResult T9InputView::onKey(char key) {
             }
             return InputResult::CONSUMED;  // Already popped ourselves
 
-        case 'N':  // Backspace
+        case KEY_NO:  // Backspace
             backspace();
             return InputResult::CONSUMED;
 
@@ -236,7 +237,7 @@ InputResult T9InputView::onKey(char key) {
  * \return Input handling result for the view stack.
  */
 InputResult T9InputView::onLongPress(char key) {
-    if (key == 'N') {
+    if (key == KEY_NO) {
         // Clear all text
         text_[0] = '\0';
         len_ = 0;

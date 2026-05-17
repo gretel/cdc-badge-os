@@ -596,11 +596,11 @@ CONFIG_PARTITION_TABLE_MD5=y
 #
 
 #
-# CDC Badge v1.0 E-Paper Display (GDEY029T94)
+# Fill only EPD entries for single SPI displays (Good display/Waveshare)
 #
 
 #
-# Defaults configured for CDC Badge hardware
+# Mosi and Clock should be set for any epaper
 #
 CONFIG_EINK_SPI_MOSI=13
 CONFIG_EINK_SPI_CLK=12

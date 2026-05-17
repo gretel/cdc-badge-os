@@ -540,25 +540,6 @@ bool NvsEditModule::init() {
 }
 
 /**
- * \brief Starts the NVS editor module.
- * \return `true` when state transition is valid, otherwise `false`.
- */
-bool NvsEditModule::start() {
-    if (state_ != ServiceState::INITIALIZED && state_ != ServiceState::STOPPED) {
-        return false;
-    }
-    state_ = ServiceState::STARTED;
-    return true;
-}
-
-/**
- * \brief Stops the NVS editor module.
- */
-void NvsEditModule::stop() {
-    state_ = ServiceState::STOPPED;
-}
-
-/**
  * \brief Exposes NVS editor entry in the tools menu.
  * \param items Destination array for menu items.
  * \param maxItems Capacity of `items`.

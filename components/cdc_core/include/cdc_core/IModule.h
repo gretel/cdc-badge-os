@@ -10,7 +10,7 @@ namespace cdc::ui {
 namespace cdc::core {
 
 /**
- * Menu location for module registration
+ * \brief Menu location for module registration.
  */
 enum class MenuLocation : uint8_t {
     MAIN_MENU,       // Top-level main menu
@@ -22,7 +22,7 @@ enum class MenuLocation : uint8_t {
 };
 
 /**
- * Menu item registered by a module
+ * \brief Menu item registered by a module.
  */
 struct ModuleMenuItem {
     const char* label;              // Display label (use I18n for translation)
@@ -35,7 +35,7 @@ struct ModuleMenuItem {
 };
 
 /**
- * Lock screen context menu item registered by a module
+ * \brief Lock screen context menu item registered by a module.
  */
 struct LockScreenContextItem {
     const char* (*getLabel)();      // Dynamic label getter (for state-dependent text)
@@ -45,7 +45,7 @@ struct LockScreenContextItem {
 };
 
 /**
- * Module interface - extends IService with module-specific features
+ * \brief Module interface that extends IService with module-specific features.
  *
  * Modules are self-contained features (TOTP, FIDO2, Password, etc.)
  * that can register menu items, serial commands, and views.
@@ -69,15 +69,16 @@ public:
     };
 
     /**
-     * Get module version string
+     * \brief Returns the module version string.
+     * \return Pointer to a null-terminated version string.
      */
     virtual const char* getVersion() const = 0;
 
     /**
-     * Get module menu items
-     * @param items Output array to fill
-     * @param maxItems Maximum items to return
-     * @return Number of items written
+     * \brief Returns module menu items.
+     * \param items Output array to fill.
+     * \param maxItems Maximum items to return.
+     * \return Number of items written.
      */
     virtual uint8_t getMenuItems(ModuleMenuItem* items, uint8_t maxItems) {
         (void)items; (void)maxItems;
@@ -85,16 +86,16 @@ public:
     }
 
     /**
-     * Get module's entry view (main view when selected from menu)
-     * @return View instance or nullptr if no main view
+     * \brief Returns the module's entry view (main view when selected from menu).
+     * \return View instance or nullptr if no main view.
      */
     virtual ui::IView* getEntryView() { return nullptr; }
 
     /**
-     * Get module's lock screen context menu items
-     * @param items Output array to fill
-     * @param maxItems Maximum items to return
-     * @return Number of items written
+     * \brief Returns the module's lock screen context menu items.
+     * \param items Output array to fill.
+     * \param maxItems Maximum items to return.
+     * \return Number of items written.
      */
     virtual uint8_t getLockScreenContextItems(LockScreenContextItem* items, uint8_t maxItems) {
         (void)items; (void)maxItems;
@@ -102,38 +103,40 @@ public:
     }
 
     /**
-     * Called when device is unlocked
+     * \brief Called when device is unlocked.
      */
     virtual void onUnlock() {}
 
     /**
-     * Called when device is locked
+     * \brief Called when device is locked.
      */
     virtual void onLock() {}
 
     /**
-     * Called when USB is connected
+     * \brief Called when USB is connected.
      */
     virtual void onUsbConnect() {}
 
     /**
-     * Called when USB is disconnected
+     * \brief Called when USB is disconnected.
      */
     virtual void onUsbDisconnect() {}
 
     /**
-     * Called periodically (optional tick for background work)
-     * @param nowMs Current timestamp in milliseconds
+     * \brief Called periodically (optional tick for background work).
+     * \param nowMs Current timestamp in milliseconds.
      */
     virtual void onTick(uint32_t nowMs) { (void)nowMs; }
 
     /**
-     * Slot range assigned by module registry (from compile-time memory map)
+     * \brief Sets the slot range assigned by the module registry (from compile-time memory map).
+     * \param range Assigned slot range.
      */
     virtual void setSlotRange(const SlotRange& range) { (void)range; }
 
     /**
-     * Slot requirements for this module (from compile-time memory map)
+     * \brief Returns slot requirements for this module (from compile-time memory map).
+     * \return Slot request descriptor.
      */
     virtual SlotRequest getSlotRequest() const { return {}; }
 };

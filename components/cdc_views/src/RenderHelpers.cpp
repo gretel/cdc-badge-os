@@ -64,7 +64,8 @@ void drawFooterBar(Gdey029T94* gfx, uint16_t width, uint16_t height,
     if (!gfx) return;
     if (!force && !prefix && !hint) return;
 
-    gfx->fillRect(0, height - kFooterHeight, width, kFooterHeight, EPD_BLACK);
+    gfx->fillRect(0, height - FOOTER_HEIGHT, width, FOOTER_HEIGHT, EPD_BLACK);
+    gfx->setTextSize(1);
     gfx->setTextColor(EPD_WHITE);
     gfx->setCursor(4, height - 12);
 
@@ -93,11 +94,11 @@ void drawScrollIndicator(Gdey029T94* gfx, int x, int y, int listHeight,
     if (!gfx) return;
     if (totalItems <= visibleItems) return;
 
-    gfx->fillRect(x, y, kScrollIndicatorWidth, listHeight, EPD_WHITE);
+    gfx->fillRect(x, y, SCROLL_INDICATOR_WIDTH, listHeight, EPD_WHITE);
 
-    const int midX = x + (kScrollIndicatorWidth / 2);
+    const int midX = x + (SCROLL_INDICATOR_WIDTH / 2);
     const int leftX = x + 1;
-    const int rightX = x + kScrollIndicatorWidth - 1;
+    const int rightX = x + SCROLL_INDICATOR_WIDTH - 1;
 
     if (scrollPos > 0) {
         const int topY = y + 4;
@@ -122,7 +123,7 @@ void drawScrollIndicator(Gdey029T94* gfx, int x, int y, int listHeight,
     const int barHeight = listHeight - 24;
     if (barHeight <= 0) return;
 
-    const int barX = x + (kScrollIndicatorWidth / 2) - 2;
+    const int barX = x + (SCROLL_INDICATOR_WIDTH / 2) - 2;
     const int barY = y + 12;
     int thumbHeight = std::max(10, barHeight * static_cast<int>(visibleItems) /
                                      static_cast<int>(totalItems));

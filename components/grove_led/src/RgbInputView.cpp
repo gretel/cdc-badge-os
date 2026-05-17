@@ -5,6 +5,7 @@
  */
 
 #include "grove_led/RgbInputView.h"
+#include "cdc_views/KeyCodes.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_hal/IDisplay.h"
 #include "cdc_log.h"
@@ -148,7 +149,7 @@ ui::InputResult RgbInputView::onKey(char key) {
             nextField();
             return ui::InputResult::CONSUMED;
 
-        case 'N':  // Clear or cancel
+        case ui::KEY_NO:  // Clear or cancel
             if (digitPos_ > 0 ||
                 (currentField_ == Field::RED && r_ > 0) ||
                 (currentField_ == Field::GREEN && g_ > 0) ||
@@ -158,7 +159,7 @@ ui::InputResult RgbInputView::onKey(char key) {
             }
             return ui::InputResult::REQUEST_POP;
 
-        case 'Y':  // Confirm
+        case ui::KEY_YES:  // Confirm
             clampValues();
             LOG_I(TAG, "RGB confirmed: R=%d G=%d B=%d", r_, g_, b_);
             if (onConfirm_) {

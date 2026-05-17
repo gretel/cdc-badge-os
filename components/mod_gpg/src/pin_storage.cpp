@@ -1,4 +1,4 @@
-#include "pin_storage.h"
+#include "mod_gpg/pin_storage.h"
 #include "cdc_core/PinManager.h"
 
 void pin_storage_openpgp_init(void) {

@@ -23,6 +23,8 @@ namespace cdc::mod_fido2 {
 
 using namespace cdc::mod_fido2;
 
+static const char* TAG = "FIDO2";
+
 /** \brief Global FIDO2 runtime state. */
 
 static struct {
@@ -40,7 +42,7 @@ static void fido2_task(void* arg) {
     (void)arg;
     uint8_t packet[64];
 
-    LOG_I("FIDO2", "Processing task started");
+    LOG_I(TAG, "Processing task started");
 
     while (1) {
         // Process incoming packets and drain responses immediately to avoid overwriting
@@ -61,17 +63,17 @@ static void fido2_task(void* arg) {
                     uint8_t response[64];
                     if (ctaphid_get_response_packet(response)) {
                         if (!fido2_usb_write(response)) {
-                            LOG_W("FIDO2", "USB FIDO write failed");
+                            LOG_W(TAG, "USB FIDO write failed");
                             break;
                         }
-                        LOG_D("FIDO2", "Sent response packet");
+                        LOG_D(TAG, "Sent response packet");
                         inner_retry = 0;
                         vTaskDelay(pdMS_TO_TICKS(1));
                     }
                 } else {
                     inner_retry++;
                     if (inner_retry > 10) {  // Brief wait, then continue in outer loop
-                        LOG_D("FIDO2", "USB not ready, deferring to outer loop");
+                        LOG_D(TAG, "USB not ready, deferring to outer loop");
                         break;
                     }
                     vTaskDelay(pdMS_TO_TICKS(5));
@@ -91,10 +93,10 @@ static void fido2_task(void* arg) {
                 uint8_t response[64];
                 if (ctaphid_get_response_packet(response)) {
                     if (!fido2_usb_write(response)) {
-                        LOG_W("FIDO2", "USB FIDO write failed (outer)");
+                        LOG_W(TAG, "USB FIDO write failed (outer)");
                         break;
                     }
-                    LOG_D("FIDO2", "Sent response packet (outer)");
+                    LOG_D(TAG, "Sent response packet (outer)");
                     retry_count = 0;  // Reset retry counter on success
                     vTaskDelay(pdMS_TO_TICKS(1));
                 }
@@ -102,7 +104,7 @@ static void fido2_task(void* arg) {
                 // Wait for USB to be ready instead of giving up
                 retry_count++;
                 if (retry_count > 100) {  // ~1 second timeout
-                    LOG_W("FIDO2", "USB not ready timeout, aborting response");
+                    LOG_W(TAG, "USB not ready timeout, aborting response");
                     break;
                 }
                 vTaskDelay(pdMS_TO_TICKS(10));
@@ -122,29 +124,29 @@ static void fido2_task(void* arg) {
  * \return `true` on success, otherwise `false`.
  */
 bool fido2_init(void) {
-    LOG_I("FIDO2", "Initializing...");
+    LOG_I(TAG, "Initializing...");
 
     memset(&g_fido2, 0, sizeof(g_fido2));
 
     // Initialize storage layer
     uint8_t cred_count = fido2_storage_init();
-    LOG_I("FIDO2", "Storage initialized, %d credentials", cred_count);
+    LOG_I(TAG, "Storage initialized, %d credentials", cred_count);
 
     // Initialize CTAP2 protocol handler
     if (!ctap2_init()) {
-        LOG_E("FIDO2", "CTAP2 init failed");
+        LOG_E(TAG, "CTAP2 init failed");
         return false;
     }
 
     // Initialize CTAPHID transport
     if (!ctaphid_init()) {
-        LOG_E("FIDO2", "CTAPHID init failed");
+        LOG_E(TAG, "CTAPHID init failed");
         return false;
     }
 
     // Initialize U2F attestation certificate
     if (!u2f_init_attestation()) {
-        LOG_W("FIDO2", "U2F attestation init failed (non-fatal)");
+        LOG_W(TAG, "U2F attestation init failed (non-fatal)");
         // Continue anyway - FIDO2 will still work, U2F might not
     }
 
@@ -153,7 +155,7 @@ bool fido2_init(void) {
                 configMAX_PRIORITIES - 2, &g_fido2.task_handle);
 
     g_fido2.initialized = true;
-    LOG_I("FIDO2", "Initialized");
+    LOG_I(TAG, "Initialized");
     return true;
 }
 
@@ -181,7 +183,7 @@ fido2_user_presence_result_t fido2_request_user_presence(
         return g_fido2.user_presence_cb(rp_id, action, user_name);
     }
     // No callback set - auto-approve (unsafe, but allows testing)
-    LOG_W("FIDO2", "No user presence callback - auto-approving");
+    LOG_W(TAG, "No user presence callback - auto-approving");
     return FIDO2_UP_APPROVED;
 }
 
@@ -192,7 +194,7 @@ fido2_user_presence_result_t fido2_request_user_presence(
 void fido2_set_pin_verified(bool verified) {
     g_fido2.pin_verified = verified;
     if (verified) {
-        LOG_I("FIDO2", "PIN verified via ClientPIN - device PIN will be skipped");
+        LOG_I(TAG, "PIN verified via ClientPIN - device PIN will be skipped");
     }
 }
 
@@ -261,7 +263,7 @@ bool fido2_delete_credential(uint8_t slot) {
  * \return `true` on success.
  */
 bool fido2_factory_reset(void) {
-    LOG_W("FIDO2", "Factory reset requested");
+    LOG_W(TAG, "Factory reset requested");
 
     // Delete all credentials
     for (uint8_t slot = 0; slot < FIDO2_MAX_CREDENTIALS; slot++) {
@@ -270,7 +272,7 @@ bool fido2_factory_reset(void) {
         }
     }
 
-    LOG_I("FIDO2", "Factory reset complete");
+    LOG_I(TAG, "Factory reset complete");
     return true;
 }
 

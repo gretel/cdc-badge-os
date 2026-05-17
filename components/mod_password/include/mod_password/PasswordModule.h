@@ -1,15 +1,12 @@
 #pragma once
 
-#include "cdc_core/IModule.h"
+#include "cdc_core/ModuleBase.h"
 
 namespace cdc::mod_password {
 
-class PasswordModule : public core::IModule {
+class PasswordModule : public core::ModuleBase {
 public:
-    const char* getName() const override { return "mod_password"; }
-    core::ServiceState getState() const override { return state_; }
     bool init() override;
-    bool start() override;
     void stop() override;
 
     const char* getVersion() const override { return "1.0"; }
@@ -20,8 +17,7 @@ public:
     static PasswordModule& instance();
 
 private:
-    PasswordModule() = default;
-    core::ServiceState state_ = core::ServiceState::UNINITIALIZED;
+    PasswordModule() : ModuleBase("mod_password") {}
     core::IModule::SlotRange slotRange_ = {};
 };
 

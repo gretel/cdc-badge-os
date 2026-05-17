@@ -50,6 +50,17 @@ static constexpr uint16_t CHARGE_CURRENT_MIN  = 64;
 static constexpr uint16_t CHARGE_CURRENT_MAX  = 1024;  // Critical: max for 1200mAh LiPo
 
 /**
+ * \brief Battery voltage thresholds for state estimation.
+ * LiPo battery characteristics (3.7V nominal, 4.2V max).
+ */
+static constexpr uint16_t BATTERY_MIN_MV   = 2800;  // Minimum usable voltage
+static constexpr uint16_t BATTERY_EMPTY_MV = 3200;  // 0% calculation point
+static constexpr uint16_t BATTERY_FULL_MV  = 4200;  // 100% calculation point
+static constexpr uint16_t BATTERY_MAX_MV   = 4250;  // Maximum safe voltage
+static constexpr uint16_t BATTERY_USB_PASSTHRU_MIN_MV = 4000;  // No-battery USB-passthrough range
+static constexpr uint16_t BATTERY_USB_PASSTHRU_MAX_MV = BATTERY_MAX_MV;
+
+/**
  * \brief Charger IRQ flag set by ISR and consumed in `update()`.
  */
 static volatile bool charger_irq_pending = false;
@@ -352,7 +363,7 @@ void BQ25895Power::readChargerStatus() {
             // No battery: ICHGR=0, VBAT tracks VSYS (around 4.1-4.2V from USB)
             // Full battery: ICHGR may show small trickle or 0, VBAT stable at 4.15-4.2V
             // Best indicator: if no charge current and voltage exactly at USB-derived level
-            if (!hasChargeCurrent && vbat >= 4000 && vbat <= 4250) {
+            if (!hasChargeCurrent && vbat >= BATTERY_USB_PASSTHRU_MIN_MV && vbat <= BATTERY_USB_PASSTHRU_MAX_MV) {
                 // Likely no battery - USB passthrough gives ~4.1-4.2V on BATV
                 cachedBatteryPresent_ = false;
             } else {
@@ -360,7 +371,7 @@ void BQ25895Power::readChargerStatus() {
             }
         } else {
             // Not charging, not USB - check if voltage is reasonable for a battery
-            cachedBatteryPresent_ = (vbat >= 2800 && vbat <= 4250);
+            cachedBatteryPresent_ = (vbat >= BATTERY_MIN_MV && vbat <= BATTERY_MAX_MV);
         }
 
         // Correct "charge done" to "not charging" if no battery connected
@@ -460,11 +471,12 @@ uint8_t BQ25895Power::getBatteryPercent() const {
     uint16_t mv = getBatteryVoltage();
     if (mv == 0) return 0;
 
-    // Linear approximation: 3200mV=0%, 4200mV=100%
-    if (mv <= 3200) return 0;
-    if (mv >= 4200) return 100;
+    // Linear approximation: BATTERY_EMPTY_MV=0%, BATTERY_FULL_MV=100%
+    if (mv <= BATTERY_EMPTY_MV) return 0;
+    if (mv >= BATTERY_FULL_MV) return 100;
 
-    return (uint8_t)(((uint32_t)(mv - 3200) * 100) / 1000);
+    return (uint8_t)(((uint32_t)(mv - BATTERY_EMPTY_MV) * 100) /
+                     (BATTERY_FULL_MV - BATTERY_EMPTY_MV));
 }
 
 /**

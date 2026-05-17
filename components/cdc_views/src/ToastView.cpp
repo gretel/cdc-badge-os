@@ -5,6 +5,7 @@
  */
 
 #include "cdc_views/ToastView.h"
+#include "cdc_views/KeyCodes.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_hal/IDisplay.h"
@@ -59,7 +60,7 @@ void ToastView::onTick(uint32_t nowMs) {
  */
 InputResult ToastView::onKey(char key) {
     // Any Y or N key dismisses the toast (if dismissible)
-    if (dismissible_ && (key == 'Y' || key == 'N')) {
+    if (dismissible_ && (key == KEY_YES || key == KEY_NO)) {
         expired_ = true;
         ViewStack::instance().hideModal();
         return InputResult::CONSUMED;
@@ -151,9 +152,34 @@ void ToastView::render(bool partial) {
         textX = boxX + 40;  // Shift text right when icon present
     }
 
-    // Draw message text
-    gfx->setCursor(textX, textY);
-    gfx->print(message_);
+    // Draw message text. Adafruit-GFX print() resets cursor_x to 0 on '\n',
+    // which would shoot the second line to the left edge of the screen. Render
+    // each line manually so it stays inside the modal frame, and shift the
+    // first line up to keep the whole block vertically centred.
+    constexpr int kLineHeight = 10;  // size-1 font (~8px) + 2px spacing
+
+    size_t lineCount = 1;
+    for (const char* p = message_; *p; ++p) {
+        if (*p == '\n') ++lineCount;
+    }
+
+    int blockY = textY - static_cast<int>((lineCount - 1) * kLineHeight / 2);
+    const char* lineStart = message_;
+    int lineY = blockY;
+    for (const char* p = message_;; ++p) {
+        if (*p == '\n' || *p == '\0') {
+            char lineBuf[96];
+            size_t len = static_cast<size_t>(p - lineStart);
+            if (len >= sizeof(lineBuf)) len = sizeof(lineBuf) - 1;
+            memcpy(lineBuf, lineStart, len);
+            lineBuf[len] = '\0';
+            gfx->setCursor(textX, lineY);
+            gfx->print(lineBuf);
+            if (*p == '\0') break;
+            lineStart = p + 1;
+            lineY += kLineHeight;
+        }
+    }
 
     dirty_ = false;
 }

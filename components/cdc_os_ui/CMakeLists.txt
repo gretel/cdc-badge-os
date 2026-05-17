@@ -21,6 +21,7 @@ idf_component_register(
         cdc_log
         cdc_ui
         cdc_views
+        mod_fido2
         serial_cmd
         Adafruit-GFX
         nvs_flash

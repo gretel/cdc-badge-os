@@ -5,12 +5,54 @@
 #include <mbedtls/md.h>
 #include <cstring>
 #include <ctime>
-#include <memory>
-#include <new>
 
 static const char* TAG = "TOTP";
 
 namespace cdc::mod_totp {
+
+/**
+ * \brief Allowed TOTP digit count range (RFC 6238 typical 6-8, extended to 10).
+ */
+static constexpr uint8_t TOTP_DIGITS_MIN = 6;
+static constexpr uint8_t TOTP_DIGITS_MAX = 10;
+
+/**
+ * \brief Allowed TOTP period range in seconds.
+ */
+static constexpr uint32_t TOTP_PERIOD_MIN = 15;
+static constexpr uint32_t TOTP_PERIOD_MAX = 300;
+
+/**
+ * \brief Validates TOTP account parameters and clamps to defaults when invalid.
+ * \param digits In/out digit count, replaced by default if out of range.
+ * \param period In/out period seconds, replaced by default if out of range.
+ * \param algorithm In/out algorithm code, replaced by SHA1 if unsupported.
+ * \return `true` if parameters are valid (after clamping).
+ */
+static bool validateTotpParams(uint8_t& digits, uint32_t& period, uint8_t& algorithm) {
+    if (digits == 0) {
+        digits = TotpStore::DEFAULT_DIGITS;
+    } else if (digits < TOTP_DIGITS_MIN || digits > TOTP_DIGITS_MAX) {
+        LOG_W(TAG, "Invalid TOTP digits %u, expected %u-%u",
+              digits, TOTP_DIGITS_MIN, TOTP_DIGITS_MAX);
+        return false;
+    }
+
+    if (period == 0) {
+        period = TotpStore::DEFAULT_PERIOD;
+    } else if (period < TOTP_PERIOD_MIN || period > TOTP_PERIOD_MAX) {
+        LOG_W(TAG, "Invalid TOTP period %lu, expected %u-%u",
+              static_cast<unsigned long>(period), TOTP_PERIOD_MIN, TOTP_PERIOD_MAX);
+        return false;
+    }
+
+    if (algorithm > static_cast<uint8_t>(TotpAlgorithm::SHA512)) {
+        LOG_W(TAG, "Invalid TOTP algorithm %u", algorithm);
+        return false;
+    }
+
+    return true;
+}
 
 #pragma pack(push, 1)
 struct TotpPayload {
@@ -87,60 +129,10 @@ TotpStore& TotpStore::instance() {
 
 /**
  * \brief Configures logical-to-physical slot mapping for TOTP accounts.
- * \param start First RMEM slot.
- * \param end Last RMEM slot.
- * \param moduleId Owning module id.
+ * \param range Slot range descriptor (RMEM fields are consumed).
  */
-void TotpStore::setSlotRange(uint16_t start, uint16_t end, uint8_t moduleId) {
-    if (start > end || start == 0 || end == 0) {
-        hasSlotRange_ = false;
-        rmemStart_ = 0;
-        rmemEnd_ = 0;
-        moduleId_ = 0;
-        return;
-    }
-    hasSlotRange_ = true;
-    rmemStart_ = start;
-    rmemEnd_ = end;
-    moduleId_ = moduleId;
-}
-
-/**
- * \brief Returns account capacity derived from slot range.
- * \return Number of logical slots.
- */
-uint16_t TotpStore::capacity() const {
-    if (!hasSlotRange_) return 0;
-    return static_cast<uint16_t>(rmemEnd_ - rmemStart_ + 1);
-}
-
-/**
- * \brief Converts logical account index to physical slot.
- * \param logicalIndex Logical index.
- * \param slotOut Output physical slot.
- * \return `true` on valid mapping.
- */
-bool TotpStore::toPhysicalSlot(uint16_t logicalIndex, uint16_t* slotOut) const {
-    if (!slotOut) return false;
-    if (!hasSlotRange_) return false;
-    uint32_t slot = static_cast<uint32_t>(rmemStart_) + logicalIndex;
-    if (slot > rmemEnd_) return false;
-    *slotOut = static_cast<uint16_t>(slot);
-    return true;
-}
-
-/**
- * \brief Converts physical slot to logical account index.
- * \param slot Physical slot.
- * \param logicalIndexOut Output logical index.
- * \return `true` on valid mapping.
- */
-bool TotpStore::toLogicalSlot(uint16_t slot, uint16_t* logicalIndexOut) const {
-    if (!logicalIndexOut) return false;
-    if (!hasSlotRange_) return false;
-    if (slot < rmemStart_ || slot > rmemEnd_) return false;
-    *logicalIndexOut = static_cast<uint16_t>(slot - rmemStart_);
-    return true;
+void TotpStore::setSlotRange(const cdc::core::IModule::SlotRange& range) {
+    slots_.setSlotRange(range);
 }
 
 /**
@@ -151,7 +143,7 @@ bool TotpStore::toLogicalSlot(uint16_t slot, uint16_t* logicalIndexOut) const {
  */
 bool TotpStore::readAccount(uint16_t slot, TotpAccount* out) {
     if (!out) return false;
-    if (!hasSlotRange_) return false;
+    if (!slots_.hasSlotRange()) return false;
     uint16_t physSlot = 0;
     if (!toPhysicalSlot(slot, &physSlot)) return false;
 
@@ -167,7 +159,7 @@ bool TotpStore::readAccount(uint16_t slot, TotpAccount* out) {
         return false;
     }
 
-    if (header.moduleId != moduleId_) {
+    if (header.moduleId != slots_.moduleId()) {
         return false;
     }
 
@@ -188,53 +180,6 @@ bool TotpStore::readAccount(uint16_t slot, TotpAccount* out) {
 }
 
 /**
- * \brief Finds first free physical slot in configured range.
- * \param slotOut Output physical slot.
- * \return `true` if free slot was found.
- */
-bool TotpStore::findFreeSlot(uint16_t* slotOut) {
-    if (!slotOut) return false;
-    if (!hasSlotRange_) return false;
-
-    uint16_t cap = capacity();
-    if (cap == 0) return false;
-    auto used = std::unique_ptr<bool[]>(new (std::nothrow) bool[cap]);
-    if (!used) return false;
-    memset(used.get(), 0, cap * sizeof(bool));
-    struct Ctx {
-        bool* used;
-        uint16_t base;
-        uint16_t cap;
-    } ctx = { used.get(), 0, cap };
-
-    auto cb = [](uint16_t slot, const cdc::core::TropicStorage::CacheEntry&, void* user) {
-        auto* c = static_cast<Ctx*>(user);
-        if (slot < c->base) return;
-        uint16_t idx = slot - c->base;
-        if (idx < c->cap) {
-            c->used[idx] = true;
-        }
-    };
-
-    ctx.base = rmemStart_;
-    cdc::core::TropicStorage::instance().forEachSlot(
-        moduleId_, rmemStart_, rmemEnd_, cb, &ctx);
-
-    for (uint16_t i = 0; i < cap; i++) {
-        if (!used[i]) {
-            uint16_t candidate = static_cast<uint16_t>(rmemStart_ + i);
-            if (candidate <= rmemEnd_) {
-                *slotOut = candidate;
-                return true;
-            }
-            return false;
-        }
-    }
-
-    return false;
-}
-
-/**
  * \brief Adds a new TOTP account from Base32 secret.
  * \param name Account label.
  * \param issuer Optional issuer text.
@@ -247,10 +192,14 @@ bool TotpStore::findFreeSlot(uint16_t* slotOut) {
 bool TotpStore::addAccount(const char* name, const char* issuer, const char* secretBase32,
                            uint8_t digits, uint32_t period, uint8_t algorithm) {
     if (!name || !secretBase32) return false;
-    if (!hasSlotRange_) return false;
+    if (!slots_.hasSlotRange()) return false;
+
+    if (!validateTotpParams(digits, period, algorithm)) {
+        return false;
+    }
 
     uint16_t slot = 0;
-    if (!findFreeSlot(&slot)) {
+    if (!slots_.findFreeSlot(&slot)) {
         LOG_W(TAG, "No free TOTP slots");
         return false;
     }
@@ -278,7 +227,7 @@ bool TotpStore::addAccount(const char* name, const char* issuer, const char* sec
 
     auto res = se->rmemWriteWithHeader(
         slot,
-        moduleId_,
+        slots_.moduleId(),
         name,
         0,
         reinterpret_cast<const uint8_t*>(&payload),
@@ -290,7 +239,7 @@ bool TotpStore::addAccount(const char* name, const char* issuer, const char* sec
         return false;
     }
 
-    cdc::core::TropicStorage::instance().writeSlot(moduleId_, slot, name, 0);
+    cdc::core::TropicStorage::instance().writeSlot(slots_.moduleId(), slot, name, 0);
 
     return true;
 }
@@ -309,7 +258,10 @@ bool TotpStore::addAccount(const char* name, const char* issuer, const char* sec
 bool TotpStore::updateAccount(uint16_t slot, const char* name, const char* issuer, const char* secretBase32,
                               uint8_t digits, uint32_t period, uint8_t algorithm) {
     if (!name || !secretBase32) return false;
-    if (!hasSlotRange_) return false;
+    if (!slots_.hasSlotRange()) return false;
+    if (!validateTotpParams(digits, period, algorithm)) {
+        return false;
+    }
     uint16_t physSlot = 0;
     if (!toPhysicalSlot(slot, &physSlot)) return false;
 
@@ -336,7 +288,7 @@ bool TotpStore::updateAccount(uint16_t slot, const char* name, const char* issue
 
     auto res = se->rmemWriteWithHeader(
         physSlot,
-        moduleId_,
+        slots_.moduleId(),
         name,
         0,
         reinterpret_cast<const uint8_t*>(&payload),
@@ -348,7 +300,7 @@ bool TotpStore::updateAccount(uint16_t slot, const char* name, const char* issue
         return false;
     }
 
-    cdc::core::TropicStorage::instance().writeSlot(moduleId_, physSlot, name, 0);
+    cdc::core::TropicStorage::instance().writeSlot(slots_.moduleId(), physSlot, name, 0);
 
     return true;
 }
@@ -359,7 +311,7 @@ bool TotpStore::updateAccount(uint16_t slot, const char* name, const char* issue
  * \return `true` on successful erase.
  */
 bool TotpStore::deleteAccount(uint16_t slot) {
-    if (!hasSlotRange_) return false;
+    if (!slots_.hasSlotRange()) return false;
     uint16_t physSlot = 0;
     if (!toPhysicalSlot(slot, &physSlot)) return false;
     auto* se = cdc::hal::getSecureElementInstance();
@@ -370,7 +322,7 @@ bool TotpStore::deleteAccount(uint16_t slot) {
         return false;
     }
 
-    cdc::core::TropicStorage::instance().eraseSlot(moduleId_, physSlot);
+    cdc::core::TropicStorage::instance().eraseSlot(slots_.moduleId(), physSlot);
 
     return true;
 }

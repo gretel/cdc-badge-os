@@ -14,4 +14,10 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
     const char* user_name
 );
 
+/**
+ * \brief Forcibly denies any in-flight user-presence prompt.
+ * \return true if a prompt was active and got denied, false otherwise.
+ */
+bool fido2_ui_abort_prompt();
+
 } // namespace cdc::mod_fido2

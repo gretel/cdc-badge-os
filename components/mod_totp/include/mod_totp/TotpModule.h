@@ -1,15 +1,12 @@
 #pragma once
 
-#include "cdc_core/IModule.h"
+#include "cdc_core/ModuleBase.h"
 
 namespace cdc::mod_totp {
 
-class TotpModule : public core::IModule {
+class TotpModule : public core::ModuleBase {
 public:
-    const char* getName() const override { return "mod_totp"; }
-    core::ServiceState getState() const override { return state_; }
     bool init() override;
-    bool start() override;
     void stop() override;
 
     const char* getVersion() const override { return "1.0"; }
@@ -20,8 +17,7 @@ public:
     static TotpModule& instance();
 
 private:
-    TotpModule() = default;
-    core::ServiceState state_ = core::ServiceState::UNINITIALIZED;
+    TotpModule() : ModuleBase("mod_totp") {}
     core::IModule::SlotRange slotRange_ = {};
 };
 

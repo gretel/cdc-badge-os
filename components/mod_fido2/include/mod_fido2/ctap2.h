@@ -83,9 +83,129 @@ extern "C" {
 // CTAP2 Algorithms
 // ============================================================================
 
-#define COSE_ALG_ES256  -7     // ECDSA with SHA-256 (P-256)
-#define COSE_ALG_EDDSA  -8     // EdDSA (Ed25519)
-#define COSE_ALG_RS256  -257   // RSASSA-PKCS1-v1_5 with SHA-256
+#define COSE_ALG_ES256              -7     // ECDSA with SHA-256 (P-256)
+#define COSE_ALG_EDDSA              -8     // EdDSA (Ed25519)
+#define COSE_ALG_RS256              -257   // RSASSA-PKCS1-v1_5 with SHA-256
+#define COSE_ALG_ECDH_ES_HKDF_256   -25    // ECDH-ES + HKDF-256 (RFC 8152)
+
+// ============================================================================
+// COSE Key Constants (RFC 8152 / RFC 8037)
+// See: https://datatracker.ietf.org/doc/html/rfc8152
+//      https://www.iana.org/assignments/cose/cose.xhtml
+// ============================================================================
+
+// COSE Key Common Parameter labels (negative values are curve-specific labels)
+#define COSE_KEY_LABEL_KTY          1      // Key type
+#define COSE_KEY_LABEL_KID          2      // Key identifier
+#define COSE_KEY_LABEL_ALG          3      // Algorithm
+#define COSE_KEY_LABEL_OPS          4      // Key operations
+#define COSE_KEY_LABEL_BASE_IV      5      // Base IV
+#define COSE_KEY_LABEL_CRV          -1     // Curve (EC2/OKP)
+#define COSE_KEY_LABEL_X            -2     // X coordinate (EC2) / public key (OKP)
+#define COSE_KEY_LABEL_Y            -3     // Y coordinate (EC2)
+#define COSE_KEY_LABEL_D            -4     // Private key
+
+// COSE Key Type (kty) values
+#define COSE_KEY_TYPE_OKP           1      // Octet Key Pair (Ed25519, X25519)
+#define COSE_KEY_TYPE_EC2           2      // Elliptic Curve with x/y coordinates
+#define COSE_KEY_TYPE_SYMMETRIC     4      // Symmetric key
+
+// COSE Elliptic Curves (crv) values
+#define COSE_CRV_P256               1      // NIST P-256 (secp256r1)
+#define COSE_CRV_P384               2      // NIST P-384
+#define COSE_CRV_P521               3      // NIST P-521
+#define COSE_CRV_X25519             4      // X25519 ECDH
+#define COSE_CRV_X448               5      // X448 ECDH
+#define COSE_CRV_ED25519            6      // Ed25519 EdDSA
+#define COSE_CRV_ED448              7      // Ed448 EdDSA
+
+// ============================================================================
+// CTAP2 CBOR Map Keys (CTAP 2.1 Specification)
+// See: https://fidoalliance.org/specs/fido-v2.1-rd-20191217/fido-client-to-authenticator-protocol-v2.1-rd-20191217.html
+// ============================================================================
+
+// authenticatorGetInfo response keys (Section 6.4)
+#define CTAP2_INFO_VERSIONS                 0x01
+#define CTAP2_INFO_EXTENSIONS               0x02
+#define CTAP2_INFO_AAGUID                   0x03
+#define CTAP2_INFO_OPTIONS                  0x04
+#define CTAP2_INFO_MAX_MSG_SIZE             0x05
+#define CTAP2_INFO_PIN_UV_AUTH_PROTOCOLS    0x06
+#define CTAP2_INFO_MAX_CRED_COUNT_IN_LIST   0x07
+#define CTAP2_INFO_MAX_CRED_ID_LENGTH       0x08
+#define CTAP2_INFO_TRANSPORTS               0x09
+#define CTAP2_INFO_ALGORITHMS               0x0A
+
+// authenticatorMakeCredential parameter keys (Section 6.1)
+#define CTAP2_MC_CLIENT_DATA_HASH           0x01
+#define CTAP2_MC_RP                         0x02
+#define CTAP2_MC_USER                       0x03
+#define CTAP2_MC_PUB_KEY_CRED_PARAMS        0x04
+#define CTAP2_MC_EXCLUDE_LIST               0x05
+#define CTAP2_MC_EXTENSIONS                 0x06
+#define CTAP2_MC_OPTIONS                    0x07
+#define CTAP2_MC_PIN_UV_AUTH_PARAM          0x08
+#define CTAP2_MC_PIN_UV_AUTH_PROTOCOL       0x09
+
+// authenticatorMakeCredential response keys (Section 6.1)
+#define CTAP2_MC_RESP_FMT                   0x01
+#define CTAP2_MC_RESP_AUTH_DATA             0x02
+#define CTAP2_MC_RESP_ATT_STMT              0x03
+
+// authenticatorGetAssertion parameter keys (Section 6.2)
+#define CTAP2_GA_RP_ID                      0x01
+#define CTAP2_GA_CLIENT_DATA_HASH           0x02
+#define CTAP2_GA_ALLOW_LIST                 0x03
+#define CTAP2_GA_EXTENSIONS                 0x04
+#define CTAP2_GA_OPTIONS                    0x05
+#define CTAP2_GA_PIN_UV_AUTH_PARAM          0x06
+#define CTAP2_GA_PIN_UV_AUTH_PROTOCOL       0x07
+
+// authenticatorGetAssertion response keys (Section 6.2)
+#define CTAP2_GA_RESP_CREDENTIAL            0x01
+#define CTAP2_GA_RESP_AUTH_DATA             0x02
+#define CTAP2_GA_RESP_SIGNATURE             0x03
+#define CTAP2_GA_RESP_USER                  0x04
+#define CTAP2_GA_RESP_NUMBER_OF_CREDS       0x05
+
+// authenticatorClientPIN parameter keys (Section 6.5)
+#define CTAP2_PIN_PROTOCOL                  0x01
+#define CTAP2_PIN_SUBCOMMAND                0x02
+#define CTAP2_PIN_KEY_AGREEMENT             0x03
+#define CTAP2_PIN_AUTH                      0x04
+#define CTAP2_PIN_NEW_PIN_ENC               0x05
+#define CTAP2_PIN_HASH_ENC                  0x06
+#define CTAP2_PIN_PERMISSIONS               0x09
+#define CTAP2_PIN_PERMISSIONS_RPID          0x0A
+
+// authenticatorClientPIN response keys (Section 6.5)
+#define CTAP2_PIN_RESP_KEY_AGREEMENT        0x01
+#define CTAP2_PIN_RESP_PIN_TOKEN            0x02
+#define CTAP2_PIN_RESP_PIN_RETRIES          0x03
+#define CTAP2_PIN_RESP_POWER_CYCLE_STATE    0x04
+#define CTAP2_PIN_RESP_UV_RETRIES           0x05
+
+// authenticatorCredentialManagement parameter keys (Section 6.8)
+#define CTAP2_CM_SUBCOMMAND                 0x01
+#define CTAP2_CM_SUBCOMMAND_PARAMS          0x02
+#define CTAP2_CM_PIN_UV_AUTH_PROTOCOL       0x03
+#define CTAP2_CM_PIN_UV_AUTH_PARAM          0x04
+
+// authenticatorCredentialManagement subcommand parameter keys
+#define CTAP2_CM_SUB_RP_ID_HASH             0x01
+#define CTAP2_CM_SUB_CREDENTIAL_ID          0x02
+
+// authenticatorCredentialManagement response keys (Section 6.8)
+#define CTAP2_CM_RESP_EXISTING_CRED_COUNT   0x01
+#define CTAP2_CM_RESP_REMAINING_CRED_COUNT  0x02
+#define CTAP2_CM_RESP_RP                    0x03
+#define CTAP2_CM_RESP_RP_ID_HASH            0x04
+#define CTAP2_CM_RESP_TOTAL_RPS             0x05
+#define CTAP2_CM_RESP_USER                  0x06
+#define CTAP2_CM_RESP_CREDENTIAL_ID         0x07
+#define CTAP2_CM_RESP_PUBLIC_KEY            0x08
+#define CTAP2_CM_RESP_TOTAL_CREDENTIALS     0x09
+#define CTAP2_CM_RESP_CRED_PROTECT          0x0A
 
 // ============================================================================
 // Processing Functions
@@ -120,6 +240,18 @@ void ctap2_send_keepalive(uint8_t status);
  * Cancel any pending operation.
  */
 void ctap2_cancel(void);
+
+/**
+ * \brief Clears the cancel flag. Called when a new CTAPHID channel is opened
+ *        so a cancel from a previous channel doesn't poison responses on the
+ *        new one (notably the INIT response itself).
+ */
+void ctap2_clear_cancel(void);
+
+/**
+ * \brief Returns true if the current CTAP2 operation has been cancelled.
+ */
+bool ctap2_is_cancelled(void);
 
 // ============================================================================
 // Individual Command Handlers

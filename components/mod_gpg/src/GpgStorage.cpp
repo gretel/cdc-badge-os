@@ -65,6 +65,56 @@ struct DecKeyStorage {
 
 static_assert(sizeof(DecKeyStorage) == TOTAL_SIZE, "DecKeyStorage size mismatch");
 
+namespace {
+
+/**
+ * \brief RAII wrapper around `mbedtls_gcm_context`.
+ *
+ * Ensures `mbedtls_gcm_init()` is paired with `mbedtls_gcm_free()` on
+ * scope exit, removing the need for `goto cleanup` constructs.
+ */
+class GcmContext {
+public:
+    /** \brief Initializes the underlying mbedTLS GCM context. */
+    GcmContext() { mbedtls_gcm_init(&ctx_); }
+
+    /** \brief Releases mbedTLS GCM resources. */
+    ~GcmContext() { mbedtls_gcm_free(&ctx_); }
+
+    GcmContext(const GcmContext&) = delete;
+    GcmContext& operator=(const GcmContext&) = delete;
+    GcmContext(GcmContext&&) = delete;
+    GcmContext& operator=(GcmContext&&) = delete;
+
+    /** \brief Returns mutable pointer to the wrapped mbedTLS context. */
+    mbedtls_gcm_context* get() { return &ctx_; }
+
+private:
+    mbedtls_gcm_context ctx_;
+};
+
+/**
+ * \brief Securely zeroizes a fixed-size buffer.
+ * \tparam N Buffer length in bytes.
+ * \param buf Buffer to wipe.
+ */
+template <size_t N>
+inline void secureWipe(uint8_t (&buf)[N]) {
+    mbedtls_platform_zeroize(buf, N);
+}
+
+/**
+ * \brief Securely zeroizes a typed object.
+ * \tparam T Object type.
+ * \param obj Object reference to wipe.
+ */
+template <typename T>
+inline void secureWipeObject(T& obj) {
+    mbedtls_platform_zeroize(&obj, sizeof(obj));
+}
+
+} // namespace
+
 static struct {
     bool ready = false;
     uint16_t eccStart = 0;
@@ -252,72 +302,64 @@ bool gpg_storage_save_dec_privkey(const uint8_t* privkey, const char* pin) {
         return false;
     }
 
-    // Derive encryption key from PIN
+    // Derive encryption key from PIN. Wiped on scope exit via secureWipe().
     uint8_t enc_key[32];
     if (!derive_key_from_pin(pin, enc_key)) {
         LOG_E(TAG, "Failed to derive encryption key");
         return false;
     }
 
-    // Prepare storage structure
+    // Prepare storage structure (wiped on scope exit).
     DecKeyStorage storage = {};
     memcpy(storage.magic, DEC_KEY_MAGIC, MAGIC_SIZE);
 
-    // Calculate R-Memory slot early to avoid goto crossing initialization
-    uint16_t rmem_slot = s_storage.rmemStart + RMEM_SLOT_DEC_KEY;
+    const uint16_t rmem_slot = s_storage.rmemStart + RMEM_SLOT_DEC_KEY;
 
     // Generate random nonce
     if (!se->getRandom(storage.nonce, NONCE_SIZE)) {
         esp_fill_random(storage.nonce, NONCE_SIZE);
     }
 
-    // Encrypt private key with AES-256-GCM
-    mbedtls_gcm_context gcm;
-    mbedtls_gcm_init(&gcm);
-
+    // RAII-managed GCM context: mbedtls_gcm_free() runs automatically.
+    GcmContext gcm;
     bool success = false;
 
-    int ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, enc_key, 256);
-    if (ret != 0) {
+    int ret = mbedtls_gcm_setkey(gcm.get(), MBEDTLS_CIPHER_ID_AES, enc_key, 256);
+    if (ret == 0) {
+        ret = mbedtls_gcm_crypt_and_tag(
+            gcm.get(),
+            MBEDTLS_GCM_ENCRYPT,
+            PRIVKEY_SIZE,
+            storage.nonce, NONCE_SIZE,
+            storage.magic, MAGIC_SIZE,  // AAD = magic bytes
+            privkey,
+            storage.encrypted,
+            TAG_SIZE,
+            storage.tag
+        );
+        if (ret != 0) {
+            LOG_E(TAG, "GCM encrypt failed: %d", ret);
+        }
+    } else {
         LOG_E(TAG, "GCM setkey failed: %d", ret);
-        goto cleanup;
     }
 
-    ret = mbedtls_gcm_crypt_and_tag(
-        &gcm,
-        MBEDTLS_GCM_ENCRYPT,
-        PRIVKEY_SIZE,
-        storage.nonce, NONCE_SIZE,
-        storage.magic, MAGIC_SIZE,  // AAD = magic bytes
-        privkey,
-        storage.encrypted,
-        TAG_SIZE,
-        storage.tag
-    );
+    if (ret == 0) {
+        // Erase existing data first
+        se->rmemErase(rmem_slot);
 
-    if (ret != 0) {
-        LOG_E(TAG, "GCM encrypt failed: %d", ret);
-        goto cleanup;
+        // Write encrypted key to R-Memory
+        if (se->rmemWrite(rmem_slot, reinterpret_cast<uint8_t*>(&storage), TOTAL_SIZE)
+                == cdc::hal::SeResult::OK) {
+            LOG_I(TAG, "Saved encrypted DEC private key to R-Memory slot %d", rmem_slot);
+            success = true;
+        } else {
+            LOG_E(TAG, "Failed to write encrypted DEC key to R-Memory slot %d", rmem_slot);
+        }
     }
 
-    // Erase existing data first
-    se->rmemErase(rmem_slot);
-
-    // Write encrypted key to R-Memory
-    if (se->rmemWrite(rmem_slot, reinterpret_cast<uint8_t*>(&storage), TOTAL_SIZE)
-            != cdc::hal::SeResult::OK) {
-        LOG_E(TAG, "Failed to write encrypted DEC key to R-Memory slot %d", rmem_slot);
-        goto cleanup;
-    }
-
-    LOG_I(TAG, "Saved encrypted DEC private key to R-Memory slot %d", rmem_slot);
-    success = true;
-
-cleanup:
-    mbedtls_gcm_free(&gcm);
-    mbedtls_platform_zeroize(enc_key, sizeof(enc_key));
-    mbedtls_platform_zeroize(&storage, sizeof(storage));
-
+    secureWipe(enc_key);
+    secureWipeObject(storage);
     return success;
 }
 
@@ -359,49 +401,41 @@ bool gpg_storage_load_dec_privkey(uint8_t* privkey_out, const char* pin) {
         return false;
     }
 
-    // Derive decryption key from PIN
+    // Derive decryption key from PIN. Wiped on scope exit via secureWipe().
     uint8_t dec_key[32];
     if (!derive_key_from_pin(pin, dec_key)) {
         LOG_E(TAG, "Failed to derive decryption key");
         return false;
     }
 
-    // Decrypt with AES-256-GCM
-    mbedtls_gcm_context gcm;
-    mbedtls_gcm_init(&gcm);
-
+    // RAII-managed GCM context: mbedtls_gcm_free() runs automatically.
+    GcmContext gcm;
     bool success = false;
 
-    int ret = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, dec_key, 256);
-    if (ret != 0) {
+    int ret = mbedtls_gcm_setkey(gcm.get(), MBEDTLS_CIPHER_ID_AES, dec_key, 256);
+    if (ret == 0) {
+        ret = mbedtls_gcm_auth_decrypt(
+            gcm.get(),
+            PRIVKEY_SIZE,
+            storage->nonce, NONCE_SIZE,
+            storage->magic, MAGIC_SIZE,  // AAD = magic bytes
+            storage->tag, TAG_SIZE,
+            storage->encrypted,
+            privkey_out
+        );
+        if (ret == 0) {
+            LOG_D(TAG, "Successfully decrypted DEC private key");
+            success = true;
+        } else {
+            LOG_W(TAG, "GCM decrypt failed (wrong PIN or corrupted data): %d", ret);
+            mbedtls_platform_zeroize(privkey_out, PRIVKEY_SIZE);
+        }
+    } else {
         LOG_E(TAG, "GCM setkey failed: %d", ret);
-        goto cleanup;
     }
 
-    ret = mbedtls_gcm_auth_decrypt(
-        &gcm,
-        PRIVKEY_SIZE,
-        storage->nonce, NONCE_SIZE,
-        storage->magic, MAGIC_SIZE,  // AAD = magic bytes
-        storage->tag, TAG_SIZE,
-        storage->encrypted,
-        privkey_out
-    );
-
-    if (ret != 0) {
-        LOG_W(TAG, "GCM decrypt failed (wrong PIN or corrupted data): %d", ret);
-        mbedtls_platform_zeroize(privkey_out, PRIVKEY_SIZE);
-        goto cleanup;
-    }
-
-    LOG_D(TAG, "Successfully decrypted DEC private key");
-    success = true;
-
-cleanup:
-    mbedtls_gcm_free(&gcm);
-    mbedtls_platform_zeroize(dec_key, sizeof(dec_key));
+    secureWipe(dec_key);
     mbedtls_platform_zeroize(data, sizeof(data));
-
     return success;
 }
 

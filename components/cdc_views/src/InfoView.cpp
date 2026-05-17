@@ -5,6 +5,8 @@
  */
 
 #include "cdc_views/InfoView.h"
+#include "cdc_views/KeyCodes.h"
+#include "cdc_views/LayoutConstants.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_ui/I18n.h"
@@ -16,13 +18,16 @@
 static const char* TAG = "InfoView";
 
 /**
- * \brief Display layout constants.
+ * \brief View-local layout constants.
+ *
+ * Shared values (FOOTER_HEIGHT, SCROLL_INDICATOR_WIDTH) come from
+ * cdc::ui::layout in LayoutConstants.h.
  */
 static constexpr int TITLE_Y = 5;
 static constexpr int TEXT_START_Y = 28;
 static constexpr int TEXT_MARGIN = 8;
-static constexpr int FOOTER_HEIGHT = 16;
-static constexpr int SCROLL_INDICATOR_WIDTH = 8;
+using cdc::ui::layout::FOOTER_HEIGHT;
+using cdc::ui::layout::SCROLL_INDICATOR_WIDTH;
 
 namespace cdc::ui {
 
@@ -106,26 +111,26 @@ void InfoView::scroll(bool down) {
  * \return Input handling result for the view stack.
  */
 InputResult InfoView::onKey(char key) {
-    if (key == 'Y' && onYes_) {
+    if (key == KEY_YES && onYes_) {
         onYes_(callbackUserData_);
         return InputResult::CONSUMED;
     }
-    if (key == 'N' && onNo_) {
+    if (key == KEY_NO && onNo_) {
         onNo_(callbackUserData_);
         return InputResult::CONSUMED;
     }
 
     switch (key) {
-        case '2': // Up
+        case KEY_UP:
             scroll(false);
             return InputResult::CONSUMED;
 
-        case '8': // Down
+        case KEY_DOWN:
             scroll(true);
             return InputResult::CONSUMED;
 
-        case 'N': // Back
-        case 'Y': // Also back (info is read-only)
+        case KEY_NO:  // Back
+        case KEY_YES: // Also back (info is read-only)
             return InputResult::REQUEST_POP;
 
         default:

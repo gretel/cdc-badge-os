@@ -2,6 +2,8 @@
 
 #include "IView.h"
 #include <cstdint>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 namespace cdc::ui {
 
@@ -46,6 +48,15 @@ public:
      * Pop all views except root
      */
     void popToRoot();
+
+    /**
+     * \brief Pops views until the specified anchor view is the current view.
+     * \param anchor Anchor view to return to.
+     *
+     * Stops popping if the anchor is reached or only the root view remains.
+     * Useful for returning to a list view after wizard completion.
+     */
+    void popToAnchor(IView* anchor);
 
     /**
      * Get current (top) view
@@ -129,6 +140,30 @@ public:
      */
     void forceFullRefresh() { needsFullRefresh_ = true; }
 
+    // === Exclusive lock (e.g. for FIDO2 prompts) ===
+
+    /**
+     * \brief Acquires exclusive ownership of the view stack.
+     * \param owner Caller-supplied identity token (use the view pointer or a static address).
+     * \return true if lock acquired, false if already held by someone else.
+     *
+     * While exclusive ownership is held, push/pop/replace/showModal from anyone
+     * other than the owner are rejected with a warning log.
+     */
+    bool acquireExclusive(const void* owner);
+
+    /**
+     * \brief Releases exclusive ownership.
+     * \param owner Must match the token used in acquireExclusive.
+     * \return true if released, false if owner mismatch or not held.
+     */
+    bool releaseExclusive(const void* owner);
+
+    /**
+     * \brief Returns current exclusive owner, or nullptr if none.
+     */
+    const void* exclusiveOwner() const { return exclusiveOwner_; }
+
     // === Inactivity timeout ===
 
     /**
@@ -163,6 +198,15 @@ private:
     IView* pendingPush_ = nullptr;
     void* pendingContext_ = nullptr;
     bool needsFullRefresh_ = true;  // True after view changes
+    const void* exclusiveOwner_ = nullptr;
+    SemaphoreHandle_t mutex_ = nullptr;
+
+    void ensureMutex();
+
+    // Unlocked helpers used when the caller already holds mutex_.
+    void push_unlocked(IView* view, void* context);
+    void pop_unlocked();
+    void hideModal_unlocked();
 
     // Inactivity timeout
     InactivityCallback inactivityCallback_ = nullptr;

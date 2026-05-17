@@ -17,5 +17,4 @@ idf_component_register(
         cdc_log
         nvs_flash
         freertos
-        bt
 )

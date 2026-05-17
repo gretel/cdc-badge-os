@@ -1,6 +1,7 @@
 #include "mod_totp/TotpModule.h"
 #include "mod_totp/TotpStore.h"
 #include "cdc_core/ModuleRegistry.h"
+#include "cdc_core/StringUtils.h"
 #include "cdc_core/TropicStorage.h"
 #include "cdc_core/IKeyboardProvider.h"
 #include "cdc_ui/I18n.h"
@@ -97,36 +98,8 @@ static void registerStrings() {
 static constexpr const char* CMD_MODULE = "totp";
 static bool s_commandsRegistered = false;
 
-/**
- * \brief Advances over leading ASCII whitespace in a C string.
- * \param s Input string pointer.
- * \return Pointer to first non-whitespace character.
- */
-static const char* skipSpaces(const char* s) {
-    while (s && *s && std::isspace(static_cast<unsigned char>(*s))) {
-        s++;
-    }
-    return s;
-}
-
-/**
- * \brief Extracts one whitespace-delimited token from a string.
- * \param s Input cursor position.
- * \param out Output token buffer.
- * \param outSize Output buffer size.
- * \return Pointer to the next unread input position or `nullptr` when no token exists.
- */
-static const char* nextToken(const char* s, char* out, size_t outSize) {
-    if (!out || outSize == 0) return nullptr;
-    s = skipSpaces(s);
-    if (!s || !*s) return nullptr;
-    size_t i = 0;
-    while (*s && !std::isspace(static_cast<unsigned char>(*s)) && i + 1 < outSize) {
-        out[i++] = *s++;
-    }
-    out[i] = '\0';
-    return s;
-}
+using cdc::core::skipSpaces;
+using cdc::core::nextToken;
 
 /**
  * \brief Parses textual or numeric algorithm identifiers into store values.
@@ -144,7 +117,12 @@ static uint8_t parseAlgo(const char* token) {
     if (strcmp(buf, "sha1") == 0) return static_cast<uint8_t>(TotpAlgorithm::SHA1);
     if (strcmp(buf, "sha256") == 0) return static_cast<uint8_t>(TotpAlgorithm::SHA256);
     if (strcmp(buf, "sha512") == 0) return static_cast<uint8_t>(TotpAlgorithm::SHA512);
-    return static_cast<uint8_t>(atoi(buf));
+    // Numeric fallback with bounds check: only accept supported algorithm IDs.
+    int value = atoi(buf);
+    if (value < 0 || value > static_cast<int>(TotpAlgorithm::SHA512)) {
+        return static_cast<uint8_t>(TotpAlgorithm::SHA1);
+    }
+    return static_cast<uint8_t>(value);
 }
 
 /**
@@ -872,10 +850,7 @@ static void onWizardPeriod(uint16_t index, void* userData) {
 static void wizardFinish() {
     if (strlen(s_wizard.name) == 0 || strlen(s_wizard.secret) == 0) {
         ui::showToastError(mstr(STR_INVALID_INPUT));
-        while (ui::ViewStack::instance().current() != &s_listView &&
-               ui::ViewStack::instance().depth() > 1) {
-            ui::ViewStack::instance().pop();
-        }
+        ui::ViewStack::instance().popToAnchor(&s_listView);
         return;
     }
 
@@ -904,10 +879,7 @@ static void wizardFinish() {
     if (ok) {
         ui::showToastSuccess(ui::tr(ui::StringId::OK));
         rebuildList();
-        while (ui::ViewStack::instance().current() != &s_listView &&
-               ui::ViewStack::instance().depth() > 1) {
-            ui::ViewStack::instance().pop();
-        }
+        ui::ViewStack::instance().popToAnchor(&s_listView);
     } else {
         ui::showToastError(ui::tr(ui::StringId::FAILED));
     }
@@ -933,7 +905,7 @@ bool TotpModule::init() {
 
     core::ModuleRegistry::instance().registerModule(this);
     if (slotRange_.hasRmem) {
-        TotpStore::instance().setSlotRange(slotRange_.rmemStart, slotRange_.rmemEnd, slotRange_.moduleId);
+        TotpStore::instance().setSlotRange(slotRange_);
         core::ModuleRegistry::instance().clearModuleErrorByName(getName());
     } else {
         core::ModuleRegistry::instance().reportModuleError(getName(), "TOTP slot range missing");
@@ -945,24 +917,11 @@ bool TotpModule::init() {
 }
 
 /**
- * \brief Starts the TOTP module service.
- * \return `true` if start transition succeeded.
- */
-bool TotpModule::start() {
-    if (state_ != core::ServiceState::INITIALIZED &&
-        state_ != core::ServiceState::STOPPED) {
-        return false;
-    }
-    state_ = core::ServiceState::STARTED;
-    return true;
-}
-
-/**
  * \brief Stops the TOTP module and releases list buffers.
  */
 void TotpModule::stop() {
     freeListBuffers();
-    state_ = core::ServiceState::STOPPED;
+    ModuleBase::stop();
 }
 
 /**

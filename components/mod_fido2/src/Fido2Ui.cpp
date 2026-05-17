@@ -300,13 +300,16 @@ static void restoreView() {
  * \param result Final user-presence result.
  */
 static void promptComplete(fido2_user_presence_result_t result) {
-    s_promptActive = false;  // Clear race condition guard
+    s_promptActive = false;
 
     if (result == FIDO2_UP_APPROVED) {
         ui::showToastSuccess(ui::tr(ui::StringId::OK), 2000);
     } else {
         ui::showToastError(ui::tr(ui::StringId::FAILED), 2000);
     }
+
+    auto& stack = ui::ViewStack::instance();
+    stack.releaseExclusive(s_promptView);
 
     restoreView();
 
@@ -321,7 +324,7 @@ static void promptComplete(fido2_user_presence_result_t result) {
         display->backlightOff();
     }
 
-    ui::ViewStack::instance().render();
+    stack.render();
 
     s_promptResult = result;
     if (s_promptSem) {
@@ -342,6 +345,9 @@ static bool onPinVerify(const char* pin) {
  * \brief PIN success callback approving user presence.
  */
 static void onPinSuccess() {
+    auto& stack = ui::ViewStack::instance();
+    stack.releaseExclusive(s_pinEntry);
+    stack.acquireExclusive(s_promptView);
     promptComplete(FIDO2_UP_APPROVED);
 }
 
@@ -349,6 +355,9 @@ static void onPinSuccess() {
  * \brief PIN cancel callback denying user presence.
  */
 static void onPinCancel() {
+    auto& stack = ui::ViewStack::instance();
+    stack.releaseExclusive(s_pinEntry);
+    stack.acquireExclusive(s_promptView);
     promptComplete(FIDO2_UP_DENIED);
 }
 
@@ -359,6 +368,9 @@ static void onPinCancel() {
 static void onPinFailure(bool lockedOut) {
     if (lockedOut) {
         ui::showToastError(ui::tr(ui::StringId::TOO_MANY_ATTEMPTS), 2000);
+        auto& stack = ui::ViewStack::instance();
+        stack.releaseExclusive(s_pinEntry);
+        stack.acquireExclusive(s_promptView);
         promptComplete(FIDO2_UP_DENIED);
     } else {
         ui::showToastError(ui::tr(ui::StringId::WRONG_PIN), 1000);
@@ -393,7 +405,12 @@ static void onPromptApprove(void* userData) {
             s_pinEntry->setMinLength(cdc::core::PinManager::BADGE_PIN_MIN);
             s_pinEntry->setShowMessages(false);
         }
-        ui::ViewStack::instance().push(s_pinEntry);
+        {
+            auto& stack = ui::ViewStack::instance();
+            stack.releaseExclusive(s_promptView);
+            stack.acquireExclusive(s_pinEntry);
+            stack.push(s_pinEntry);
+        }
         return;
     }
 
@@ -444,9 +461,6 @@ cdc::ui::IView* fido2_ui_get_list_view() {
  * \return Label string.
  */
 const char* fido2_ui_get_label() {
-    if (s_strIdBase == 0) {
-        registerStrings();
-    }
     return mstr(STR_WEB_AUTHN);
 }
 
@@ -464,34 +478,26 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
 ) {
     (void)user_name;
 
-    // Debug: Log what we received
     const char* actionStr = (action == FIDO2_ACTION_SELECT) ? "SELECT" :
                             (action == FIDO2_ACTION_REGISTER) ? "REGISTER" : "AUTH";
     LOG_I(TAG, "User presence: action=%s, rp='%s', strBase=%u, promptActive=%d",
           actionStr, rp_id ? rp_id : "(null)", s_strIdBase, s_promptActive ? 1 : 0);
 
-    // Race condition guard: If a SELECT prompt is active and a higher-priority
-    // request (REGISTER/AUTH) comes in, approve the SELECT (device was implicitly
-    // selected by the browser sending the follow-up request) and process the new one.
-    if (s_promptActive && s_promptAction == FIDO2_ACTION_SELECT &&
-        (action == FIDO2_ACTION_REGISTER || action == FIDO2_ACTION_AUTHENTICATE)) {
-        LOG_I(TAG, "Superseding active SELECT with %s - approving SELECT", actionStr);
-        s_promptResult = FIDO2_UP_APPROVED;  // Device was selected by receiving the real request
-        s_promptActive = false;
-        if (s_promptSem) {
-            xSemaphoreGive(s_promptSem);
-        }
-        // Brief delay to let SELECT thread clean up
-        vTaskDelay(pdMS_TO_TICKS(50));
+    // Browser-discovery probes never touch the UI: they are protocol-only
+    // pings to ask "is a device there?" and must not influence presence state.
+    if (action == FIDO2_ACTION_SELECT && rp_id &&
+        (strcmp(rp_id, ".dummy") == 0 || strcmp(rp_id, "make.me.blink") == 0)) {
+        LOG_I(TAG, "Auto-approving browser probe '%s'", rp_id);
+        return FIDO2_UP_APPROVED;
     }
 
-    // Auto-approve browser probe requests (dummy rp_ids used for device discovery)
-    // These are NOT real device selection - just "is a device there?"
-    if (action == FIDO2_ACTION_SELECT && rp_id) {
-        if (strcmp(rp_id, ".dummy") == 0 || strcmp(rp_id, "make.me.blink") == 0) {
-            LOG_I(TAG, "Auto-approving browser probe '%s'", rp_id);
-            return FIDO2_UP_APPROVED;
-        }
+    // A new presence request while another prompt is already active is rejected.
+    // The currently displayed prompt continues to await its own decision; the
+    // new request is denied so that no implicit approval can occur.
+    if (s_promptActive) {
+        LOG_W(TAG, "Presence request while prompt active (action=%s rp='%s') -> deny new",
+              actionStr, rp_id ? rp_id : "(null)");
+        return FIDO2_UP_DENIED;
     }
 
     // Ensure strings are registered (safety check)
@@ -517,7 +523,16 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
         LOG_W(TAG, "Drained stale semaphore");
     }
 
+    if (!s_promptView) {
+        s_promptView = new ui::InfoView();
+    }
+
     auto& stack = ui::ViewStack::instance();
+    if (!stack.acquireExclusive(s_promptView)) {
+        LOG_W(TAG, "Could not acquire ViewStack lock for FIDO2 prompt");
+        s_promptActive = false;
+        return FIDO2_UP_DENIED;
+    }
     s_promptReturnDepth = stack.depth();
     s_promptReturnView = stack.current();
     s_promptWasLocked = (s_promptReturnDepth <= 1) && (action != FIDO2_ACTION_SELECT);
@@ -553,10 +568,6 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
                  ui::tr(ui::StringId::HINT_APPROVE_DENY));
     }
 
-    if (!s_promptView) {
-        s_promptView = new ui::InfoView();
-    }
-
     const char* title = mstr(STR_WEB_AUTHN);
     LOG_I(TAG, "Prompt title='%s', text='%.50s...'", title ? title : "(null)", prompt_text);
 
@@ -568,18 +579,18 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
     stack.render();
 
     if (xSemaphoreTake(s_promptSem, pdMS_TO_TICKS(30000)) == pdTRUE) {
-        auto result = s_promptResult;
-        // If prompt was superseded (s_promptActive already cleared), cleanup is
-        // handled by the superseding request. Just return the result.
-        if (!s_promptActive) {
-            LOG_I(TAG, "Prompt was superseded, returning %d", result);
-        }
+        fido2_user_presence_result_t result = s_promptResult;
         s_promptActive = false;
+        if (result == FIDO2_UP_PENDING) {
+            LOG_W(TAG, "Semaphore signalled with PENDING result -> deny");
+            result = FIDO2_UP_DENIED;
+        }
         return result;
     }
 
     LOG_W(TAG, "User presence timeout");
-    s_promptActive = false;  // Clear race condition guard
+    s_promptActive = false;
+    stack.releaseExclusive(s_promptView);
     restoreView();
 
     if (display && !s_promptBacklightWasOn) {
@@ -588,6 +599,15 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
 
     stack.render();
     return FIDO2_UP_TIMEOUT;
+}
+
+bool fido2_ui_abort_prompt() {
+    if (!s_promptActive) {
+        return false;
+    }
+    LOG_W(TAG, "Prompt aborted externally");
+    promptComplete(FIDO2_UP_DENIED);
+    return true;
 }
 
 } // namespace cdc::mod_fido2

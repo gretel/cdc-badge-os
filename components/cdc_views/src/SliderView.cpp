@@ -5,6 +5,7 @@
  */
 
 #include "cdc_views/SliderView.h"
+#include "cdc_views/KeyCodes.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_ui/I18n.h"
@@ -108,13 +109,13 @@ InputResult SliderView::onKey(char key) {
             adjust(false);
             return InputResult::CONSUMED;
 
-        case 'Y': // Save
+        case KEY_YES: // Save
             if (onSave_) {
                 onSave_(value_);
             }
             return InputResult::REQUEST_POP;
 
-        case 'N': // Cancel
+        case KEY_NO: // Cancel
             return InputResult::REQUEST_POP;
 
         default:

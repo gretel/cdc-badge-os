@@ -73,6 +73,14 @@ public:
     uint32_t getLockoutRemainingMs() const;
     bool isLockoutActive() const;
 
+    /**
+     * \brief Clears expired lockout state and resets retry counter.
+     *
+     * Call this from non-const contexts to perform the lazy state update
+     * that `isLockoutActive()` only observes.
+     */
+    void checkAndResetExpiredLockout();
+
     // === OpenPGP PW1 (User PIN) ===
     bool verifyPW1(const char* pin);
     bool changePW1(const char* currentPin, const char* newPin);
@@ -141,6 +149,23 @@ private:
     bool compareHash(const uint8_t* h1, const uint8_t* h2, size_t len) const;
     void generateSalt(uint8_t* salt);
     void loadDefaults();
+
+    /**
+     * \brief Identifies the PIN slot operated on by `verifyPin()`.
+     */
+    enum class PinSlot : uint8_t {
+        BADGE,
+        PW1,
+        PW3
+    };
+
+    /**
+     * \brief Unified PIN verification routine handling counters and lockout.
+     * \param slot Target PIN slot.
+     * \param pin Candidate PIN string.
+     * \return `true` if PIN matches the stored hash.
+     */
+    bool verifyPin(PinSlot slot, const char* pin);
 };
 
 } // namespace cdc::core

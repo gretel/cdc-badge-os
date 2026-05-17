@@ -1,5 +1,6 @@
 #include "cdc_core/TropicStorage.h"
 #include "cdc_core/TropicSlotMap.h"
+#include "cdc_core/Hash.h"
 #include "cdc_log.h"
 #include "nvs_flash.h"
 #include <cstring>
@@ -414,15 +415,9 @@ bool TropicStorage::saveChunk(uint16_t chunkIndex, const CacheEntry* entries) {
  * \return 32-bit signature value.
  */
 uint32_t TropicStorage::computeMapSignature() const {
-    // FNV-1a 32-bit over map constants
-    uint32_t hash = 2166136261u;
-    auto mix = [&hash](uint32_t v) {
-        hash ^= v;
-        hash *= 16777619u;
-    };
-
-    mix(TropicSlotMap::instance().computeMapSignature());
-
+    // FNV-1a 32-bit over the underlying slot-map signature.
+    uint32_t hash = cdc::core::hash::FNV1A_32_OFFSET_BASIS;
+    cdc::core::hash::fnv1a_mix_u32(hash, TropicSlotMap::instance().computeMapSignature());
     return hash;
 }
 

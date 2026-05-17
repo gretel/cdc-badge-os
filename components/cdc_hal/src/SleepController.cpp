@@ -68,6 +68,8 @@ public:
 
 private:
     void invokeCallbacks(SleepCallbackEntry* callbacks, size_t count);
+    bool registerCallback(SleepCallbackEntry* callbacks, size_t* count,
+                          const SleepCallbackEntry& entry, const char* logLabel);
     void loadFromNvs();
     void saveToNvs();
 
@@ -245,36 +247,50 @@ void Esp32SleepController::stabilizeGpioAfterWakeup() {
 }
 
 /**
- * \brief Registers callback invoked before sleep transition.
+ * \brief Inserts a callback entry into the array, sorted by priority.
+ * \param callbacks Backing storage for the callback list.
+ * \param count In/out pointer to the current callback count.
  * \param entry Callback registration descriptor.
- * \return `true` on successful registration.
+ * \param logLabel Human-readable label used in log messages.
+ * \return `true` on successful registration, `false` when the limit is reached.
  */
-bool Esp32SleepController::registerPreSleepCallback(const SleepCallbackEntry& entry) {
-    if (preSleepCount_ >= MAX_CALLBACKS) {
-        LOG_W(TAG, "Pre-sleep callback limit reached");
+bool Esp32SleepController::registerCallback(SleepCallbackEntry* callbacks, size_t* count,
+                                            const SleepCallbackEntry& entry,
+                                            const char* logLabel) {
+    if (*count >= MAX_CALLBACKS) {
+        LOG_W(TAG, "%s callback limit reached", logLabel);
         return false;
     }
 
     // Insert sorted by priority (lower priority = earlier in array)
-    size_t insertPos = preSleepCount_;
-    for (size_t i = 0; i < preSleepCount_; i++) {
-        if (entry.priority < preSleepCallbacks_[i].priority) {
+    size_t insertPos = *count;
+    for (size_t i = 0; i < *count; i++) {
+        if (entry.priority < callbacks[i].priority) {
             insertPos = i;
             break;
         }
     }
 
     // Shift existing entries
-    for (size_t i = preSleepCount_; i > insertPos; i--) {
-        preSleepCallbacks_[i] = preSleepCallbacks_[i - 1];
+    for (size_t i = *count; i > insertPos; i--) {
+        callbacks[i] = callbacks[i - 1];
     }
 
-    preSleepCallbacks_[insertPos] = entry;
-    preSleepCount_++;
+    callbacks[insertPos] = entry;
+    (*count)++;
 
-    LOG_I(TAG, "Registered pre-sleep callback: %s (priority %d)",
-             entry.moduleName, entry.priority);
+    LOG_I(TAG, "Registered %s callback: %s (priority %d)",
+             logLabel, entry.moduleName, entry.priority);
     return true;
+}
+
+/**
+ * \brief Registers callback invoked before sleep transition.
+ * \param entry Callback registration descriptor.
+ * \return `true` on successful registration.
+ */
+bool Esp32SleepController::registerPreSleepCallback(const SleepCallbackEntry& entry) {
+    return registerCallback(preSleepCallbacks_, &preSleepCount_, entry, "pre-sleep");
 }
 
 /**
@@ -283,31 +299,7 @@ bool Esp32SleepController::registerPreSleepCallback(const SleepCallbackEntry& en
  * \return `true` on successful registration.
  */
 bool Esp32SleepController::registerWakeupCallback(const SleepCallbackEntry& entry) {
-    if (wakeupCount_ >= MAX_CALLBACKS) {
-        LOG_W(TAG, "Wakeup callback limit reached");
-        return false;
-    }
-
-    // Insert sorted by priority
-    size_t insertPos = wakeupCount_;
-    for (size_t i = 0; i < wakeupCount_; i++) {
-        if (entry.priority < wakeupCallbacks_[i].priority) {
-            insertPos = i;
-            break;
-        }
-    }
-
-    // Shift existing entries
-    for (size_t i = wakeupCount_; i > insertPos; i--) {
-        wakeupCallbacks_[i] = wakeupCallbacks_[i - 1];
-    }
-
-    wakeupCallbacks_[insertPos] = entry;
-    wakeupCount_++;
-
-    LOG_I(TAG, "Registered wakeup callback: %s (priority %d)",
-             entry.moduleName, entry.priority);
-    return true;
+    return registerCallback(wakeupCallbacks_, &wakeupCount_, entry, "wakeup");
 }
 
 /**

@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
-#include <memory>
 
 static const char* TAG = "PASSWORD";
 
@@ -51,60 +50,10 @@ PasswordStore& PasswordStore::instance() {
 
 /**
  * \brief Configures logical-to-physical slot mapping for password entries.
- * \param start First RMEM slot.
- * \param end Last RMEM slot.
- * \param moduleId Owning module identifier.
+ * \param range Slot range descriptor (RMEM fields are consumed).
  */
-void PasswordStore::setSlotRange(uint16_t start, uint16_t end, uint8_t moduleId) {
-    if (start > end || start == 0 || end == 0) {
-        hasSlotRange_ = false;
-        rmemStart_ = 0;
-        rmemEnd_ = 0;
-        moduleId_ = 0;
-        return;
-    }
-    hasSlotRange_ = true;
-    rmemStart_ = start;
-    rmemEnd_ = end;
-    moduleId_ = moduleId;
-}
-
-/**
- * \brief Returns available entry capacity from configured slot range.
- * \return Number of addressable logical entries.
- */
-uint16_t PasswordStore::capacity() const {
-    if (!hasSlotRange_) return 0;
-    return static_cast<uint16_t>(rmemEnd_ - rmemStart_ + 1);
-}
-
-/**
- * \brief Converts logical entry index to physical RMEM slot.
- * \param logicalIndex Logical index.
- * \param slotOut Output physical slot.
- * \return `true` on valid mapping.
- */
-bool PasswordStore::toPhysicalSlot(uint16_t logicalIndex, uint16_t* slotOut) const {
-    if (!slotOut) return false;
-    if (!hasSlotRange_) return false;
-    uint32_t slot = static_cast<uint32_t>(rmemStart_) + logicalIndex;
-    if (slot > rmemEnd_) return false;
-    *slotOut = static_cast<uint16_t>(slot);
-    return true;
-}
-
-/**
- * \brief Converts physical RMEM slot to logical entry index.
- * \param slot Physical slot.
- * \param logicalIndexOut Output logical index.
- * \return `true` on valid mapping.
- */
-bool PasswordStore::toLogicalSlot(uint16_t slot, uint16_t* logicalIndexOut) const {
-    if (!logicalIndexOut) return false;
-    if (!hasSlotRange_) return false;
-    if (slot < rmemStart_ || slot > rmemEnd_) return false;
-    *logicalIndexOut = static_cast<uint16_t>(slot - rmemStart_);
-    return true;
+void PasswordStore::setSlotRange(const cdc::core::IModule::SlotRange& range) {
+    slots_.setSlotRange(range);
 }
 
 /**
@@ -115,7 +64,7 @@ bool PasswordStore::toLogicalSlot(uint16_t slot, uint16_t* logicalIndexOut) cons
  */
 bool PasswordStore::readEntry(uint16_t slot, PasswordEntry* out) const {
     if (!out) return false;
-    if (!hasSlotRange_) return false;
+    if (!slots_.hasSlotRange()) return false;
     uint16_t physSlot = 0;
     if (!toPhysicalSlot(slot, &physSlot)) return false;
 
@@ -133,7 +82,7 @@ bool PasswordStore::readEntry(uint16_t slot, PasswordEntry* out) const {
         return false;
     }
 
-    if (header.moduleId != moduleId_) {
+    if (header.moduleId != slots_.moduleId()) {
         return false;
     }
 
@@ -153,61 +102,14 @@ bool PasswordStore::readEntry(uint16_t slot, PasswordEntry* out) const {
 }
 
 /**
- * \brief Finds first free physical slot in configured range.
- * \param slotOut Output physical slot.
- * \return `true` if a free slot exists.
- */
-bool PasswordStore::findFreeSlot(uint16_t* slotOut) const {
-    if (!slotOut) return false;
-    if (!hasSlotRange_) return false;
-
-    uint16_t cap = capacity();
-    if (cap == 0) return false;
-    auto used = std::unique_ptr<bool[]>(new (std::nothrow) bool[cap]);
-    if (!used) return false;
-    memset(used.get(), 0, cap * sizeof(bool));
-
-    struct Ctx {
-        bool* used;
-        uint16_t base;
-        uint16_t cap;
-    } ctx = { used.get(), rmemStart_, cap };
-
-    auto cb = [](uint16_t slot, const cdc::core::TropicStorage::CacheEntry&, void* user) {
-        auto* c = static_cast<Ctx*>(user);
-        if (slot < c->base) return;
-        uint16_t idx = slot - c->base;
-        if (idx < c->cap) {
-            c->used[idx] = true;
-        }
-    };
-
-    cdc::core::TropicStorage::instance().forEachSlot(
-        moduleId_, rmemStart_, rmemEnd_, cb, &ctx);
-
-    for (uint16_t i = 0; i < cap; i++) {
-        if (!used[i]) {
-            uint16_t candidate = static_cast<uint16_t>(rmemStart_ + i);
-            if (candidate <= rmemEnd_) {
-                *slotOut = candidate;
-                return true;
-            }
-            return false;
-        }
-    }
-
-    return false;
-}
-
-/**
  * \brief Adds a new password entry into first free slot.
  * \param entry Entry data.
  * \return `true` on successful write.
  */
 bool PasswordStore::addEntry(const PasswordEntry& entry) {
-    if (!hasSlotRange_) return false;
+    if (!slots_.hasSlotRange()) return false;
     uint16_t slot = 0;
-    if (!findFreeSlot(&slot)) {
+    if (!slots_.findFreeSlot(&slot)) {
         LOG_W(TAG, "No free password slots");
         return false;
     }
@@ -232,7 +134,7 @@ bool PasswordStore::addEntry(const PasswordEntry& entry) {
 
     auto res = se->rmemWriteWithHeader(
         slot,
-        moduleId_,
+        slots_.moduleId(),
         headerName,
         0,
         reinterpret_cast<const uint8_t*>(&payload),
@@ -244,7 +146,7 @@ bool PasswordStore::addEntry(const PasswordEntry& entry) {
         return false;
     }
 
-    cdc::core::TropicStorage::instance().writeSlot(moduleId_, slot, headerName, 0);
+    cdc::core::TropicStorage::instance().writeSlot(slots_.moduleId(), slot, headerName, 0);
 
     return true;
 }
@@ -256,7 +158,7 @@ bool PasswordStore::addEntry(const PasswordEntry& entry) {
  * \return `true` on successful write.
  */
 bool PasswordStore::updateEntry(uint16_t slot, const PasswordEntry& entry) {
-    if (!hasSlotRange_) return false;
+    if (!slots_.hasSlotRange()) return false;
     uint16_t physSlot = 0;
     if (!toPhysicalSlot(slot, &physSlot)) return false;
 
@@ -280,7 +182,7 @@ bool PasswordStore::updateEntry(uint16_t slot, const PasswordEntry& entry) {
 
     auto res = se->rmemWriteWithHeader(
         physSlot,
-        moduleId_,
+        slots_.moduleId(),
         headerName,
         0,
         reinterpret_cast<const uint8_t*>(&payload),
@@ -292,7 +194,7 @@ bool PasswordStore::updateEntry(uint16_t slot, const PasswordEntry& entry) {
         return false;
     }
 
-    cdc::core::TropicStorage::instance().writeSlot(moduleId_, physSlot, headerName, 0);
+    cdc::core::TropicStorage::instance().writeSlot(slots_.moduleId(), physSlot, headerName, 0);
 
     return true;
 }
@@ -303,7 +205,7 @@ bool PasswordStore::updateEntry(uint16_t slot, const PasswordEntry& entry) {
  * \return `true` on successful erase.
  */
 bool PasswordStore::deleteEntry(uint16_t slot) {
-    if (!hasSlotRange_) return false;
+    if (!slots_.hasSlotRange()) return false;
     uint16_t physSlot = 0;
     if (!toPhysicalSlot(slot, &physSlot)) return false;
 
@@ -315,7 +217,7 @@ bool PasswordStore::deleteEntry(uint16_t slot) {
         return false;
     }
 
-    cdc::core::TropicStorage::instance().eraseSlot(moduleId_, physSlot);
+    cdc::core::TropicStorage::instance().eraseSlot(slots_.moduleId(), physSlot);
     return true;
 }
 
@@ -347,7 +249,7 @@ int PasswordStore::compareTitles(const char* a, const char* b) {
  */
 bool PasswordStore::listEntriesSorted(EntryIndex* entries, uint16_t maxEntries, uint16_t* countOut) const {
     if (!entries || !countOut) return false;
-    if (!hasSlotRange_) return false;
+    if (!slots_.hasSlotRange()) return false;
 
     struct Ctx {
         EntryIndex* entries;
@@ -371,7 +273,7 @@ bool PasswordStore::listEntriesSorted(EntryIndex* entries, uint16_t maxEntries, 
     };
 
     cdc::core::TropicStorage::instance().forEachSlot(
-        moduleId_, rmemStart_, rmemEnd_, cb, &ctx);
+        slots_.moduleId(), slots_.rmemStart(), slots_.rmemEnd(), cb, &ctx);
 
     std::sort(entries, entries + *countOut, [](const EntryIndex& a, const EntryIndex& b) {
         return PasswordStore::compareTitles(a.title, b.title) < 0;

@@ -20,7 +20,7 @@ enum class UnicodeMethod : uint8_t {
  * BLE HID Keyboard Implementation
  *
  * Implements IKeyboardProvider using BLE HID over GATT (HOGP).
- * Uses NimBLE's built-in HID service when available.
+ * Uses IBluetoothController API for GATT registration and notifications.
  */
 class BleHidKeyboard : public core::IKeyboardProvider {
 public:
@@ -47,7 +47,7 @@ public:
     void stopAdvertising();
     bool isAdvertising() const;
 
-    // Connection callbacks (called from NimBLE)
+    // Connection callbacks (called from BluetoothController)
     void onConnect(uint16_t connHandle);
     void onDisconnect(uint16_t connHandle, int reason);
     void onHostSuspend();
@@ -72,7 +72,6 @@ private:
     // State
     bool initialized_ = false;
     bool advertising_ = false;
-    uint16_t connHandle_ = 0xFFFF;  // BLE_HS_CONN_HANDLE_NONE
     bool busy_ = false;
     bool cancelRequested_ = false;
     UnicodeMethod unicodeMethod_ = UnicodeMethod::ASCII_ONLY;

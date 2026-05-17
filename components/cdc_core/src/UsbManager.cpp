@@ -121,24 +121,13 @@ void UsbManager::unregisterInterface(UsbHidInterface type, const char* moduleNam
  */
 bool UsbManager::applyConfiguration() {
     needsReplug_ = false;
-    ::UsbInterfaceDef defs[3] = {};
+    UsbInterfaceSpec defs[3] = {};
     size_t count = 0;
 
     auto append_def = [&](UsbHidInterface type) {
         const auto& entry = entries_[static_cast<uint8_t>(type)];
         if (!entry.active) return;
-        auto& out = defs[count++];
-        out.cls = static_cast<::UsbInterfaceClass>(entry.def.cls);
-        out.name = entry.def.name;
-        out.reportDesc = entry.def.reportDesc;
-        out.reportDescLen = entry.def.reportDescLen;
-        out.protocol = entry.def.protocol;
-        out.hasOut = entry.def.hasOut;
-        out.epInSize = entry.def.epInSize;
-        out.epOutSize = entry.def.epOutSize;
-        out.callbacks.onGetReport = entry.def.callbacks.onGetReport;
-        out.callbacks.onSetReport = entry.def.callbacks.onSetReport;
-        out.callbacks.onReportComplete = entry.def.callbacks.onReportComplete;
+        defs[count++] = entry.def;
     };
 
     append_def(UsbHidInterface::Fido);

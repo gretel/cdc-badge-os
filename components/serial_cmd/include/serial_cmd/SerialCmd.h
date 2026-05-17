@@ -84,6 +84,31 @@ private:
 
     static void executeCommand(char* cmd);
     static char* trim(char* str);
+
+    /**
+     * \brief Direction selector for command-history navigation.
+     */
+    enum class HistoryDirection : uint8_t { OLDER, NEWER };
+
+    /**
+     * \brief Replaces the current input line with a history entry.
+     * \param dir Navigation direction (older = arrow up, newer = arrow down).
+     */
+    static void handleHistoryNav(HistoryDirection dir);
+
+    /**
+     * \brief Processes one input character while in an active escape sequence.
+     * \param c Input character.
+     * \return `true` if the character was consumed by escape handling.
+     */
+    static bool handleEscape(int c);
+
+    /**
+     * \brief Processes one input character against the special-key dispatch table.
+     * \param c Input character.
+     * \param[out] commandReady Set to `true` when a complete line was submitted.
+     */
+    static void handleSpecialChar(int c, bool& commandReady);
 };
 
 } // namespace cdc::serial

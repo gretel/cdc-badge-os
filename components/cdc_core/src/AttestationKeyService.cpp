@@ -10,6 +10,11 @@ static constexpr const char* NVS_NAMESPACE = "attest";
 static constexpr const char* NVS_KEY_PUBHASH = "pubhash";
 static constexpr uint32_t RETRY_INTERVAL_MS = 3000;
 
+/** \brief Size of a SHA-256 digest in bytes (FIPS 180-4). */
+static constexpr size_t SHA256_DIGEST_SIZE = 32;
+/** \brief Uncompressed P-256 public key, raw X||Y coordinates (no SEC1 0x04 prefix). */
+static constexpr size_t P256_PUBKEY_RAW_SIZE = 64;
+
 namespace cdc::core {
 
 /**
@@ -111,7 +116,7 @@ bool AttestationKeyService::ensureKey() {
         }
     }
 
-    uint8_t pubkey[64] = {};
+    uint8_t pubkey[P256_PUBKEY_RAW_SIZE] = {};
     hal::EccCurve curve = hal::EccCurve::P256;
     hal::SeResult res = secureElement_->eccGetPublicKey(ATTESTATION_ECC_SLOT, pubkey, &curve);
 
@@ -142,10 +147,10 @@ bool AttestationKeyService::ensureKey() {
         if (res != hal::SeResult::OK) return false;
     }
 
-    uint8_t hash[32] = {};
+    uint8_t hash[SHA256_DIGEST_SIZE] = {};
     mbedtls_sha256(pubkey, sizeof(pubkey), hash, 0);
 
-    uint8_t stored[32] = {};
+    uint8_t stored[SHA256_DIGEST_SIZE] = {};
     if (loadStoredHash(stored, sizeof(stored))) {
         if (memcmp(stored, hash, sizeof(hash)) == 0) {
             return true;

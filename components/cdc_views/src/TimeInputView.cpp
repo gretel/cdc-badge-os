@@ -5,6 +5,7 @@
  */
 
 #include "cdc_views/TimeInputView.h"
+#include "cdc_views/KeyCodes.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_hal/IDisplay.h"
@@ -130,7 +131,7 @@ InputResult TimeInputView::onKey(char key) {
     }
 
     switch (key) {
-        case 'N':  // Clear or cancel
+        case KEY_NO:  // Clear or cancel
             if (digitPos_ > 0 ||
                 (currentField_ == Field::HOUR && hour_ > 0) ||
                 (currentField_ == Field::MINUTE && minute_ > 0)) {
@@ -139,7 +140,7 @@ InputResult TimeInputView::onKey(char key) {
             }
             return InputResult::REQUEST_POP;
 
-        case 'Y':  // Confirm
+        case KEY_YES:  // Confirm
             if (hour_ > 23) hour_ = 23;
             if (minute_ > 59) minute_ = 59;
             LOG_I(TAG, "Time confirmed: %02d:%02d", hour_, minute_);

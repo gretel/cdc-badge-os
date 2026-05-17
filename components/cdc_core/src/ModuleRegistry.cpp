@@ -545,6 +545,86 @@ bool ModuleRegistry::isModuleEnabled(uint8_t index) const {
 }
 
 /**
+ * \brief Removes a name from a comma-separated list, in place.
+ *
+ * Iterates through tokens of the input list and writes back the result with
+ * any token equal to `name` filtered out. Other tokens keep their original
+ * order. The destination must have capacity for at least `capacity` bytes
+ * (including the terminating null) and may alias `list`.
+ *
+ * \param list Source comma-separated list (must be null-terminated).
+ * \param name Token to remove (case-sensitive, exact match).
+ * \param dest Destination buffer to receive the filtered list.
+ * \param capacity Size of `dest` in bytes including the null terminator.
+ */
+static void removeNameFromList(const char* list, const char* name,
+                               char* dest, size_t capacity) {
+    if (capacity == 0) return;
+
+    // Scratch buffer sized to fit the largest expected list. Using a
+    // local stack buffer allows the destination to alias the source.
+    constexpr size_t SCRATCH_SIZE = 128;
+    char tmp[SCRATCH_SIZE] = {0};
+    size_t newOffset = 0;
+    const size_t nameLen = strlen(name);
+    const size_t maxOffset = (capacity < sizeof(tmp)) ? capacity : sizeof(tmp);
+
+    const char* ptr = list;
+    while (*ptr) {
+        while (*ptr == ',') ptr++;
+        if (*ptr == '\0') break;
+
+        const char* end = ptr;
+        while (*end && *end != ',') end++;
+        size_t tokenLen = static_cast<size_t>(end - ptr);
+
+        const bool matches = (tokenLen == nameLen &&
+                              strncmp(ptr, name, nameLen) == 0);
+        if (!matches) {
+            if (newOffset > 0 && newOffset < maxOffset - 1) {
+                tmp[newOffset++] = ',';
+            }
+            if (newOffset + tokenLen < maxOffset) {
+                memcpy(tmp + newOffset, ptr, tokenLen);
+                newOffset += tokenLen;
+            }
+        }
+
+        ptr = end;
+    }
+    tmp[newOffset] = '\0';
+    memcpy(dest, tmp, (newOffset + 1 < capacity) ? newOffset + 1 : capacity);
+    dest[capacity - 1] = '\0';
+}
+
+/**
+ * \brief Appends a name to a comma-separated list, in place.
+ *
+ * Adds `name` to `list`, inserting a leading comma when the list is non-empty.
+ * No action is taken when the resulting string would exceed `capacity`.
+ *
+ * \param list In/out buffer holding the comma-separated list.
+ * \param name Name to append.
+ * \param capacity Size of `list` in bytes including the null terminator.
+ * \return `true` on success, `false` if the list is full.
+ */
+static bool addNameToList(char* list, const char* name, size_t capacity) {
+    const size_t currentLen = strlen(list);
+    const size_t nameLen = strlen(name);
+
+    if (currentLen + nameLen + 2 >= capacity) {
+        return false;
+    }
+
+    size_t writePos = currentLen;
+    if (currentLen > 0) {
+        list[writePos++] = ',';
+    }
+    memcpy(list + writePos, name, nameLen + 1);
+    return true;
+}
+
+/**
  * \brief Enables or disables a module by updating persisted disabled list.
  * \param index Module index.
  * \param enabled Desired enabled state.
@@ -553,51 +633,15 @@ void ModuleRegistry::setModuleEnabled(uint8_t index, bool enabled) {
     if (index >= count_) return;
 
     const char* name = modules_[index]->getName();
-    bool currentlyEnabled = isModuleEnabledByName(name);
+    const bool currentlyEnabled = isModuleEnabledByName(name);
 
     if (enabled == currentlyEnabled) return;  // No change needed
 
     if (enabled) {
-        // Remove name from disabled list
-        char newList[MAX_DISABLED_LIST_SIZE] = {0};
-        size_t newOffset = 0;
-        size_t nameLen = strlen(name);
-
-        const char* ptr = disabledModules_;
-        while (*ptr) {
-            while (*ptr == ',') ptr++;
-            if (*ptr == '\0') break;
-
-            const char* end = ptr;
-            while (*end && *end != ',') end++;
-            size_t tokenLen = end - ptr;
-
-            // Copy token if it's not the one to remove
-            if (!(tokenLen == nameLen && strncmp(ptr, name, nameLen) == 0)) {
-                if (newOffset > 0 && newOffset < sizeof(newList) - 1) {
-                    newList[newOffset++] = ',';
-                }
-                if (newOffset + tokenLen < sizeof(newList)) {
-                    memcpy(newList + newOffset, ptr, tokenLen);
-                    newOffset += tokenLen;
-                }
-            }
-
-            ptr = end;
-        }
-        newList[newOffset] = '\0';
-        memcpy(disabledModules_, newList, sizeof(disabledModules_));
+        removeNameFromList(disabledModules_, name,
+                           disabledModules_, sizeof(disabledModules_));
     } else {
-        // Add name to disabled list
-        size_t currentLen = strlen(disabledModules_);
-        size_t nameLen = strlen(name);
-
-        if (currentLen + nameLen + 2 < MAX_DISABLED_LIST_SIZE) {
-            if (currentLen > 0) {
-                disabledModules_[currentLen++] = ',';
-            }
-            memcpy(disabledModules_ + currentLen, name, nameLen + 1);
-        } else {
+        if (!addNameToList(disabledModules_, name, sizeof(disabledModules_))) {
             LOG_W(TAG, "Disabled list full, cannot add '%s'", name);
             return;
         }

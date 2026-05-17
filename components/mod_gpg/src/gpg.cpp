@@ -1,6 +1,7 @@
 #include "mod_gpg/gpg.h"
 #include "mod_gpg/GpgStorage.h"
 #include "mod_gpg/openpgp/openpgp.h"
+#include "mod_gpg/openpgp/constants.h"
 #include "cdc_hal/ISecureElement.h"
 #include "cdc_log.h"
 #include <mbedtls/sha1.h>
@@ -161,16 +162,17 @@ static bool save_metadata(void) {
 static bool calculate_fingerprint(const uint8_t *pubkey, size_t pubkey_len,
                                   uint8_t curve, uint32_t created_at,
                                   uint8_t *fp_out) {
+    (void)pubkey_len;
     if (!pubkey || !fp_out) return false;
 
-    uint8_t algo = (curve == CDC_CURVE_ED25519) ? 22 : 19;
+    uint8_t algo = (curve == CDC_CURVE_ED25519) ? OPENPGP_ALGO_EDDSA : OPENPGP_ALGO_ECDSA;
     static const uint8_t oid_ed25519[] = {0x09, 0x2B, 0x06, 0x01, 0x04, 0x01, 0xDA, 0x47, 0x0F, 0x01};
     static const uint8_t oid_p256[] = {0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07};
 
     const uint8_t *oid = (curve == CDC_CURVE_ED25519) ? oid_ed25519 : oid_p256;
     size_t oid_len = (curve == CDC_CURVE_ED25519) ? sizeof(oid_ed25519) : sizeof(oid_p256);
 
-    uint8_t mpi[67];
+    uint8_t mpi[MPI_FULL_SIZE_P256];
     size_t mpi_len = 0;
 
     if (curve == CDC_CURVE_ED25519) {
@@ -178,14 +180,14 @@ static bool calculate_fingerprint(const uint8_t *pubkey, size_t pubkey_len,
         if ((pubkey[0] & 0x80) == 0) bits = 255;
         mpi[0] = (bits >> 8) & 0xFF;
         mpi[1] = bits & 0xFF;
-        memcpy(mpi + 2, pubkey, 32);
-        mpi_len = 34;
+        memcpy(mpi + MPI_HEADER_SIZE, pubkey, ED25519_PUBKEY_SIZE);
+        mpi_len = MPI_FULL_SIZE_ED25519;
     } else {
-        uint16_t bits = 520;
+        uint16_t bits = P256_PUBKEY_BITS;
         mpi[0] = (bits >> 8) & 0xFF;
         mpi[1] = bits & 0xFF;
-        memcpy(mpi + 2, pubkey, 65);
-        mpi_len = 67;
+        memcpy(mpi + MPI_HEADER_SIZE, pubkey, P256_PUBKEY_SIZE);
+        mpi_len = MPI_FULL_SIZE_P256;
     }
 
     uint8_t body[256];
@@ -206,7 +208,7 @@ static bool calculate_fingerprint(const uint8_t *pubkey, size_t pubkey_len,
     prefix[1] = (body_len >> 8) & 0xFF;
     prefix[2] = body_len & 0xFF;
 
-    uint8_t sha[20];
+    uint8_t sha[OPENPGP_FINGERPRINT_SIZE];
     mbedtls_sha1_context sha1;
     mbedtls_sha1_init(&sha1);
     mbedtls_sha1_starts(&sha1);
@@ -214,7 +216,7 @@ static bool calculate_fingerprint(const uint8_t *pubkey, size_t pubkey_len,
     mbedtls_sha1_update(&sha1, body, body_len);
     mbedtls_sha1_finish(&sha1, sha);
     mbedtls_sha1_free(&sha1);
-    memcpy(fp_out, sha, 20);
+    memcpy(fp_out, sha, OPENPGP_FINGERPRINT_SIZE);
     return true;
 }
 
@@ -230,16 +232,17 @@ static bool calculate_fingerprint(const uint8_t *pubkey, size_t pubkey_len,
 static bool calculate_fingerprint_v5(const uint8_t *pubkey, size_t pubkey_len,
                                      uint8_t curve, uint32_t created_at,
                                      uint8_t *fp_out) {
+    (void)pubkey_len;
     if (!pubkey || !fp_out) return false;
 
-    uint8_t algo = (curve == CDC_CURVE_ED25519) ? 22 : 19;
+    uint8_t algo = (curve == CDC_CURVE_ED25519) ? OPENPGP_ALGO_EDDSA : OPENPGP_ALGO_ECDSA;
     static const uint8_t oid_ed25519[] = {0x09, 0x2B, 0x06, 0x01, 0x04, 0x01, 0xDA, 0x47, 0x0F, 0x01};
     static const uint8_t oid_p256[] = {0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07};
 
     const uint8_t *oid = (curve == CDC_CURVE_ED25519) ? oid_ed25519 : oid_p256;
     size_t oid_len = (curve == CDC_CURVE_ED25519) ? sizeof(oid_ed25519) : sizeof(oid_p256);
 
-    uint8_t mpi[67];
+    uint8_t mpi[MPI_FULL_SIZE_P256];
     size_t mpi_len = 0;
 
     if (curve == CDC_CURVE_ED25519) {
@@ -247,14 +250,14 @@ static bool calculate_fingerprint_v5(const uint8_t *pubkey, size_t pubkey_len,
         if ((pubkey[0] & 0x80) == 0) bits = 255;
         mpi[0] = (bits >> 8) & 0xFF;
         mpi[1] = bits & 0xFF;
-        memcpy(mpi + 2, pubkey, 32);
-        mpi_len = 34;
+        memcpy(mpi + MPI_HEADER_SIZE, pubkey, ED25519_PUBKEY_SIZE);
+        mpi_len = MPI_FULL_SIZE_ED25519;
     } else {
-        uint16_t bits = 520;
+        uint16_t bits = P256_PUBKEY_BITS;
         mpi[0] = (bits >> 8) & 0xFF;
         mpi[1] = bits & 0xFF;
-        memcpy(mpi + 2, pubkey, 65);
-        mpi_len = 67;
+        memcpy(mpi + MPI_HEADER_SIZE, pubkey, P256_PUBKEY_SIZE);
+        mpi_len = MPI_FULL_SIZE_P256;
     }
 
     uint8_t body[256];
@@ -275,7 +278,7 @@ static bool calculate_fingerprint_v5(const uint8_t *pubkey, size_t pubkey_len,
     prefix[1] = (body_len >> 8) & 0xFF;
     prefix[2] = body_len & 0xFF;
 
-    uint8_t sha[32];
+    uint8_t sha[SHA256_DIGEST_SIZE];
     mbedtls_sha256_context sha256;
     mbedtls_sha256_init(&sha256);
     mbedtls_sha256_starts(&sha256, 0);
@@ -283,7 +286,7 @@ static bool calculate_fingerprint_v5(const uint8_t *pubkey, size_t pubkey_len,
     mbedtls_sha256_update(&sha256, body, body_len);
     mbedtls_sha256_finish(&sha256, sha);
     mbedtls_sha256_free(&sha256);
-    memcpy(fp_out, sha, 32);
+    memcpy(fp_out, sha, SHA256_DIGEST_SIZE);
     return true;
 }
 

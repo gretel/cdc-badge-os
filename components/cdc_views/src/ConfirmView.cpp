@@ -5,6 +5,7 @@
  */
 
 #include "cdc_views/ConfirmView.h"
+#include "cdc_views/KeyCodes.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_hal/IDisplay.h"
@@ -36,7 +37,7 @@ void ConfirmView::init(const char* message, Icon icon) {
  * \return Input handling result for the view stack.
  */
 InputResult ConfirmView::onKey(char key) {
-    if (key == 'Y') {
+    if (key == KEY_YES) {
         ViewStack::instance().hideModal();
         if (onConfirm_) {
             onConfirm_(confirmUserData_);
@@ -44,7 +45,7 @@ InputResult ConfirmView::onKey(char key) {
         return InputResult::CONSUMED;
     }
 
-    if (key == 'N') {
+    if (key == KEY_NO) {
         ViewStack::instance().hideModal();
         if (onCancel_) {
             onCancel_(cancelUserData_);

@@ -1,6 +1,7 @@
 #include "mod_password/PasswordModule.h"
 #include "mod_password/PasswordStore.h"
 #include "cdc_core/ModuleRegistry.h"
+#include "cdc_core/StringUtils.h"
 #include "cdc_core/TropicStorage.h"
 #include "cdc_core/IKeyboardProvider.h"
 #include "cdc_ui/I18n.h"
@@ -121,36 +122,8 @@ static void registerStrings() {
 static constexpr const char* CMD_MODULE = "password";
 static bool s_commandsRegistered = false;
 
-/**
- * \brief Advances over leading ASCII whitespace in a C string.
- * \param s Input string pointer.
- * \return Pointer to first non-whitespace character.
- */
-static const char* skipSpaces(const char* s) {
-    while (s && *s && std::isspace(static_cast<unsigned char>(*s))) {
-        s++;
-    }
-    return s;
-}
-
-/**
- * \brief Extracts one whitespace-delimited token from a string.
- * \param s Input cursor position.
- * \param out Output token buffer.
- * \param outSize Output buffer size.
- * \return Pointer to the next unread input position or `nullptr` if no token exists.
- */
-static const char* nextToken(const char* s, char* out, size_t outSize) {
-    if (!out || outSize == 0) return nullptr;
-    s = skipSpaces(s);
-    if (!s || !*s) return nullptr;
-    size_t i = 0;
-    while (*s && !std::isspace(static_cast<unsigned char>(*s)) && i + 1 < outSize) {
-        out[i++] = *s++;
-    }
-    out[i] = '\0';
-    return s;
-}
+using cdc::core::skipSpaces;
+using cdc::core::nextToken;
 
 /**
  * \brief Resolves list index to logical password slot.
@@ -528,10 +501,7 @@ static void wizardFinish() {
         ui::showToastSuccess(mstr(STR_SAVED));
         s_listView.preservePosition();
         rebuildList();
-        while (ui::ViewStack::instance().current() != &s_listView &&
-               ui::ViewStack::instance().depth() > 1) {
-            ui::ViewStack::instance().pop();
-        }
+        ui::ViewStack::instance().popToAnchor(&s_listView);
     } else {
         ui::showToastError(ui::tr(ui::StringId::FAILED));
     }
@@ -684,10 +654,7 @@ static void onMenuDeleteConfirm(void* userData) {
         ui::showToastSuccess(mstr(STR_DELETED));
         s_listView.preservePosition();
         rebuildList();
-        while (ui::ViewStack::instance().current() != &s_listView &&
-               ui::ViewStack::instance().depth() > 1) {
-            ui::ViewStack::instance().pop();
-        }
+        ui::ViewStack::instance().popToAnchor(&s_listView);
     } else {
         ui::showToastError(ui::tr(ui::StringId::FAILED));
     }
@@ -764,7 +731,7 @@ bool PasswordModule::init() {
 
     core::ModuleRegistry::instance().registerModule(this);
     if (slotRange_.hasRmem) {
-        PasswordStore::instance().setSlotRange(slotRange_.rmemStart, slotRange_.rmemEnd, slotRange_.moduleId);
+        PasswordStore::instance().setSlotRange(slotRange_);
         core::ModuleRegistry::instance().clearModuleErrorByName(getName());
     } else {
         core::ModuleRegistry::instance().reportModuleError(getName(), "Password slot range missing");
@@ -776,24 +743,11 @@ bool PasswordModule::init() {
 }
 
 /**
- * \brief Starts the password module service.
- * \return `true` if start transition succeeded.
- */
-bool PasswordModule::start() {
-    if (state_ != core::ServiceState::INITIALIZED &&
-        state_ != core::ServiceState::STOPPED) {
-        return false;
-    }
-    state_ = core::ServiceState::STARTED;
-    return true;
-}
-
-/**
  * \brief Stops the password module and frees list resources.
  */
 void PasswordModule::stop() {
     freeListBuffers();
-    state_ = core::ServiceState::STOPPED;
+    ModuleBase::stop();
 }
 
 /**

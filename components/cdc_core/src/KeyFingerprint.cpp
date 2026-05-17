@@ -7,6 +7,13 @@
 #include "mbedtls/sha256.h"
 #include <string.h>
 
+/** \brief Size of a SHA-256 digest in bytes (FIPS 180-4). */
+static constexpr size_t SHA256_DIGEST_SIZE = 32;
+/** \brief Uncompressed P-256 public key length in raw X||Y form (no SEC1 prefix). */
+static constexpr size_t P256_PUBKEY_RAW_SIZE = 64;
+/** \brief Ed25519 public key length in bytes (raw, RFC 8032). */
+static constexpr size_t ED25519_PUBKEY_SIZE = 32;
+
 /**
  * \brief Lookup table of 32 alchemical element labels (5-bit index space).
  */
@@ -45,7 +52,7 @@ bool key_fingerprint_from_pubkey(const uint8_t* pubkey, size_t pubkey_len,
         return false;
     }
 
-    uint8_t hash[32];
+    uint8_t hash[SHA256_DIGEST_SIZE];
     mbedtls_sha256(pubkey, pubkey_len, hash, 0);
 
     uint8_t indices[KEY_FINGERPRINT_WORD_COUNT];
@@ -56,7 +63,7 @@ bool key_fingerprint_from_pubkey(const uint8_t* pubkey, size_t pubkey_len,
     indices[4] = ((hash[2] << 1) | (hash[3] >> 7)) & 0x1F;
 
     buf[0] = '\0';
-    for (int i = 0; i < KEY_FINGERPRINT_WORD_COUNT; i++) {
+    for (size_t i = 0; i < KEY_FINGERPRINT_WORD_COUNT; i++) {
         if (i > 0) {
             strlcat(buf, " ", len);
         }
@@ -83,13 +90,13 @@ bool key_fingerprint_generate(uint8_t slot, char* buf, size_t len) {
         return false;
     }
 
-    uint8_t pubkey[64] = {};
+    uint8_t pubkey[P256_PUBKEY_RAW_SIZE] = {};
     cdc::hal::EccCurve curve = cdc::hal::EccCurve::P256;
     if (se->eccGetPublicKey(slot, pubkey, &curve) != cdc::hal::SeResult::OK) {
         strlcpy(buf, "(no key)", len);
         return false;
     }
 
-    size_t pubkey_len = (curve == cdc::hal::EccCurve::ED25519) ? 32 : 64;
+    size_t pubkey_len = (curve == cdc::hal::EccCurve::ED25519) ? ED25519_PUBKEY_SIZE : P256_PUBKEY_RAW_SIZE;
     return key_fingerprint_from_pubkey(pubkey, pubkey_len, buf, len);
 }

@@ -33,8 +33,45 @@ static constexpr UBaseType_t TASK_PRIORITY = 5;
 static constexpr uint32_t POLL_TIMEOUT_MS = 50;
 static constexpr uint32_t DEBOUNCE_MS = 10;
 
+/** \brief Default long-press detection threshold in milliseconds.
+ *  Long enough to avoid accidental triggers, short enough to feel responsive. */
+static constexpr uint32_t LONG_PRESS_THRESHOLD_MS = 800;
+
 /** \brief Ring-buffer configuration for queued key events. */
 static constexpr size_t KEY_BUFFER_SIZE = 16;
+
+/** \brief Bit positions of each physical key on the TCA9535 P0/P1 ports.
+ *  Active-low: a pressed key drives its corresponding bit to 0. */
+static constexpr uint8_t KEY_BIT_0   = 0;
+static constexpr uint8_t KEY_BIT_1   = 1;
+static constexpr uint8_t KEY_BIT_2   = 2;
+static constexpr uint8_t KEY_BIT_3   = 3;
+static constexpr uint8_t KEY_BIT_4   = 4;
+static constexpr uint8_t KEY_BIT_5   = 5;
+static constexpr uint8_t KEY_BIT_6   = 6;
+static constexpr uint8_t KEY_BIT_7   = 7;
+static constexpr uint8_t KEY_BIT_8   = 8;
+static constexpr uint8_t KEY_BIT_9   = 9;
+static constexpr uint8_t KEY_BIT_NO  = 11;
+static constexpr uint8_t KEY_BIT_YES = 10;
+
+/** \brief Mask of all 12 keypad bits (P0.0..P1.3). */
+static constexpr uint16_t KEY_MASK_ALL = 0x0FFF;
+
+/** \brief Idle state: every key released, all 12 bits high. */
+static constexpr uint16_t KEY_STATE_IDLE = KEY_MASK_ALL;
+
+/** \brief Sentinel value returned when an I2C read fails or no key is mapped. */
+static constexpr uint16_t KEY_STATE_INVALID = 0xFFFF;
+
+/**
+ * \brief Builds the active-low raw state for a single pressed key.
+ * \param bit Bit index of the pressed key (0..11).
+ * \return 12-bit mask with the selected bit cleared, all others set.
+ */
+static constexpr uint16_t maskForBit(uint8_t bit) {
+    return static_cast<uint16_t>(KEY_MASK_ALL ^ (1u << bit));
+}
 
 /**
  * \brief Converts raw 16-bit keypad state to a `Key` enum value.
@@ -42,19 +79,19 @@ static constexpr size_t KEY_BUFFER_SIZE = 16;
  * \return Mapped `Key` value, or `KEY_NONE` when no key is active.
  */
 static Key rawToKey(uint16_t raw) {
-    switch (raw & 0x0FFF) {
-        case 0b111111111110: return Key::KEY_0;
-        case 0b111111111101: return Key::KEY_1;
-        case 0b111111111011: return Key::KEY_2;
-        case 0b111111110111: return Key::KEY_3;
-        case 0b111111101111: return Key::KEY_4;
-        case 0b111111011111: return Key::KEY_5;
-        case 0b111110111111: return Key::KEY_6;
-        case 0b111101111111: return Key::KEY_7;
-        case 0b111011111111: return Key::KEY_8;
-        case 0b110111111111: return Key::KEY_9;
-        case 0b011111111111: return Key::KEY_NO;    // Cancel/N
-        case 0b101111111111: return Key::KEY_YES;   // OK/Y
+    switch (raw & KEY_MASK_ALL) {
+        case maskForBit(KEY_BIT_0):   return Key::KEY_0;
+        case maskForBit(KEY_BIT_1):   return Key::KEY_1;
+        case maskForBit(KEY_BIT_2):   return Key::KEY_2;
+        case maskForBit(KEY_BIT_3):   return Key::KEY_3;
+        case maskForBit(KEY_BIT_4):   return Key::KEY_4;
+        case maskForBit(KEY_BIT_5):   return Key::KEY_5;
+        case maskForBit(KEY_BIT_6):   return Key::KEY_6;
+        case maskForBit(KEY_BIT_7):   return Key::KEY_7;
+        case maskForBit(KEY_BIT_8):   return Key::KEY_8;
+        case maskForBit(KEY_BIT_9):   return Key::KEY_9;
+        case maskForBit(KEY_BIT_NO):  return Key::KEY_NO;    // Cancel/N
+        case maskForBit(KEY_BIT_YES): return Key::KEY_YES;   // OK/Y
         default: return Key::KEY_NONE;
     }
 }
@@ -66,19 +103,19 @@ static Key rawToKey(uint16_t raw) {
  */
 static uint16_t keyToMask(Key key) {
     switch (key) {
-        case Key::KEY_0: return 0b111111111110;
-        case Key::KEY_1: return 0b111111111101;
-        case Key::KEY_2: return 0b111111111011;
-        case Key::KEY_3: return 0b111111110111;
-        case Key::KEY_4: return 0b111111101111;
-        case Key::KEY_5: return 0b111111011111;
-        case Key::KEY_6: return 0b111110111111;
-        case Key::KEY_7: return 0b111101111111;
-        case Key::KEY_8: return 0b111011111111;
-        case Key::KEY_9: return 0b110111111111;
-        case Key::KEY_NO: return 0b011111111111;
-        case Key::KEY_YES: return 0b101111111111;
-        default: return 0xFFFF;
+        case Key::KEY_0:   return maskForBit(KEY_BIT_0);
+        case Key::KEY_1:   return maskForBit(KEY_BIT_1);
+        case Key::KEY_2:   return maskForBit(KEY_BIT_2);
+        case Key::KEY_3:   return maskForBit(KEY_BIT_3);
+        case Key::KEY_4:   return maskForBit(KEY_BIT_4);
+        case Key::KEY_5:   return maskForBit(KEY_BIT_5);
+        case Key::KEY_6:   return maskForBit(KEY_BIT_6);
+        case Key::KEY_7:   return maskForBit(KEY_BIT_7);
+        case Key::KEY_8:   return maskForBit(KEY_BIT_8);
+        case Key::KEY_9:   return maskForBit(KEY_BIT_9);
+        case Key::KEY_NO:  return maskForBit(KEY_BIT_NO);
+        case Key::KEY_YES: return maskForBit(KEY_BIT_YES);
+        default: return KEY_STATE_INVALID;
     }
 }
 
@@ -110,7 +147,7 @@ public:
     void clearBuffer() override;
 
 private:
-    uint16_t readInputs();
+    uint16_t readInputs() const;
     void bufferAddKey(Key key);
     Key bufferGetKey();
     static void taskFunc(void* arg);
@@ -133,14 +170,14 @@ private:
     TaskHandle_t taskHandle_ = nullptr;
 
     // State
-    uint16_t lastRawState_ = 0xFFFF;
+    uint16_t lastRawState_ = KEY_STATE_INVALID;
     volatile bool inSleepMode_ = false;
 
     // Callbacks
     KeyCallback callback_ = nullptr;
     LongPressCallback longPressCallback_ = nullptr;
     bool longPressEnabled_ = false;
-    uint32_t longPressThresholdMs_ = 800;
+    uint32_t longPressThresholdMs_ = LONG_PRESS_THRESHOLD_MS;
 
     // Long-press tracking
     Key pressedKey_ = Key::KEY_NONE;
@@ -268,12 +305,12 @@ void TCA9535Keypad::stop() {
  * \brief Reads raw 16-bit input state from TCA9535.
  * \return Raw input bitmask.
  */
-uint16_t TCA9535Keypad::readInputs() {
-    if (!device_) return 0xFFFF;
+uint16_t TCA9535Keypad::readInputs() const {
+    if (!device_) return KEY_STATE_INVALID;
 
     uint8_t lo = 0xFF, hi = 0xFF;
-    if (bus_->readReg(device_, REG_INPUT_0, &lo, 1) != ESP_OK) return 0xFFFF;
-    if (bus_->readReg(device_, REG_INPUT_1, &hi, 1) != ESP_OK) return 0xFFFF;
+    if (bus_->readReg(device_, REG_INPUT_0, &lo, 1) != ESP_OK) return KEY_STATE_INVALID;
+    if (bus_->readReg(device_, REG_INPUT_1, &hi, 1) != ESP_OK) return KEY_STATE_INVALID;
 
     return (uint16_t)((hi << 8) | lo);
 }
@@ -285,10 +322,10 @@ uint16_t TCA9535Keypad::readInputs() {
  */
 bool TCA9535Keypad::isKeyPressed(Key key) const {
     uint16_t mask = keyToMask(key);
-    if (mask == 0xFFFF) return false;
+    if (mask == KEY_STATE_INVALID) return false;
 
-    uint16_t current = const_cast<TCA9535Keypad*>(this)->readInputs();
-    return (current & 0x0FFF) == mask;
+    uint16_t current = readInputs();
+    return (current & KEY_MASK_ALL) == mask;
 }
 
 /**
@@ -315,9 +352,9 @@ bool TCA9535Keypad::hasKey() const {
  * \return `true` when any key is pressed.
  */
 bool TCA9535Keypad::anyKeyDown() const {
-    uint16_t current = const_cast<TCA9535Keypad*>(this)->readInputs();
-    // 0x0FFF = all 12 keys released (bits 0-11 high, bits 12-15 don't care)
-    return (current & 0x0FFF) != 0x0FFF;
+    uint16_t current = readInputs();
+    // KEY_STATE_IDLE = all 12 keys released (bits 0-11 high, bits 12-15 don't care)
+    return (current & KEY_MASK_ALL) != KEY_STATE_IDLE;
 }
 
 /**

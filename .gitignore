@@ -31,6 +31,9 @@ components/*/.patched
 # Logs
 *.log
 
+# Core dumps
+coredump.bin
+
 # Legacy code
 legacy/
 

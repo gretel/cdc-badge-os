@@ -1,5 +1,9 @@
 // USB HID Module - Composite Device
 // CDC + optional HID/CCID interfaces registered by modules
+//
+// Interface descriptor types (UsbInterfaceClass, UsbHidCallbacks, UsbInterfaceDef)
+// are defined once in cdc_core/UsbManager.h and re-exported here as global aliases
+// for the legacy C-style apply API.
 
 #pragma once
 
@@ -8,48 +12,21 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
+#include "cdc_core/UsbManager.h"
+
+// Re-export the canonical types from cdc::core into the global namespace so that
+// the runtime apply API can keep using unqualified type names without enforcing
+// the namespace on existing call sites.
+using UsbInterfaceClass = cdc::core::UsbInterfaceClass;
+using UsbHidCallbacks = cdc::core::UsbHidCallbacks;
+using UsbInterfaceDef = cdc::core::UsbInterfaceSpec;
+
 extern "C" {
 #endif
 
 // Initialize HID-related resources (if any).
 // TinyUSB init is performed by usb_cdc_init().
 bool usb_hid_init(void);
-
-#ifdef __DOXYGEN__
-namespace cdc::usb_badge {
-#endif
-
-enum class UsbInterfaceClass : uint8_t {
-    Hid = 0,
-    Ccid = 1,
-};
-
-struct UsbHidCallbacks {
-    // report_type matches HID report type (input/output/feature)
-    uint16_t (*onGetReport)(uint8_t report_id, uint8_t report_type,
-                            uint8_t* buffer, uint16_t reqlen);
-    void (*onSetReport)(uint8_t report_id, uint8_t report_type,
-                        uint8_t const* buffer, uint16_t bufsize);
-    void (*onReportComplete)(uint8_t const* report, uint16_t len);
-};
-
-struct UsbInterfaceDef {
-    UsbInterfaceClass cls;
-    const char* name;  // Interface name for USB string descriptor
-
-    // HID fields
-    const uint8_t* reportDesc;
-    uint16_t reportDescLen;
-    uint8_t protocol;  // HID protocol (0=none, 1=keyboard)
-    bool hasOut;
-    uint16_t epInSize;
-    uint16_t epOutSize;
-    UsbHidCallbacks callbacks;
-};
-
-#ifdef __DOXYGEN__
-} // namespace cdc::usb_badge
-#endif
 
 // Apply active interface list (ordered). Attempts soft reconnect; sets needs_replug
 // if host may require replug.

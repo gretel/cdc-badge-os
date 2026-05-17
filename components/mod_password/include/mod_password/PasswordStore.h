@@ -1,5 +1,7 @@
 #pragma once
 
+#include "cdc_core/IModule.h"
+#include "cdc_core/SlotManager.h"
 #include "cdc_hal/ISecureElement.h"
 #include <cstdint>
 #include <cstddef>
@@ -53,25 +55,25 @@ public:
 
     bool listEntriesSorted(EntryIndex* entries, uint16_t maxEntries, uint16_t* countOut) const;
 
-    void setSlotRange(uint16_t start, uint16_t end, uint8_t moduleId);
-    uint16_t capacity() const;
-    bool toPhysicalSlot(uint16_t logicalIndex, uint16_t* slotOut) const;
-    bool toLogicalSlot(uint16_t slot, uint16_t* logicalIndexOut) const;
-    bool hasSlotRange() const { return hasSlotRange_; }
-    uint8_t moduleId() const { return moduleId_; }
-    uint16_t rmemStart() const { return rmemStart_; }
-    uint16_t rmemEnd() const { return rmemEnd_; }
+    void setSlotRange(const cdc::core::IModule::SlotRange& range);
+    uint16_t capacity() const { return slots_.capacity(); }
+    bool toPhysicalSlot(uint16_t logicalIndex, uint16_t* slotOut) const {
+        return slots_.toPhysicalSlot(logicalIndex, slotOut);
+    }
+    bool toLogicalSlot(uint16_t slot, uint16_t* logicalIndexOut) const {
+        return slots_.toLogicalSlot(slot, logicalIndexOut);
+    }
+    bool hasSlotRange() const { return slots_.hasSlotRange(); }
+    uint8_t moduleId() const { return slots_.moduleId(); }
+    uint16_t rmemStart() const { return slots_.rmemStart(); }
+    uint16_t rmemEnd() const { return slots_.rmemEnd(); }
 
 private:
     PasswordStore() = default;
 
-    bool findFreeSlot(uint16_t* slotOut) const;
     static int compareTitles(const char* a, const char* b);
 
-    bool hasSlotRange_ = false;
-    uint16_t rmemStart_ = 0;
-    uint16_t rmemEnd_ = 0;
-    uint8_t moduleId_ = 0;
+    cdc::core::SlotManager slots_;
 };
 
 } // namespace cdc::mod_password

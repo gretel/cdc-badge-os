@@ -2,12 +2,16 @@
 
 #include <cstdint>
 
+#include "cdc_views/LayoutConstants.h"
+
 class Gdey029T94;
 
 namespace cdc::ui::render {
 
-constexpr int kFooterHeight = 16;
-constexpr int kScrollIndicatorWidth = 8;
+// Backwards-compatible aliases for the shared layout constants.
+// Prefer the canonical names in cdc::ui::layout for new code.
+constexpr int FOOTER_HEIGHT = cdc::ui::layout::FOOTER_HEIGHT;
+constexpr int SCROLL_INDICATOR_WIDTH = cdc::ui::layout::SCROLL_INDICATOR_WIDTH;
 
 void drawHeaderLeft(Gdey029T94* gfx, const char* title, int x, int y,
                     uint16_t width, int underlineOffset = 18);

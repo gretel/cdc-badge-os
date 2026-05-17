@@ -74,16 +74,6 @@ extern "C" lt_ret_t lt_port_spi_csn_low(lt_l2_state_t *s2) {
         return LT_PARAM_ERR;
     }
     lt_dev_esp32_t *device = static_cast<lt_dev_esp32_t *>(s2->device);
-
-    // Acquire exclusive SPI bus access before asserting CS
-    if (device->spi) {
-        esp_err_t err = spi_device_acquire_bus(device->spi, portMAX_DELAY);
-        if (err != ESP_OK) {
-            LOG_E(TAG, "Failed to acquire SPI bus: %d", err);
-            return LT_L1_SPI_ERROR;
-        }
-    }
-
     gpio_set_level(device->cs_pin, 0);
     return LT_OK;
 }
@@ -94,11 +84,6 @@ extern "C" lt_ret_t lt_port_spi_csn_high(lt_l2_state_t *s2) {
     }
     lt_dev_esp32_t *device = static_cast<lt_dev_esp32_t *>(s2->device);
     gpio_set_level(device->cs_pin, 1);
-
-    // Release SPI bus after deasserting CS
-    if (device->spi) {
-        spi_device_release_bus(device->spi);
-    }
     return LT_OK;
 }
 

@@ -1218,57 +1218,94 @@ void SerialCmd::init() {
 }
 
 /**
- * \brief Processes one pending input character from the serial console.
- * \return `true` if a command line was completed, otherwise `false`.
+ * \brief Replaces the current input line with a history entry.
+ *
+ * Navigates the command history ring buffer in either direction and updates
+ * the visible console line accordingly. No-op when the requested direction
+ * has no further entries available.
+ *
+ * \param dir Navigation direction (older = arrow up, newer = arrow down).
  */
-bool SerialCmd::process() {
-    int c = Console::getchar();
-    if (c < 0) return false;
+void SerialCmd::handleHistoryNav(HistoryDirection dir) {
+    if (dir == HistoryDirection::OLDER) {
+        if (s_historyPos >= s_historyCount) return;
+        const char* hist = historyGet(s_historyPos);
+        if (hist) {
+            redrawLine(hist, s_cmdBufferPos);
+            s_historyPos++;
+        }
+        return;
+    }
 
-    // Handle escape sequences (arrow keys)
+    // HistoryDirection::NEWER
+    if (s_historyPos == 0) return;
+    s_historyPos--;
+    if (s_historyPos == 0) {
+        redrawLine("", s_cmdBufferPos);
+        return;
+    }
+    const char* hist = historyGet(s_historyPos - 1);
+    if (hist) {
+        redrawLine(hist, s_cmdBufferPos);
+    }
+}
+
+/**
+ * \brief Processes one input character while in an active escape sequence.
+ *
+ * Implements a small state machine for ANSI CSI sequences:
+ * `ESC` followed by `[` enters bracket mode, where `A`/`B` map to history
+ * navigation. Any other character ends the sequence without action.
+ *
+ * \param c Input character.
+ * \return `true` if the character was consumed by escape handling and the
+ *         caller should not process it further; `false` otherwise.
+ */
+bool SerialCmd::handleEscape(int c) {
     if (s_escState == EscState::ESC) {
         if (c == '[') {
             s_escState = EscState::BRACKET;
-            return false;
+        } else {
+            s_escState = EscState::NONE;
         }
-        s_escState = EscState::NONE;
-    } else if (s_escState == EscState::BRACKET) {
-        s_escState = EscState::NONE;
-        switch (c) {
-            case 'A':  // Arrow up - older command
-                if (s_historyPos < s_historyCount) {
-                    const char* hist = historyGet(s_historyPos);
-                    if (hist) {
-                        redrawLine(hist, s_cmdBufferPos);
-                        s_historyPos++;
-                    }
-                }
-                return false;
-
-            case 'B':  // Arrow down - newer command
-                if (s_historyPos > 0) {
-                    s_historyPos--;
-                    if (s_historyPos == 0) {
-                        redrawLine("", s_cmdBufferPos);
-                    } else {
-                        const char* hist = historyGet(s_historyPos - 1);
-                        if (hist) {
-                            redrawLine(hist, s_cmdBufferPos);
-                        }
-                    }
-                }
-                return false;
-
-            default:
-                return false;
-        }
+        return true;
     }
 
-    // Handle special characters
+    if (s_escState == EscState::BRACKET) {
+        s_escState = EscState::NONE;
+        switch (c) {
+            case 'A':
+                handleHistoryNav(HistoryDirection::OLDER);
+                break;
+            case 'B':
+                handleHistoryNav(HistoryDirection::NEWER);
+                break;
+            default:
+                break;
+        }
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * \brief Processes one input character against the special-key dispatch table.
+ *
+ * Handles control characters (ESC, CR/LF, backspace, Ctrl-C, Ctrl-U) and
+ * printable characters. Mutates the command buffer and console output as
+ * appropriate.
+ *
+ * \param c Input character.
+ * \param[out] commandReady Set to `true` when a complete line was submitted.
+ */
+void SerialCmd::handleSpecialChar(int c, bool& commandReady) {
+    commandReady = false;
+
     switch (c) {
         case 0x1B:  // ESC
             s_escState = EscState::ESC;
-            return false;
+            return;
 
         case '\r':
         case '\n':
@@ -1281,7 +1318,8 @@ bool SerialCmd::process() {
             s_cmdBufferPos = 0;
             s_historyPos = 0;
             Console::showPrompt();
-            return true;
+            commandReady = true;
+            return;
 
         case 0x7F:  // Backspace (DEL)
         case 0x08:  // Backspace (BS)
@@ -1289,29 +1327,44 @@ bool SerialCmd::process() {
                 s_cmdBufferPos--;
                 Console::print("\b \b");
             }
-            return false;
+            return;
 
         case 0x03:  // Ctrl+C
             Console::print("^C\r\n");
             s_cmdBufferPos = 0;
             s_historyPos = 0;
             Console::showPrompt();
-            return false;
+            return;
 
         case 0x15:  // Ctrl+U
             while (s_cmdBufferPos > 0) {
                 Console::print("\b \b");
                 s_cmdBufferPos--;
             }
-            return false;
+            return;
 
         default:
             if (c >= 0x20 && c < 0x7F && s_cmdBufferPos < CMD_BUFFER_SIZE - 1) {
                 s_cmdBuffer[s_cmdBufferPos++] = static_cast<char>(c);
                 Console::putchar(static_cast<char>(c));
             }
-            return false;
+            return;
     }
+}
+
+/**
+ * \brief Processes one pending input character from the serial console.
+ * \return `true` if a command line was completed, otherwise `false`.
+ */
+bool SerialCmd::process() {
+    int c = Console::getchar();
+    if (c < 0) return false;
+
+    if (handleEscape(c)) return false;
+
+    bool commandReady = false;
+    handleSpecialChar(c, commandReady);
+    return commandReady;
 }
 
 /**

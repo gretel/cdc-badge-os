@@ -7,6 +7,8 @@
 #include "cdc_log.h"
 #include <string.h>
 
+static const char* TAG = "CBOR";
+
 /** \brief CBOR writer implementation. */
 
 /**
@@ -49,7 +51,7 @@ static void write_byte(cbor_writer_t *w, uint8_t b) {
     if (w->error) return;
     if (w->offset >= w->size) {
         w->error = true;
-        LOG_E("CBOR", "Write overflow");
+        LOG_E(TAG, "Write overflow");
         return;
     }
     w->buffer[w->offset++] = b;
@@ -65,7 +67,7 @@ static void write_bytes(cbor_writer_t *w, const uint8_t *data, size_t len) {
     if (w->error) return;
     if (w->offset + len > w->size) {
         w->error = true;
-        LOG_E("CBOR", "Write overflow (need %d, have %d)", len, w->size - w->offset);
+        LOG_E(TAG, "Write overflow (need %d, have %d)", len, w->size - w->offset);
         return;
     }
     memcpy(w->buffer + w->offset, data, len);
@@ -319,7 +321,7 @@ static bool read_byte(cbor_reader_t *r, uint8_t *b) {
     if (r->error) return false;
     if (r->offset >= r->size) {
         r->error = true;
-        LOG_E("CBOR", "Read underflow");
+        LOG_E(TAG, "Read underflow");
         return false;
     }
     *b = r->data[r->offset++];
@@ -369,11 +371,11 @@ static bool read_type_value(cbor_reader_t *r, uint8_t *type, uint64_t *value) {
     } else if (info == 31) {
         // Indefinite length - not supported in CTAP2
         r->error = true;
-        LOG_E("CBOR", "Indefinite length not supported");
+        LOG_E(TAG, "Indefinite length not supported");
         return false;
     } else {
         r->error = true;
-        LOG_E("CBOR", "Invalid additional info: %d", info);
+        LOG_E(TAG, "Invalid additional info: %d", info);
         return false;
     }
 
@@ -560,7 +562,7 @@ int cbor_read_array(cbor_reader_t *r) {
 
 static bool cbor_skip_item_impl(cbor_reader_t *r, uint8_t depth) {
     if (depth > CBOR_MAX_RECURSION_DEPTH) {
-        LOG_W("CBOR", "Max recursion depth exceeded");
+        LOG_W(TAG, "Max recursion depth exceeded");
         return false;
     }
 
@@ -570,7 +572,7 @@ static bool cbor_skip_item_impl(cbor_reader_t *r, uint8_t depth) {
     // For containers, skip all nested items with limits
     if (item.type == CBOR_ARRAY) {
         if (item.value > CBOR_MAX_CONTAINER_SIZE) {
-            LOG_W("CBOR", "Array too large: %llu", (unsigned long long)item.value);
+            LOG_W(TAG, "Array too large: %llu", (unsigned long long)item.value);
             return false;
         }
         for (uint64_t i = 0; i < item.value; i++) {
@@ -578,7 +580,7 @@ static bool cbor_skip_item_impl(cbor_reader_t *r, uint8_t depth) {
         }
     } else if (item.type == CBOR_MAP) {
         if (item.value > CBOR_MAX_CONTAINER_SIZE) {
-            LOG_W("CBOR", "Map too large: %llu", (unsigned long long)item.value);
+            LOG_W(TAG, "Map too large: %llu", (unsigned long long)item.value);
             return false;
         }
         for (uint64_t i = 0; i < item.value * 2; i++) {

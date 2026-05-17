@@ -17,6 +17,8 @@
 using cdc::mod_fido2::get_se;
 using cdc::mod_fido2::sha256;
 
+static const char* TAG = "U2F";
+
 /** \brief DER encoding helper constants for X.509/signature generation. */
 static constexpr uint8_t DER_SEQUENCE_TAG = 0x30;
 static constexpr uint8_t DER_INTEGER_TAG = 0x02;
@@ -42,6 +44,36 @@ static uint8_t g_attest_pubkey[65];  // 0x04 || X || Y
 static bool g_attest_initialized = false;
 
 /**
+ * \brief Encodes a single big-endian unsigned integer as a DER INTEGER element.
+ * \param p Output cursor (advances past written bytes).
+ * \param mpi Big-endian magnitude buffer.
+ * \param len Magnitude length in bytes.
+ * \return Updated output cursor positioned after the encoded INTEGER.
+ *
+ * Strips leading zero bytes (keeping at least one) and prepends a 0x00 padding
+ * byte when the MSB is set, ensuring the integer remains non-negative in DER.
+ */
+static uint8_t* encode_der_integer(uint8_t *p, const uint8_t *mpi, size_t len) {
+    // Skip leading zero bytes but keep at least one byte.
+    size_t start = 0;
+    while (start + 1 < len && mpi[start] == 0) {
+        start++;
+    }
+    size_t actual_len = len - start;
+
+    // Prepend padding byte if MSB is set (DER INTEGERs are signed, two's complement).
+    int pad = (mpi[start] & DER_INTEGER_NEGATIVE_MASK) ? 1 : 0;
+
+    *p++ = DER_INTEGER_TAG;
+    *p++ = static_cast<uint8_t>(pad + actual_len);
+    if (pad) {
+        *p++ = 0x00;
+    }
+    memcpy(p, mpi + start, actual_len);
+    return p + actual_len;
+}
+
+/**
  * \brief Signs payload hash with attestation key and encodes signature as DER.
  * \param data Data to hash and sign.
  * \param data_len Length of `data`.
@@ -64,48 +96,25 @@ static bool u2f_attest_sign(const uint8_t *data, size_t data_len,
     if (se->ecdsaSign(U2F_ATTEST_SLOT, hash, sizeof(hash), raw_sig, &raw_len) !=
             cdc::hal::SeResult::OK ||
         raw_len != sizeof(raw_sig)) {
-        LOG_E("U2F", "Attestation signing failed");
+        LOG_E(TAG, "Attestation signing failed");
         return false;
     }
 
-    // Convert raw R||S to DER format
     // DER: SEQUENCE { INTEGER R, INTEGER S }
+    // Encode R and S into a scratch buffer first so we can compute the SEQUENCE length.
+    uint8_t body[2 * (2 + 1 + RAW_SIGNATURE_COMPONENT_SIZE)];  // tag + len + pad + magnitude, twice
+    uint8_t *body_end = encode_der_integer(body, raw_sig, RAW_SIGNATURE_COMPONENT_SIZE);
+    body_end = encode_der_integer(body_end, raw_sig + RAW_SIGNATURE_COMPONENT_SIZE,
+                                  RAW_SIGNATURE_COMPONENT_SIZE);
+    size_t body_len = static_cast<size_t>(body_end - body);
+
     uint8_t *p = signature;
     *p++ = DER_SEQUENCE_TAG;
+    *p++ = static_cast<uint8_t>(body_len);
+    memcpy(p, body, body_len);
+    p += body_len;
 
-    // Find first non-zero byte in R (skip leading zeros)
-    int r_start = 0;
-    while (r_start < RAW_SIGNATURE_COMPONENT_SIZE - 1 && raw_sig[r_start] == 0) r_start++;
-    int r_len = RAW_SIGNATURE_COMPONENT_SIZE - r_start;
-    // Add padding byte if MSB is set (to keep it positive in DER)
-    int r_pad = (raw_sig[r_start] & DER_INTEGER_NEGATIVE_MASK) ? 1 : 0;
-
-    // Find first non-zero byte in S (skip leading zeros)
-    int s_start = 0;
-    while (s_start < RAW_SIGNATURE_COMPONENT_SIZE - 1 && raw_sig[RAW_SIGNATURE_COMPONENT_SIZE + s_start] == 0) s_start++;
-    int s_len = RAW_SIGNATURE_COMPONENT_SIZE - s_start;
-    // Add padding byte if MSB is set
-    int s_pad = (raw_sig[RAW_SIGNATURE_COMPONENT_SIZE + s_start] & DER_INTEGER_NEGATIVE_MASK) ? 1 : 0;
-
-    // Total length: 2 (R header) + r_pad + r_len + 2 (S header) + s_pad + s_len
-    int total_len = 2 + r_pad + r_len + 2 + s_pad + s_len;
-    *p++ = total_len;
-
-    // R integer
-    *p++ = DER_INTEGER_TAG;
-    *p++ = r_pad + r_len;
-    if (r_pad) *p++ = 0x00;  // Padding byte to ensure positive
-    memcpy(p, raw_sig + r_start, r_len);
-    p += r_len;
-
-    // S integer
-    *p++ = DER_INTEGER_TAG;
-    *p++ = s_pad + s_len;
-    if (s_pad) *p++ = 0x00;  // Padding byte to ensure positive
-    memcpy(p, raw_sig + RAW_SIGNATURE_COMPONENT_SIZE + s_start, s_len);
-    p += s_len;
-
-    *sig_len = p - signature;
+    *sig_len = static_cast<uint8_t>(p - signature);
     return true;
 }
 
@@ -118,7 +127,7 @@ bool u2f_init_attestation(void) {
         return true;
     }
 
-    LOG_I("U2F", "Initializing attestation...");
+    LOG_I(TAG, "Initializing attestation...");
 
     auto* se = get_se();
     if (!se) {
@@ -129,21 +138,21 @@ bool u2f_init_attestation(void) {
     uint8_t pubkey[65];
     cdc::hal::EccCurve curve = cdc::hal::EccCurve::P256;
     if (!se->eccSlotUsed(U2F_ATTEST_SLOT)) {
-        LOG_E("U2F", "Attestation key missing in slot %d", U2F_ATTEST_SLOT);
+        LOG_E(TAG, "Attestation key missing in slot %d", U2F_ATTEST_SLOT);
         return false;
     }
 
     if (se->eccGetPublicKey(U2F_ATTEST_SLOT, pubkey, &curve) != cdc::hal::SeResult::OK) {
-        LOG_E("U2F", "Failed to read attestation public key");
+        LOG_E(TAG, "Failed to read attestation public key");
         return false;
     }
 
     if (curve != cdc::hal::EccCurve::P256) {
-        LOG_E("U2F", "Attestation key has invalid curve");
+        LOG_E(TAG, "Attestation key has invalid curve");
         return false;
     }
 
-    LOG_I("U2F", "Attestation key ready (curve=P256)");
+    LOG_I(TAG, "Attestation key ready (curve=P256)");
 
     // Store public key (with uncompressed point prefix)
     g_attest_pubkey[0] = EC_POINT_UNCOMPRESSED;
@@ -167,7 +176,7 @@ bool u2f_init_attestation(void) {
     // Serial number - random
     uint8_t serial[8];
     if (!se->getRandom(serial, sizeof(serial))) {
-        LOG_E("U2F", "Failed to get random serial");
+        LOG_E(TAG, "Failed to get random serial");
         return false;
     }
     serial[0] &= DER_ENSURE_POSITIVE_MASK;  // Ensure positive
@@ -282,7 +291,7 @@ bool u2f_init_attestation(void) {
     uint8_t sig_len = 0;
 
     if (!u2f_attest_sign(tbs_wrapped, tbs_wrapped_len, sig, &sig_len)) {
-        LOG_E("U2F", "Failed to sign certificate");
+        LOG_E(TAG, "Failed to sign certificate");
         return false;
     }
 
@@ -317,7 +326,7 @@ bool u2f_init_attestation(void) {
     g_attest_cert_len = p - cert;
     g_attest_initialized = true;
 
-    LOG_I("U2F", "FIDO2 attestation certificate generated (%d bytes)", g_attest_cert_len);
+    LOG_I(TAG, "FIDO2 attestation certificate generated (%d bytes)", g_attest_cert_len);
 
     return true;
 }
@@ -393,7 +402,7 @@ static uint16_t u2f_version(uint8_t *response, uint16_t response_max) {
     response[len] = 0x90;
     response[len + 1] = 0x00;
 
-    LOG_I("U2F", "Version request: U2F_V2");
+    LOG_I(TAG, "Version request: U2F_V2");
     return len + 2;
 }
 
@@ -411,7 +420,7 @@ static bool is_dummy_application(const uint8_t *application) {
             return false;
         }
     }
-    LOG_I("U2F", "Detected dummy/blink request (app=0x%02x...)", first);
+    LOG_I(TAG, "Detected dummy/blink request (app=0x%02x...)", first);
     return true;
 }
 
@@ -425,7 +434,7 @@ static bool is_dummy_application(const uint8_t *application) {
  */
 static uint16_t u2f_register(const uint8_t *challenge, const uint8_t *application,
                               uint8_t *response, uint16_t response_max) {
-    LOG_I("U2F", "Register request");
+    LOG_I(TAG, "Register request");
 
     bool is_dummy = is_dummy_application(application);
 
@@ -444,18 +453,18 @@ static uint16_t u2f_register(const uint8_t *challenge, const uint8_t *applicatio
             dummy_id, FIDO2_ACTION_SELECT, NULL);
 
         if (up_result != FIDO2_UP_APPROVED) {
-            LOG_D("U2F", "Dummy: no user presence yet");
+            LOG_D(TAG, "Dummy: no user presence yet");
             return u2f_response_error(response, U2F_SW_CONDITIONS_NOT_SATISFIED);
         }
 
         // User touched - generate a dummy response (random data, not stored)
-        LOG_I("U2F", "Dummy: user touched - generating response");
+        LOG_I(TAG, "Dummy: user touched - generating response");
         uint8_t dummy_cred[U2F_KEY_HANDLE_SIZE];
         uint8_t dummy_pubkey[64];
         auto* se = get_se();
         if (!se || !se->getRandom(dummy_cred, U2F_KEY_HANDLE_SIZE) ||
             !se->getRandom(dummy_pubkey, 64)) {
-            LOG_E("U2F", "Failed to get random for dummy response");
+            LOG_E(TAG, "Failed to get random for dummy response");
             return U2F_SW_WTF;
         }
 
@@ -498,7 +507,7 @@ static uint16_t u2f_register(const uint8_t *challenge, const uint8_t *applicatio
         response[offset++] = 0x90;
         response[offset++] = 0x00;
 
-        LOG_I("U2F", "Dummy response complete, len=%u", offset);
+        LOG_I(TAG, "Dummy response complete, len=%u", offset);
         return offset;
     }
 
@@ -512,7 +521,7 @@ static uint16_t u2f_register(const uint8_t *challenge, const uint8_t *applicatio
         rp_id, FIDO2_ACTION_REGISTER, NULL);
 
     if (up_result != FIDO2_UP_APPROVED) {
-        LOG_I("U2F", "User presence denied");
+        LOG_I(TAG, "User presence denied");
         return u2f_response_error(response, U2F_SW_CONDITIONS_NOT_SATISFIED);
     }
 
@@ -527,10 +536,10 @@ static uint16_t u2f_register(const uint8_t *challenge, const uint8_t *applicatio
         if (!fido2_storage_create_credential(
                 rp_id, application, user_id, 1, "U2F",
                 false, 0, CDC_CURVE_P256, &slot, cred_id, pubkey)) {
-            LOG_E("U2F", "Failed to create credential");
+            LOG_E(TAG, "Failed to create credential");
             return u2f_response_error(response, U2F_SW_WRONG_DATA);
         }
-        LOG_I("U2F", "Created credential in slot %d", slot);
+        LOG_I(TAG, "Created credential in slot %d", slot);
     }
 
     // Build registration response:
@@ -554,12 +563,12 @@ static uint16_t u2f_register(const uint8_t *challenge, const uint8_t *applicatio
 
     // Attestation certificate
     if (!g_attest_initialized) {
-        LOG_E("U2F", "Attestation not initialized");
+        LOG_E(TAG, "Attestation not initialized");
         return u2f_response_error(response, U2F_SW_WRONG_DATA);
     }
 
     if (offset + g_attest_cert_len + U2F_MAX_EC_SIG_SIZE + 2 > response_max) {
-        LOG_E("U2F", "Response buffer too small");
+        LOG_E(TAG, "Response buffer too small");
         return u2f_response_error(response, U2F_SW_WRONG_LENGTH);
     }
 
@@ -587,7 +596,7 @@ static uint16_t u2f_register(const uint8_t *challenge, const uint8_t *applicatio
     uint8_t sig_len = 0;
 
     if (!u2f_attest_sign(to_sign, to_sign_len, signature, &sig_len)) {
-        LOG_E("U2F", "Attestation signing failed");
+        LOG_E(TAG, "Attestation signing failed");
         return u2f_response_error(response, U2F_SW_WRONG_DATA);
     }
 
@@ -598,7 +607,7 @@ static uint16_t u2f_register(const uint8_t *challenge, const uint8_t *applicatio
     response[offset++] = 0x90;
     response[offset++] = 0x00;
 
-    LOG_I("U2F", "Register complete, response len=%u", offset);
+    LOG_I(TAG, "Register complete, response len=%u", offset);
     return offset;
 }
 
@@ -617,35 +626,35 @@ static uint16_t u2f_authenticate(uint8_t p1, const uint8_t *challenge,
                                   const uint8_t *application,
                                   const uint8_t *key_handle, uint8_t key_handle_len,
                                   uint8_t *response, uint16_t response_max) {
-    LOG_I("U2F", "Authenticate request, p1=0x%02X, kh_len=%d", p1, key_handle_len);
+    LOG_I(TAG, "Authenticate request, p1=0x%02X, kh_len=%d", p1, key_handle_len);
 
     if (key_handle_len != U2F_KEY_HANDLE_SIZE) {
-        LOG_W("U2F", "Invalid key handle length: %d", key_handle_len);
+        LOG_W(TAG, "Invalid key handle length: %d", key_handle_len);
         return u2f_response_error(response, U2F_SW_WRONG_DATA);
     }
 
     // Find credential by key handle
     int8_t slot = fido2_storage_find_slot_by_cred_id(key_handle, key_handle_len);
     if (slot < 0) {
-        LOG_W("U2F", "Key handle not found");
+        LOG_W(TAG, "Key handle not found");
         return u2f_response_error(response, U2F_SW_WRONG_DATA);
     }
 
     // Verify RP ID hash matches
     fido2_credential_info_t cred;
     if (!fido2_storage_get_credential(slot, &cred)) {
-        LOG_E("U2F", "Failed to get credential info");
+        LOG_E(TAG, "Failed to get credential info");
         return u2f_response_error(response, U2F_SW_WRONG_DATA);
     }
 
     if (memcmp(cred.rp_id_hash, application, 32) != 0) {
-        LOG_W("U2F", "Application hash mismatch");
+        LOG_W(TAG, "Application hash mismatch");
         return u2f_response_error(response, U2F_SW_WRONG_DATA);
     }
 
     // Check-only mode - just verify key handle is valid
     if (p1 == U2F_AUTH_CHECK_ONLY) {
-        LOG_I("U2F", "Check-only: key handle valid");
+        LOG_I(TAG, "Check-only: key handle valid");
         return u2f_response_error(response, U2F_SW_CONDITIONS_NOT_SATISFIED);
     }
 
@@ -655,7 +664,7 @@ static uint16_t u2f_authenticate(uint8_t p1, const uint8_t *challenge,
             cred.rp_id, FIDO2_ACTION_AUTHENTICATE, cred.user_name);
 
         if (up_result != FIDO2_UP_APPROVED) {
-            LOG_I("U2F", "User presence denied");
+            LOG_I(TAG, "User presence denied");
             return u2f_response_error(response, U2F_SW_CONDITIONS_NOT_SATISFIED);
         }
     }
@@ -696,7 +705,7 @@ static uint16_t u2f_authenticate(uint8_t p1, const uint8_t *challenge,
     uint8_t sig_len = 0;
 
     if (!fido2_storage_sign_raw(slot, to_sign, to_sign_len, signature, &sig_len)) {
-        LOG_E("U2F", "Signing failed");
+        LOG_E(TAG, "Signing failed");
         return u2f_response_error(response, U2F_SW_WRONG_DATA);
     }
 
@@ -707,7 +716,7 @@ static uint16_t u2f_authenticate(uint8_t p1, const uint8_t *challenge,
     response[offset++] = 0x90;
     response[offset++] = 0x00;
 
-    LOG_I("U2F", "Authenticate complete, counter=%u, response len=%u", counter, offset);
+    LOG_I(TAG, "Authenticate complete, counter=%u, response len=%u", counter, offset);
     return offset;
 }
 
@@ -722,7 +731,7 @@ static uint16_t u2f_authenticate(uint8_t p1, const uint8_t *challenge,
 uint16_t u2f_process_apdu(const uint8_t *apdu, uint16_t apdu_len,
                           uint8_t *response, uint16_t response_max) {
     if (apdu_len < 4) {
-        LOG_W("U2F", "APDU too short: %d", apdu_len);
+        LOG_W(TAG, "APDU too short: %d", apdu_len);
         return u2f_response_error(response, U2F_SW_WRONG_LENGTH);
     }
 
@@ -733,11 +742,11 @@ uint16_t u2f_process_apdu(const uint8_t *apdu, uint16_t apdu_len,
 
     // Only support CLA=0x00
     if (cla != 0x00) {
-        LOG_W("U2F", "Unsupported CLA: 0x%02X", cla);
+        LOG_W(TAG, "Unsupported CLA: 0x%02X", cla);
         return u2f_response_error(response, U2F_SW_CLA_NOT_SUPPORTED);
     }
 
-    LOG_I("U2F", "APDU: CLA=0x%02X INS=0x%02X P1=0x%02X P2=0x%02X len=%d",
+    LOG_I(TAG, "APDU: CLA=0x%02X INS=0x%02X P1=0x%02X P2=0x%02X len=%d",
           cla, ins, p1, p2, apdu_len);
 
     // Parse extended length APDU
@@ -769,7 +778,7 @@ uint16_t u2f_process_apdu(const uint8_t *apdu, uint16_t apdu_len,
 
         case U2F_INS_REGISTER:
             if (data_len < U2F_CHALLENGE_SIZE + U2F_APPLICATION_SIZE) {
-                LOG_W("U2F", "Register: insufficient data: %u", data_len);
+                LOG_W(TAG, "Register: insufficient data: %u", data_len);
                 return u2f_response_error(response, U2F_SW_WRONG_LENGTH);
             }
             return u2f_register(data, data + U2F_CHALLENGE_SIZE,
@@ -777,7 +786,7 @@ uint16_t u2f_process_apdu(const uint8_t *apdu, uint16_t apdu_len,
 
         case U2F_INS_AUTHENTICATE:
             if (data_len < U2F_CHALLENGE_SIZE + U2F_APPLICATION_SIZE + 1) {
-                LOG_W("U2F", "Authenticate: insufficient data: %u", data_len);
+                LOG_W(TAG, "Authenticate: insufficient data: %u", data_len);
                 return u2f_response_error(response, U2F_SW_WRONG_LENGTH);
             }
             {
@@ -785,7 +794,7 @@ uint16_t u2f_process_apdu(const uint8_t *apdu, uint16_t apdu_len,
                 const uint8_t *kh = data + U2F_CHALLENGE_SIZE + U2F_APPLICATION_SIZE + 1;
 
                 if (data_len < U2F_CHALLENGE_SIZE + U2F_APPLICATION_SIZE + 1 + kh_len) {
-                    LOG_W("U2F", "Authenticate: key handle truncated");
+                    LOG_W(TAG, "Authenticate: key handle truncated");
                     return u2f_response_error(response, U2F_SW_WRONG_LENGTH);
                 }
 
@@ -794,7 +803,7 @@ uint16_t u2f_process_apdu(const uint8_t *apdu, uint16_t apdu_len,
             }
 
         default:
-            LOG_W("U2F", "Unsupported INS: 0x%02X", ins);
+            LOG_W(TAG, "Unsupported INS: 0x%02X", ins);
             return u2f_response_error(response, U2F_SW_INS_NOT_SUPPORTED);
     }
 }

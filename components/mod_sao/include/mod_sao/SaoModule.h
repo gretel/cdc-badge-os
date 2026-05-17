@@ -24,3 +24,5 @@ private:
 };
 
 } // namespace cdc::mod_sao
+
+extern "C" void mod_sao_register();

@@ -6,6 +6,7 @@
  */
 
 #include "cdc_views/PinEntryView.h"
+#include "cdc_views/KeyCodes.h"
 #include "cdc_views/MessageBox.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/ViewStack.h"
@@ -27,6 +28,13 @@ static constexpr int PIN_DOT_SIZE = 16;
 static constexpr int PIN_DOT_SPACING = 24;
 static constexpr int RETRIES_Y = 80;
 
+/** \brief Toast message display durations in milliseconds. */
+static constexpr uint32_t TOAST_DURATION_SHORT_MS = 1500;
+static constexpr uint32_t TOAST_DURATION_LONG_MS = 3000;
+
+/** \brief Refresh interval for the lockout countdown display. */
+static constexpr uint32_t LOCKOUT_REFRESH_MS = 1000;
+
 namespace cdc::ui {
 
 /**
@@ -40,7 +48,7 @@ void PinEntryView::init(const char* title, uint8_t maxPinLength, uint8_t maxAtte
     title_ = title;
     maxLength_ = maxPinLength > MAX_PIN_LENGTH ? MAX_PIN_LENGTH : maxPinLength;
     maxAttempts_ = maxAttempts;
-    minLength_ = 4;  // Default minimum
+    minLength_ = core::PinManager::BADGE_PIN_MIN;  // Default minimum from PinManager
     clear();
     dirty_ = true;
 }
@@ -108,7 +116,7 @@ void PinEntryView::onTick(uint32_t nowMs) {
     // Update display every second during lockout to show countdown
     if (lockedOut_) {
         static uint32_t lastUpdate = 0;
-        if (nowMs - lastUpdate >= 1000) {
+        if (nowMs - lastUpdate >= LOCKOUT_REFRESH_MS) {
             lastUpdate = nowMs;
             dirty_ = true;
         }
@@ -130,7 +138,7 @@ uint32_t PinEntryView::getLockoutRemaining() const {
 void PinEntryView::verify() {
     if (length_ < minLength_) {
         if (showMessages_) {
-            showMessage(tr(StringId::PIN_TOO_SHORT), MessageIcon::WARNING, 1500);
+            showMessage(tr(StringId::PIN_TOO_SHORT), MessageIcon::WARNING, TOAST_DURATION_SHORT_MS);
         }
         return;
     }
@@ -158,11 +166,11 @@ void PinEntryView::verify() {
         if (pm.isBadgeBlocked()) {
             lockedOut_ = true;
             if (showMessages_) {
-                showMessage(tr(StringId::LOCKED_OUT), MessageIcon::ERROR, 3000);
+                showMessage(tr(StringId::LOCKED_OUT), MessageIcon::ERROR, TOAST_DURATION_LONG_MS);
             }
         } else {
             if (showMessages_) {
-                showMessage(tr(StringId::WRONG_PIN), MessageIcon::ERROR, 1500);
+                showMessage(tr(StringId::WRONG_PIN), MessageIcon::ERROR, TOAST_DURATION_SHORT_MS);
             }
         }
         clear();
@@ -190,7 +198,7 @@ InputResult PinEntryView::onKey(char key) {
     }
 
     switch (key) {
-        case 'N': // Backspace or cancel
+        case KEY_NO: // Backspace or cancel
             if (length_ > 0) {
                 backspace();
             } else {
@@ -202,7 +210,7 @@ InputResult PinEntryView::onKey(char key) {
             }
             return InputResult::CONSUMED;
 
-        case 'Y': // Confirm
+        case KEY_YES: // Confirm
             verify();
             return InputResult::CONSUMED;
 
