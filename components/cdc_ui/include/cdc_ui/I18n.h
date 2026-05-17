@@ -171,6 +171,7 @@ enum class StringId : uint16_t {
     HINT_BRIGHTNESS,
     HINT_PIN_INPUT,
     HINT_T9_INPUT,
+    T9_FULL,
     HINT_LIST_MENU,
     HINT_SCROLL_BACK,
     HINT_FIELD_NAV,

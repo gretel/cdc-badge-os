@@ -215,6 +215,7 @@ bool EpaperDisplay::init() {
     s_epd_display->init(false);
     s_epd_display->setRotation(1);
     s_epd_display->setMonoMode(true);
+    s_epd_display->cp437(true);
     s_epd_display->fillScreen(EPD_WHITE);
 
     LOG_I(TAG, "Display hardware initialized");

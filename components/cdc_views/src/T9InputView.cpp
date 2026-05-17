@@ -8,6 +8,7 @@
 #include "cdc_views/T9InputView.h"
 #include "cdc_views/KeyCodes.h"
 #include "cdc_views/RenderHelpers.h"
+#include "cdc_views/ToastView.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_hal/IDisplay.h"
@@ -20,18 +21,23 @@ static const char* TAG = "T9InputView";
 
 /**
  * \brief T9 digit-to-character mapping table.
+ *
+ * Order per key: lowercase letters, uppercase letters, digit, then accented variants
+ * (CP437 single-byte codes). Adafruit-GFX must be configured with cp437(true) for
+ * the accented glyphs to render correctly.
  */
 static const char* t9_chars[] = {
-    " 0",                           // 0 - space, 0
-    ".?!,;:'\"()-_@#$%&*+=/\\1",   // 1 - symbols, 1
-    "abc2ABC",                      // 2
-    "def3DEF",                      // 3
-    "ghi4GHI",                      // 4
-    "jkl5JKL",                      // 5
-    "mno6MNO",                      // 6
-    "pqrs7PQRS",                    // 7
-    "tuv8TUV",                      // 8
-    "wxyz9WXYZ"                     // 9
+    " 0",                                                                                                  // 0
+    ".?!,;:'\"()-_@#$%&*+=/\\<>[]{}|^~`1"
+        "\x9B\x9C\x9D\xA8\xAD\xAE\xAF\xAB\xAC\xF1\xF8\xFD\xE6\xF6",                                        // 1: ¢ £ ¥ ¿ ¡ « » ½ ¼ ± ° ² µ ÷
+    "abcABC2\x84\xA0\x83\x85\x86\x91\x8E\x8F\x92\x87\x80",                                                 // 2: ä á â à å æ Ä Å Æ ç Ç
+    "defDEF3\x82\x8A\x88\x89\x90",                                                                          // 3: é è ê ë É
+    "ghiGHI4\xA1\x8D\x8C\x8B",                                                                              // 4: í ì î ï
+    "jklJKL5",                                                                                              // 5
+    "mnoMNO6\xA2\x95\x93\x94\x99\xA4\xA5",                                                                  // 6: ó ò ô ö Ö ñ Ñ
+    "pqrsPQRS7\xE1",                                                                                        // 7: ß
+    "tuvTUV8\x81\x9A\xA3\x97\x96",                                                                          // 8: ü Ü ú ù û
+    "wxyzWXYZ9\x98"                                                                                         // 9: ÿ
 };
 
 /**
@@ -70,6 +76,8 @@ void T9InputView::init(const char* title, const char* initialText, uint16_t maxL
     lastPressMs_ = 0;
     cursorActive_ = false;
     onSave_ = nullptr;
+    hintOverride_ = nullptr;
+    placeholder_ = nullptr;
     dirty_ = true;
 
     LOG_D(TAG, "init: title='%s', maxLen=%d", title ? title : "(null)", maxLen_);
@@ -127,6 +135,8 @@ bool T9InputView::processKey(char key) {
             text_[len_] = '\0';
             charIndex_ = 0;
             cursorActive_ = true;
+        } else {
+            ui::showToastError(ui::tr(ui::StringId::T9_FULL), 800);
         }
     }
 
@@ -168,6 +178,8 @@ void T9InputView::forceDigit(char key) {
         text_[len_] = '\0';
         dirty_ = true;
         LOG_D(TAG, "forceDigit: key='%c', text='%s'", key, text_);
+    } else {
+        ui::showToastError(ui::tr(ui::StringId::T9_FULL), 800);
     }
 }
 
@@ -261,7 +273,7 @@ InputResult T9InputView::onLongPress(char key) {
  * \return Footer hint string.
  */
 const char* T9InputView::getFooterHint() const {
-    return tr(StringId::HINT_T9_INPUT);
+    return hintOverride_ ? hintOverride_ : tr(StringId::HINT_T9_INPUT);
 }
 
 /**

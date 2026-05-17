@@ -356,6 +356,7 @@ void I18n::initCoreStrings() {
     REG(HINT_BRIGHTNESS,    "<4 6> Adjust [Y] Save", "<4 6> Anpassen [Y] Speichern");
     REG(HINT_PIN_INPUT,     "[0-9] Input [Y] OK",   "[0-9] Eingabe [Y] OK");
     REG(HINT_T9_INPUT,      "[0-9] T9 [Y] OK",      "[0-9] T9 [Y] OK");
+    REG(T9_FULL,            "Full",                 "Voll");
     REG(HINT_LIST_MENU,     "[3] Menu",             "[3] Menu");
     REG(HINT_SCROLL_BACK,   "[2/8] Scroll [N] Back","[2/8] Scrollen [N] Zuruck");
     REG(HINT_FIELD_NAV,     "[4] <  [6] >",         "[4] <  [6] >");

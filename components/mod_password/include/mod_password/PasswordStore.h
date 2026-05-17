@@ -54,6 +54,7 @@ public:
     bool deleteEntry(uint16_t slot);
 
     bool listEntriesSorted(EntryIndex* entries, uint16_t maxEntries, uint16_t* countOut) const;
+    bool findFreeLogicalSlot(uint16_t* logicalSlotOut) const;
 
     void setSlotRange(const cdc::core::IModule::SlotRange& range);
     uint16_t capacity() const { return slots_.capacity(); }

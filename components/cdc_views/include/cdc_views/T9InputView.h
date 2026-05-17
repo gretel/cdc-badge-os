@@ -57,6 +57,11 @@ public:
     void setPlaceholder(const char* placeholder) { placeholder_ = placeholder; }
 
     /**
+     * Override footer hint for this instance. Pass nullptr to fall back to default.
+     */
+    void setHint(const char* hint) { hintOverride_ = hint; }
+
+    /**
      * Force insert a digit (for long-press handling)
      */
     void forceDigit(char key);
@@ -72,6 +77,7 @@ public:
 private:
     const char* title_ = nullptr;
     const char* placeholder_ = nullptr;
+    const char* hintOverride_ = nullptr;
     char text_[MAX_TEXT_LEN + 1] = {0};
     uint16_t len_ = 0;
     uint16_t maxLen_ = MAX_TEXT_LEN;

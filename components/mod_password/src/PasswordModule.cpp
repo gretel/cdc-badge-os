@@ -4,6 +4,8 @@
 #include "cdc_core/StringUtils.h"
 #include "cdc_core/TropicStorage.h"
 #include "cdc_core/IKeyboardProvider.h"
+#include "cdc_hal/ISecureElement.h"
+#include "esp_random.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_views/ListView.h"
@@ -17,6 +19,7 @@
 #include "cdc_log.h"
 #include <cctype>
 #include <cstring>
+#include <strings.h>
 #include <new>
 #include <memory>
 #include <cstdio>
@@ -126,27 +129,13 @@ using cdc::core::skipSpaces;
 using cdc::core::nextToken;
 
 /**
- * \brief Resolves list index to logical password slot.
- * \param index UI index in sorted list.
- * \param slotOut Output slot number.
- * \return `true` if index could be resolved.
+ * \brief Validates that a slot number is within the configured password range.
+ * \param slot Logical slot number.
+ * \return `true` if slot index is in range.
  */
-static bool findSlotByIndex(uint16_t index, uint16_t* slotOut) {
-    if (!slotOut) return false;
+static bool isValidSlot(uint16_t slot) {
     auto& store = PasswordStore::instance();
-    if (!store.hasSlotRange()) return false;
-
-    uint16_t cap = store.capacity();
-    if (cap == 0) return false;
-    auto list = std::unique_ptr<PasswordStore::EntryIndex[]>(new (std::nothrow) PasswordStore::EntryIndex[cap]);
-    if (!list) return false;
-
-    uint16_t count = 0;
-    if (!store.listEntriesSorted(list.get(), cap, &count)) return false;
-    if (index >= count) return false;
-
-    *slotOut = list[index].slot;
-    return true;
+    return store.hasSlotRange() && slot < store.capacity();
 }
 
 /**
@@ -180,7 +169,7 @@ static void cmd_password_list(const char* args) {
         return;
     }
     for (uint16_t i = 0; i < count; i++) {
-        cdc::serial::Console::printf("%u: %s (slot %u)\r\n", i, list[i].title, list[i].slot);
+        cdc::serial::Console::printf("slot %u: %s\r\n", list[i].slot, list[i].title);
     }
 }
 
@@ -189,21 +178,20 @@ static void cmd_password_list(const char* args) {
  * \param args Command arguments (`<index>`).
  */
 static void cmd_password_get(const char* args) {
-    char indexBuf[8] = {};
-    const char* p = nextToken(args, indexBuf, sizeof(indexBuf));
-    if (!p || !indexBuf[0]) {
-        cdc::serial::Console::printf("Usage: PASSWORD_GET <index>\r\n");
+    char slotBuf[8] = {};
+    const char* p = nextToken(args, slotBuf, sizeof(slotBuf));
+    if (!p || !slotBuf[0]) {
+        cdc::serial::Console::printf("Usage: PASSWORD_GET <slot>\r\n");
         return;
     }
-    uint16_t index = static_cast<uint16_t>(atoi(indexBuf));
-    uint16_t slot = 0;
-    if (!findSlotByIndex(index, &slot)) {
-        cdc::serial::Console::printf("ERROR: invalid index\r\n");
+    uint16_t slot = static_cast<uint16_t>(atoi(slotBuf));
+    if (!isValidSlot(slot)) {
+        cdc::serial::Console::printf("ERROR: slot out of range\r\n");
         return;
     }
     PasswordEntry entry = {};
     if (!PasswordStore::instance().readEntry(slot, &entry)) {
-        cdc::serial::Console::printf("ERROR: read failed\r\n");
+        cdc::serial::Console::printf("ERROR: empty slot or read failed\r\n");
         return;
     }
     cdc::serial::Console::printf("Title: %s\r\n", entry.title);
@@ -222,119 +210,223 @@ static void cmd_password_get(const char* args) {
  * \brief Serial command handler adding one password entry.
  * \param args Command arguments (`<title> <username|- > <password> <url|- > [totpSlot] [notes]`).
  */
+static bool isPlaceholder(const char* s) {
+    return s && s[0] && s[1] == '\0' && (s[0] == 'x' || s[0] == 'X' || s[0] == '-');
+}
+
+/**
+ * \brief Generates a 16-character random password from charset a-zA-Z0-9$!%=.
+ * \param out Output buffer (must hold at least 17 bytes).
+ */
+static void generateRandomPassword(char* out, size_t outSize) {
+    static const char charset[] =
+        "abcdefghijklmnopqrstuvwxyz"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "0123456789"
+        "$!%=";
+    constexpr size_t charsetLen = sizeof(charset) - 1;
+    constexpr uint8_t charCount = 16;
+    if (outSize < charCount + 1) return;
+
+    uint8_t rand[charCount] = {};
+    auto* se = cdc::hal::getSecureElementInstance();
+    bool gotRand = se && se->getRandom(rand, sizeof(rand));
+    if (!gotRand) {
+        for (uint8_t i = 0; i < charCount; i++) {
+            rand[i] = static_cast<uint8_t>(esp_random() & 0xFF);
+        }
+    }
+
+    for (uint8_t i = 0; i < charCount; i++) {
+        out[i] = charset[rand[i] % charsetLen];
+    }
+    out[charCount] = '\0';
+}
+
 static void cmd_password_add(const char* args) {
     PasswordEntry entry = {};
     entry.totpSlot = PasswordStore::TOTP_SLOT_NONE;
 
+    char slotBuf[8] = {};
     char title[PasswordStore::TITLE_LEN + 1] = {};
     char username[PasswordStore::USERNAME_LEN + 1] = {};
     char password[PasswordStore::PASSWORD_LEN + 1] = {};
     char url[PasswordStore::URL_LEN + 1] = {};
     char totpBuf[8] = {};
 
-    const char* p = nextToken(args, title, sizeof(title));
-    if (!p || !title[0]) {
-        cdc::serial::Console::printf("Usage: PASSWORD_ADD <title> <username|- > <password> <url|- > [totpSlot] [notes]\r\n");
+    static constexpr const char* USAGE =
+        "Usage: PASSWORD_ADD <slot|x> <title> <username|x> <password|x> <url|x> <totp|-> [notes]\r\n"
+        "  <slot>: target RMEM slot, or 'x' for next free. Overwrites if occupied.\r\n"
+        "  <password>: value, or 'x' to generate a random 16-char password.\r\n"
+        "  <totp>: linked TOTP slot number, or '-' for no link.\r\n"
+        "  Use 'x' for username/url to skip them. Use '\\\\ ' for spaces inside fields.\r\n";
+
+    const char* p = nextToken(args, slotBuf, sizeof(slotBuf));
+    if (!p || !slotBuf[0]) {
+        cdc::serial::Console::printf("%s", USAGE);
         return;
     }
-    p = nextToken(p, username, sizeof(username));
-    p = nextToken(p, password, sizeof(password));
-    p = nextToken(p, url, sizeof(url));
-    if (!password[0]) {
-        cdc::serial::Console::printf("Usage: PASSWORD_ADD <title> <username|- > <password> <url|- > [totpSlot] [notes]\r\n");
-        return;
-    }
-    p = nextToken(p, totpBuf, sizeof(totpBuf));
-
-    const char* notes = skipSpaces(p);
-
-    strncpy(entry.title, title, sizeof(entry.title) - 1);
-    if (strcmp(username, "-") != 0) {
-        strncpy(entry.username, username, sizeof(entry.username) - 1);
-    }
-    strncpy(entry.password, password, sizeof(entry.password) - 1);
-    if (strcmp(url, "-") != 0) {
-        strncpy(entry.url, url, sizeof(entry.url) - 1);
-    }
-
-    if (totpBuf[0]) {
-        int totp = atoi(totpBuf);
-        if (totp >= 0 && totp <= 255) {
-            entry.totpSlot = static_cast<uint8_t>(totp);
-        }
-    }
-
-    if (notes && notes[0]) {
-        strncpy(entry.notes, notes, sizeof(entry.notes) - 1);
-    }
-
-    bool ok = PasswordStore::instance().addEntry(entry);
-    cdc::serial::Console::printf(ok ? "OK\r\n" : "ERROR\r\n");
-}
-
-/**
- * \brief Serial command handler editing one password entry by index.
- *        Dash ("-") in any field keeps the existing value.
- */
-static void cmd_password_edit(const char* args) {
-    char indexBuf[8] = {};
-    char title[PasswordStore::TITLE_LEN + 1] = {};
-    char username[PasswordStore::USERNAME_LEN + 1] = {};
-    char password[PasswordStore::PASSWORD_LEN + 1] = {};
-    char url[PasswordStore::URL_LEN + 1] = {};
-    char totpBuf[8] = {};
-
-    const char* p = nextToken(args, indexBuf, sizeof(indexBuf));
-    if (!p || !indexBuf[0]) {
-        cdc::serial::Console::printf("Usage: PASSWORD_EDIT <index> <title|- > <username|- > <password|- > <url|- > [totpSlot|- ] [notes|- ]\r\n");
-        return;
-    }
-
-    uint16_t index = static_cast<uint16_t>(atoi(indexBuf));
-    uint16_t slot = 0;
-    if (!findSlotByIndex(index, &slot)) {
-        cdc::serial::Console::printf("ERROR: invalid index\r\n");
-        return;
-    }
-
-    PasswordEntry entry = {};
-    if (!PasswordStore::instance().readEntry(slot, &entry)) {
-        cdc::serial::Console::printf("ERROR: read failed\r\n");
-        return;
-    }
-
     p = nextToken(p, title, sizeof(title));
     p = nextToken(p, username, sizeof(username));
     p = nextToken(p, password, sizeof(password));
     p = nextToken(p, url, sizeof(url));
     p = nextToken(p, totpBuf, sizeof(totpBuf));
+    if (!title[0] || !username[0] || !password[0] || !url[0] || !totpBuf[0]) {
+        cdc::serial::Console::printf("%s", USAGE);
+        return;
+    }
+
     const char* notes = skipSpaces(p);
 
-    if (title[0] && strcmp(title, "-") != 0) {
-        memset(entry.title, 0, sizeof(entry.title));
-        strncpy(entry.title, title, sizeof(entry.title) - 1);
-    }
-    if (username[0] && strcmp(username, "-") != 0) {
-        memset(entry.username, 0, sizeof(entry.username));
-        strncpy(entry.username, username, sizeof(entry.username) - 1);
-    }
-    if (password[0] && strcmp(password, "-") != 0) {
-        memset(entry.password, 0, sizeof(entry.password));
-        strncpy(entry.password, password, sizeof(entry.password) - 1);
-    }
-    if (url[0] && strcmp(url, "-") != 0) {
-        memset(entry.url, 0, sizeof(entry.url));
-        strncpy(entry.url, url, sizeof(entry.url) - 1);
-    }
-    if (totpBuf[0] && strcmp(totpBuf, "-") != 0) {
-        int totp = atoi(totpBuf);
-        if (totp >= 0 && totp <= 255) {
-            entry.totpSlot = static_cast<uint8_t>(totp);
+    auto& store = PasswordStore::instance();
+
+    uint16_t slot = 0;
+    if (isPlaceholder(slotBuf)) {
+        if (!store.findFreeLogicalSlot(&slot)) {
+            cdc::serial::Console::printf("ERROR: no free slots\r\n");
+            return;
+        }
+    } else {
+        slot = static_cast<uint16_t>(atoi(slotBuf));
+        if (!isValidSlot(slot)) {
+            cdc::serial::Console::printf("ERROR: slot out of range\r\n");
+            return;
         }
     }
-    if (notes && notes[0] && strncmp(notes, "-", 1) != 0) {
-        memset(entry.notes, 0, sizeof(entry.notes));
+
+    strncpy(entry.title, title, sizeof(entry.title) - 1);
+    if (!isPlaceholder(username)) {
+        strncpy(entry.username, username, sizeof(entry.username) - 1);
+    }
+
+    char generatedPassword[40] = {};
+    if (password[0] == 'x' && password[1] == '\0') {
+        generateRandomPassword(generatedPassword, sizeof(generatedPassword));
+        strncpy(entry.password, generatedPassword, sizeof(entry.password) - 1);
+    } else if (!isPlaceholder(password)) {
+        strncpy(entry.password, password, sizeof(entry.password) - 1);
+    }
+
+    if (!isPlaceholder(url)) {
+        strncpy(entry.url, url, sizeof(entry.url) - 1);
+    }
+
+    if (totpBuf[0] != '-' || totpBuf[1] != '\0') {
+        int totp = atoi(totpBuf);
+        if (totp < 0 || totp > 254) {
+            cdc::serial::Console::printf("ERROR: totp slot out of range (0-254 or '-')\r\n");
+            return;
+        }
+        entry.totpSlot = static_cast<uint8_t>(totp);
+    }
+
+    if (notes && notes[0]) {
         strncpy(entry.notes, notes, sizeof(entry.notes) - 1);
+        cdc::core::unescapeSpaces(entry.notes);
+    }
+
+    bool ok = store.updateEntry(slot, entry);
+    if (ok) {
+        if (generatedPassword[0]) {
+            cdc::serial::Console::printf("Generated password: %s\r\n", generatedPassword);
+        }
+        cdc::serial::Console::printf("OK (slot %u)\r\n", slot);
+    } else {
+        cdc::serial::Console::printf("ERROR\r\n");
+    }
+}
+
+/**
+ * \brief Serial command handler editing one field of a password entry.
+ *        Usage: PASSWORD_EDIT <index> <field> <new value...>
+ *        Field: title | username | password | url | totp | notes
+ */
+static void cmd_password_edit(const char* args) {
+    char slotBuf[8] = {};
+    char field[16] = {};
+    const char* usage =
+        "Usage: PASSWORD_EDIT <slot> <title|username|password|url|totp|notes> <value>\r\n"
+        "  Use '\\\\ ' for spaces inside values.\r\n";
+
+    const char* p = nextToken(args, slotBuf, sizeof(slotBuf));
+    if (!p || !slotBuf[0]) {
+        cdc::serial::Console::printf("%s", usage);
+        return;
+    }
+    p = nextToken(p, field, sizeof(field));
+    if (!field[0]) {
+        cdc::serial::Console::printf("%s", usage);
+        return;
+    }
+
+    uint16_t slot = static_cast<uint16_t>(atoi(slotBuf));
+    if (!isValidSlot(slot)) {
+        cdc::serial::Console::printf("ERROR: slot out of range\r\n");
+        return;
+    }
+
+    PasswordEntry entry = {};
+    if (!PasswordStore::instance().readEntry(slot, &entry)) {
+        cdc::serial::Console::printf("ERROR: empty slot or read failed\r\n");
+        return;
+    }
+
+    const char* value = skipSpaces(p);
+    if (!value || !value[0]) {
+        cdc::serial::Console::printf("ERROR: empty value\r\n");
+        return;
+    }
+
+    if (strcasecmp(field, "title") == 0) {
+        if (strlen(value) > PasswordStore::TITLE_LEN) {
+            cdc::serial::Console::printf("ERROR: title too long (max %u)\r\n", PasswordStore::TITLE_LEN);
+            return;
+        }
+        memset(entry.title, 0, sizeof(entry.title));
+        strncpy(entry.title, value, sizeof(entry.title) - 1);
+        cdc::core::unescapeSpaces(entry.title);
+    } else if (strcasecmp(field, "username") == 0) {
+        if (strlen(value) > PasswordStore::USERNAME_LEN) {
+            cdc::serial::Console::printf("ERROR: username too long (max %u)\r\n", PasswordStore::USERNAME_LEN);
+            return;
+        }
+        memset(entry.username, 0, sizeof(entry.username));
+        strncpy(entry.username, value, sizeof(entry.username) - 1);
+        cdc::core::unescapeSpaces(entry.username);
+    } else if (strcasecmp(field, "password") == 0) {
+        if (strlen(value) > PasswordStore::PASSWORD_LEN) {
+            cdc::serial::Console::printf("ERROR: password too long (max %u)\r\n", PasswordStore::PASSWORD_LEN);
+            return;
+        }
+        memset(entry.password, 0, sizeof(entry.password));
+        strncpy(entry.password, value, sizeof(entry.password) - 1);
+        cdc::core::unescapeSpaces(entry.password);
+    } else if (strcasecmp(field, "url") == 0) {
+        if (strlen(value) > PasswordStore::URL_LEN) {
+            cdc::serial::Console::printf("ERROR: url too long (max %u)\r\n", PasswordStore::URL_LEN);
+            return;
+        }
+        memset(entry.url, 0, sizeof(entry.url));
+        strncpy(entry.url, value, sizeof(entry.url) - 1);
+        cdc::core::unescapeSpaces(entry.url);
+    } else if (strcasecmp(field, "totp") == 0) {
+        int totp = atoi(value);
+        if (totp < 0 || totp > 255) {
+            cdc::serial::Console::printf("ERROR: totp slot out of range (0-255)\r\n");
+            return;
+        }
+        entry.totpSlot = static_cast<uint8_t>(totp);
+    } else if (strcasecmp(field, "notes") == 0) {
+        if (strlen(value) > PasswordStore::NOTES_LEN) {
+            cdc::serial::Console::printf("ERROR: notes too long (max %u)\r\n", static_cast<unsigned>(PasswordStore::NOTES_LEN));
+            return;
+        }
+        memset(entry.notes, 0, sizeof(entry.notes));
+        strncpy(entry.notes, value, sizeof(entry.notes) - 1);
+        cdc::core::unescapeSpaces(entry.notes);
+    } else {
+        cdc::serial::Console::printf("%s", usage);
+        return;
     }
 
     bool ok = PasswordStore::instance().updateEntry(slot, entry);
@@ -346,16 +438,15 @@ static void cmd_password_edit(const char* args) {
  * \param args Command arguments (`<index>`).
  */
 static void cmd_password_del(const char* args) {
-    char indexBuf[8] = {};
-    const char* p = nextToken(args, indexBuf, sizeof(indexBuf));
-    if (!p || !indexBuf[0]) {
-        cdc::serial::Console::printf("Usage: PASSWORD_DEL <index>\r\n");
+    char slotBuf[8] = {};
+    const char* p = nextToken(args, slotBuf, sizeof(slotBuf));
+    if (!p || !slotBuf[0]) {
+        cdc::serial::Console::printf("Usage: PASSWORD_DEL <slot>\r\n");
         return;
     }
-    uint16_t index = static_cast<uint16_t>(atoi(indexBuf));
-    uint16_t slot = 0;
-    if (!findSlotByIndex(index, &slot)) {
-        cdc::serial::Console::printf("ERROR: invalid index\r\n");
+    uint16_t slot = static_cast<uint16_t>(atoi(slotBuf));
+    if (!isValidSlot(slot)) {
+        cdc::serial::Console::printf("ERROR: slot out of range\r\n");
         return;
     }
     bool ok = PasswordStore::instance().deleteEntry(slot);
@@ -533,7 +624,7 @@ static void showDetails(uint16_t slot) {
              "Password: %s\n"
              "URL: %s\n"
              "TOTP Slot: %s\n"
-             "Notes:\n%s",
+             "Notes: %s",
              entry.title,
              usernameText,
              passwordText,
@@ -644,15 +735,25 @@ static void onWizardTitle(const char* text) {
  */
 static void onWizardUsername(const char* text) {
     strncpy(s_wizard.entry.username, text ? text : "", sizeof(s_wizard.entry.username) - 1);
-    pushT9WizardStep(mstr(STR_PASSWORD), s_wizard.entry.password, PasswordStore::PASSWORD_LEN, onWizardPassword);
+    s_t9Input.init(mstr(STR_PASSWORD), s_wizard.entry.password, PasswordStore::PASSWORD_LEN);
+    s_t9Input.setHint("x=Random Y=OK N=Back");
+    s_t9Input.setOnSave(onWizardPassword);
+    ui::ViewStack::instance().push(&s_t9Input);
 }
 
 /**
- * \brief Saves password field and advances to URL step.
+ * \brief Saves password field; an "x" input generates a random 16-char password
+ *        via the shared generator. Then advances to URL step.
  * \param text Entered password text.
  */
 static void onWizardPassword(const char* text) {
-    strncpy(s_wizard.entry.password, text ? text : "", sizeof(s_wizard.entry.password) - 1);
+    if (text && text[0] == 'x' && text[1] == '\0') {
+        char generated[40] = {};
+        generateRandomPassword(generated, sizeof(generated));
+        strncpy(s_wizard.entry.password, generated, sizeof(s_wizard.entry.password) - 1);
+    } else {
+        strncpy(s_wizard.entry.password, text ? text : "", sizeof(s_wizard.entry.password) - 1);
+    }
     pushT9WizardStep(mstr(STR_URL), s_wizard.entry.url, PasswordStore::URL_LEN, onWizardUrl);
 }
 

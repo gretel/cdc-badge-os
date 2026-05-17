@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <memory>
 
 static const char* TAG = "PASSWORD";
 
@@ -282,6 +283,18 @@ bool PasswordStore::listEntriesSorted(EntryIndex* entries, uint16_t maxEntries, 
     });
 
     return true;
+}
+
+/**
+ * \brief Finds first free logical slot in this module's range.
+ * \param logicalSlotOut Output logical slot index.
+ * \return `true` if a free slot was found.
+ */
+bool PasswordStore::findFreeLogicalSlot(uint16_t* logicalSlotOut) const {
+    if (!logicalSlotOut) return false;
+    uint16_t physSlot = 0;
+    if (!slots_.findFreeSlot(&physSlot)) return false;
+    return toLogicalSlot(physSlot, logicalSlotOut);
 }
 
 } // namespace cdc::mod_password

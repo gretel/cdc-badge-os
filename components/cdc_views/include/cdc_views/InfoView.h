@@ -19,7 +19,7 @@ namespace cdc::ui {
 class InfoView : public ViewBase {
 public:
     static constexpr uint16_t MAX_TEXT_LEN = 2048;
-    static constexpr uint8_t VISIBLE_LINES = 5;
+    static constexpr uint8_t VISIBLE_LINES = 6;
     static constexpr uint8_t LINE_HEIGHT = 14;
 
     /**

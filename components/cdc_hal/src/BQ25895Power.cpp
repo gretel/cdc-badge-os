@@ -329,6 +329,9 @@ void BQ25895Power::readChargerStatus() {
     if (readReg(BQ_REG_SYS_STATUS, &reg0b)) {
         chrgStat = (reg0b >> 3) & 0x03;
         bool pgStat = (reg0b >> 2) & 0x01;
+        // REG0B[0] VSYS_STAT: 1 = chip in VSYSMIN regulation (battery missing or
+        // below VSYSMIN), 0 = battery is supplying VBAT >= VSYSMIN.
+        bool vsysMinRegulation = (reg0b & 0x01) != 0;
 
         // Update cached status
         cachedUsbConnected_ = pgStat;
@@ -340,39 +343,26 @@ void BQ25895Power::readChargerStatus() {
             case 3: cachedChargeStatus_ = ChargeStatus::CHARGE_DONE; break;
         }
 
-        // Check if battery is actually present
-        // Read charge current ADC (REG12) - if 0 while USB connected and "done", no battery
         uint16_t vbat = getBatteryVoltage();
         uint8_t ichgr = 0;
-        bool hasChargeCurrent = false;
-        if (readReg(BQ_REG_ICHG, &ichgr)) {
-            // ICHGR = (REG12[6:0]) * 50mA
-            uint16_t chargeMa = (ichgr & 0x7F) * 50;
-            hasChargeCurrent = (chargeMa > 0);
-        }
+        readReg(BQ_REG_ICHG, &ichgr);
+        // ICHGR = (REG12[6:0]) * 50mA
 
-        // Battery is present if:
-        // - We see charge current flowing, OR
-        // - Status is charging (pre/fast), OR
-        // - VBAT is significantly different from typical USB-passthrough (~4.2V area)
-        //   when not charging
+        // Primary battery presence signal: VSYS_STAT bit.
+        // Active charging (pre/fast) also implies a battery (overrides VSYS_STAT
+        // during a charge cycle).
         if (cachedChargeStatus_ == ChargeStatus::FAST_CHARGE ||
             cachedChargeStatus_ == ChargeStatus::PRE_CHARGE) {
-            cachedBatteryPresent_ = true;  // Actively charging = battery present
-        } else if (cachedChargeStatus_ == ChargeStatus::CHARGE_DONE && cachedUsbConnected_) {
-            // "Charge done" with USB - could be full battery OR no battery
-            // No battery: ICHGR=0, VBAT tracks VSYS (around 4.1-4.2V from USB)
-            // Full battery: ICHGR may show small trickle or 0, VBAT stable at 4.15-4.2V
-            // Best indicator: if no charge current and voltage exactly at USB-derived level
-            if (!hasChargeCurrent && vbat >= BATTERY_USB_PASSTHRU_MIN_MV && vbat <= BATTERY_USB_PASSTHRU_MAX_MV) {
-                // Likely no battery - USB passthrough gives ~4.1-4.2V on BATV
-                cachedBatteryPresent_ = false;
-            } else {
-                cachedBatteryPresent_ = true;
-            }
+            cachedBatteryPresent_ = true;
+        } else if (cachedUsbConnected_) {
+            // With USB powering the system the battery is present iff the chip
+            // is NOT in VSYSMIN regulation. CHARGE_DONE without battery keeps
+            // VSYS_STAT=1; CHARGE_DONE with full battery keeps VSYS_STAT=0.
+            cachedBatteryPresent_ = !vsysMinRegulation;
         } else {
-            // Not charging, not USB - check if voltage is reasonable for a battery
-            cachedBatteryPresent_ = (vbat >= BATTERY_MIN_MV && vbat <= BATTERY_MAX_MV);
+            // On battery only (no USB): trust VBAT range and VSYS_STAT together.
+            cachedBatteryPresent_ = !vsysMinRegulation &&
+                                    (vbat >= BATTERY_MIN_MV && vbat <= BATTERY_MAX_MV);
         }
 
         // Correct "charge done" to "not charging" if no battery connected

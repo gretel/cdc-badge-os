@@ -153,4 +153,66 @@ void drawDialogFrame(Gdey029T94* gfx, int x, int y, int w, int h) {
     gfx->drawRect(x + 1, y + 1, w - 2, h - 2, EPD_BLACK);
 }
 
+/**
+ * \brief Maps a CP437 byte to the equivalent Latin-1 byte for use with
+ *        Latin-1 indexed GFX fonts (TTF-derived range 0x20..0xFF).
+ *        ASCII (<0x80) and untracked codes pass through unchanged.
+ */
+uint8_t cp437ToLatin1(uint8_t c) {
+    switch (c) {
+        case 0x80: return 0xC7; case 0x81: return 0xFC;
+        case 0x82: return 0xE9; case 0x83: return 0xE2;
+        case 0x84: return 0xE4; case 0x85: return 0xE0;
+        case 0x86: return 0xE5; case 0x87: return 0xE7;
+        case 0x88: return 0xEA; case 0x89: return 0xEB;
+        case 0x8A: return 0xE8; case 0x8B: return 0xEF;
+        case 0x8C: return 0xEE; case 0x8D: return 0xEC;
+        case 0x8E: return 0xC4; case 0x8F: return 0xC5;
+        case 0x90: return 0xC9; case 0x91: return 0xE6;
+        case 0x92: return 0xC6; case 0x93: return 0xF4;
+        case 0x94: return 0xF6; case 0x95: return 0xF2;
+        case 0x96: return 0xFB; case 0x97: return 0xF9;
+        case 0x98: return 0xFF; case 0x99: return 0xD6;
+        case 0x9A: return 0xDC; case 0x9B: return 0xA2;
+        case 0x9C: return 0xA3; case 0x9D: return 0xA5;
+        case 0xA0: return 0xE1; case 0xA1: return 0xED;
+        case 0xA2: return 0xF3; case 0xA3: return 0xFA;
+        case 0xA4: return 0xF1; case 0xA5: return 0xD1;
+        case 0xA6: return 0xAA; case 0xA7: return 0xBA;
+        case 0xA8: return 0xBF; case 0xAA: return 0xAC;
+        case 0xAB: return 0xBD; case 0xAC: return 0xBC;
+        case 0xAD: return 0xA1; case 0xAE: return 0xAB;
+        case 0xAF: return 0xBB; case 0xE1: return 0xDF;
+        case 0xE6: return 0xB5; case 0xF1: return 0xB1;
+        case 0xF6: return 0xF7; case 0xF8: return 0xB0;
+        case 0xFD: return 0xB2;
+        default: return c;
+    }
+}
+
+void drawCp437Text(Gdey029T94* gfx, const char* text) {
+    if (!gfx || !text) return;
+    for (const uint8_t* p = reinterpret_cast<const uint8_t*>(text); *p; ++p) {
+        gfx->write(cp437ToLatin1(*p));
+    }
+}
+
+void measureCp437Text(Gdey029T94* gfx, const char* text, int16_t x0, int16_t y0,
+                      int16_t* x1, int16_t* y1, uint16_t* w, uint16_t* h) {
+    if (!gfx || !text) {
+        if (x1) *x1 = x0;
+        if (y1) *y1 = y0;
+        if (w) *w = 0;
+        if (h) *h = 0;
+        return;
+    }
+    char buf[128];
+    size_t i = 0;
+    for (const uint8_t* p = reinterpret_cast<const uint8_t*>(text); *p && i + 1 < sizeof(buf); ++p) {
+        buf[i++] = static_cast<char>(cp437ToLatin1(*p));
+    }
+    buf[i] = '\0';
+    gfx->getTextBounds(buf, x0, y0, x1, y1, w, h);
+}
+
 } // namespace cdc::ui::render

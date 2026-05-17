@@ -16,10 +16,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <goodisplay/gdey029T94.h>
-#include <Fonts/FreeMonoBold9pt7b.h>
-#include <Fonts/FreeMonoBold12pt7b.h>
+#include <cdc_os_ui/fonts/FreeMonoBold9pt8b.h>
+#include <cdc_os_ui/fonts/FreeMonoBold12pt8b.h>
 #include <Fonts/FreeMonoBold18pt7b.h>
 #include <Fonts/FreeMonoBold24pt7b.h>
+#include "cdc_views/RenderHelpers.h"
 #include <cstring>
 
 static const char* TAG = "LockScreen";
@@ -41,11 +42,11 @@ static constexpr int DISPLAY_WIDTH = 296;
  * \brief Font size table: 5=24pt, 4=18pt, 3=12pt, 2=9pt, 1=built-in 6x8.
  */
 static const GFXfont* const FONT_SIZES[] = {
-    nullptr,                // Size 1: built-in 6x8
-    &FreeMonoBold9pt7b,     // Size 2: 9pt
-    &FreeMonoBold12pt7b,    // Size 3: 12pt
-    &FreeMonoBold18pt7b,    // Size 4: 18pt
-    &FreeMonoBold24pt7b,    // Size 5: 24pt
+    nullptr,                // Size 1: built-in 6x8 (CP437 native)
+    &FreeMonoBold9pt8b,     // Size 2: 9pt (Latin-1 range, supports umlauts)
+    &FreeMonoBold12pt8b,    // Size 3: 12pt (Latin-1 range, supports umlauts)
+    &FreeMonoBold18pt7b,    // Size 4: 18pt (ASCII only, unused on lockscreen)
+    &FreeMonoBold24pt7b,    // Size 5: 24pt (ASCII only, unused on lockscreen)
 };
 static constexpr int FONT_SIZE_COUNT = 5;
 
@@ -622,6 +623,15 @@ void LockScreenView::render(bool partial) {
     // === Right of battery: Status icons ===
     renderStatusIcons(gfx, BATTERY_X - 20, ICONS_Y);
 
+    auto measure = [&](const char* t, const GFXfont* f, int16_t* x1, int16_t* y1, uint16_t* w, uint16_t* h) {
+        if (f) cdc::ui::render::measureCp437Text(gfx, t, 0, 0, x1, y1, w, h);
+        else gfx->getTextBounds(t, 0, 0, x1, y1, w, h);
+    };
+    auto draw = [&](const char* t, const GFXfont* f) {
+        if (f) cdc::ui::render::drawCp437Text(gfx, t);
+        else gfx->print(t);
+    };
+
     // === Center: Name (size 3 = 12pt, fallback to smaller) ===
     if (name_[0]) {
         int16_t x1, y1;
@@ -630,21 +640,23 @@ void LockScreenView::render(bool partial) {
         // Try size 3 (12pt), then 2 (9pt), then 1 (built-in)
         int selectedSize = 3;
         for (int size = 3; size >= 1; size--) {
-            gfx->setFont(FONT_SIZES[size - 1]);
+            const GFXfont* f = FONT_SIZES[size - 1];
+            gfx->setFont(f);
             gfx->setTextSize(1);
-            gfx->getTextBounds(name_, 0, 0, &x1, &y1, &w, &h);
+            measure(name_, f, &x1, &y1, &w, &h);
             if (w < DISPLAY_WIDTH - 10) {
                 selectedSize = size;
                 break;
             }
         }
 
-        gfx->setFont(FONT_SIZES[selectedSize - 1]);
+        const GFXfont* f = FONT_SIZES[selectedSize - 1];
+        gfx->setFont(f);
         gfx->setTextSize(1);
-        gfx->getTextBounds(name_, 0, 0, &x1, &y1, &w, &h);
+        measure(name_, f, &x1, &y1, &w, &h);
         int nameX = (display->getWidth() - w) / 2;
         gfx->setCursor(nameX, NAME_Y);
-        gfx->print(name_);
+        draw(name_, f);
     }
 
     // === Info line 1 (size 2 = 9pt, fallback to 1) ===
@@ -655,21 +667,23 @@ void LockScreenView::render(bool partial) {
         // Try size 2 (9pt), then 1 (built-in)
         int selectedSize = 2;
         for (int size = 2; size >= 1; size--) {
-            gfx->setFont(FONT_SIZES[size - 1]);
+            const GFXfont* f = FONT_SIZES[size - 1];
+            gfx->setFont(f);
             gfx->setTextSize(1);
-            gfx->getTextBounds(info_, 0, 0, &x1, &y1, &w, &h);
+            measure(info_, f, &x1, &y1, &w, &h);
             if (w < DISPLAY_WIDTH - 10) {
                 selectedSize = size;
                 break;
             }
         }
 
-        gfx->setFont(FONT_SIZES[selectedSize - 1]);
+        const GFXfont* f = FONT_SIZES[selectedSize - 1];
+        gfx->setFont(f);
         gfx->setTextSize(1);
-        gfx->getTextBounds(info_, 0, 0, &x1, &y1, &w, &h);
+        measure(info_, f, &x1, &y1, &w, &h);
         int infoX = (display->getWidth() - w) / 2;
         gfx->setCursor(infoX, INFO_Y);
-        gfx->print(info_);
+        draw(info_, f);
     }
 
     // === Info line 2 (size 2 = 9pt, fallback to 1) ===
