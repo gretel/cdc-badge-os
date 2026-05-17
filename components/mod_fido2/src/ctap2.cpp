@@ -1283,8 +1283,12 @@ uint8_t ctap2_make_credential(const uint8_t *params, uint16_t params_len,
         return CTAP2_ERR_INVALID_OPTION;
     }
 
-    // Step 7: Request user presence
-    if (!wait_for_user_presence(p.rp_id, FIDO2_ACTION_REGISTER, p.user_name)) {
+    fido2_action_t up_action = FIDO2_ACTION_REGISTER;
+    if (fido2_storage_find_by_rp_user(p.rp_id_hash, p.user_id, p.user_id_len) >= 0) {
+        up_action = FIDO2_ACTION_OVERWRITE;
+    }
+
+    if (!wait_for_user_presence(p.rp_id, up_action, p.user_name)) {
         response[0] = CTAP2_ERR_OPERATION_DENIED;
         *response_len = 1;
         return CTAP2_ERR_OPERATION_DENIED;

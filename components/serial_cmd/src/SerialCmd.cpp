@@ -8,6 +8,7 @@
 #include "serial_cmd/ICommandRegistry.h"
 #include "cdc_core/feature_flags.h"
 #include "cdc_core/PinManager.h"
+#include "cdc_core/TropicSlotMap.h"
 #include "cdc_core/TropicStorage.h"
 #include "cdc_hal/ISecureElement.h"
 #include "cdc_log.h"
@@ -914,7 +915,8 @@ static void cmdTr01Info(const char* args) {
     if (!se) return;
 
     uint8_t chipId[8];
-    uint8_t riscvVer = 0, spectVer = 0;
+    uint8_t riscvVer[4] = {0};
+    uint8_t spectVer[4] = {0};
 
     Console::printf("TR01 Info:\r\n");
 
@@ -928,9 +930,11 @@ static void cmdTr01Info(const char* args) {
         Console::printf("  Chip ID: (read failed)\r\n");
     }
 
-    if (se->getFwVersion(&riscvVer, &spectVer)) {
-        Console::printf("  RISC-V FW: %d\r\n", riscvVer);
-        Console::printf("  SPECT FW: %d\r\n", spectVer);
+    if (se->getFwVersion(riscvVer, spectVer)) {
+        Console::printf("  RISC-V FW: v%u.%u.%u (build %u)\r\n",
+                        riscvVer[3], riscvVer[2], riscvVer[1], riscvVer[0]);
+        Console::printf("  SPECT FW:  v%u.%u.%u (build %u)\r\n",
+                        spectVer[3], spectVer[2], spectVer[1], spectVer[0]);
     } else {
         Console::printf("  FW Version: (read failed)\r\n");
     }
@@ -978,11 +982,15 @@ static void cmdTr01Slots(const char* args) {
         Console::printf("  (none)\r\n");
     }
 
-    Console::printf("\r\nR-Memory Slots summary:\r\n");
-    Console::printf("  Slot 0:        System PIN/lockout\r\n");
-    Console::printf("  Slots 1-31:    ECC paired (module-owned)\r\n");
-    Console::printf("  Slots 32-131:  TOTP accounts\r\n");
-    Console::printf("  Slots 132-511: Password vault\r\n");
+    Console::printf("\r\nR-Memory Slots:\r\n");
+    Console::printf("  Slot 0:    System PIN/lockout\r\n");
+    cdc::core::TropicSlotMap::instance().forEachRange(
+        cdc::core::TropicSlotMap::SlotType::RMEM,
+        [](const cdc::core::TropicSlotMap::SlotRange& r, void*) {
+            Console::printf("  %4u-%4u: %s\r\n", r.start, r.end,
+                            r.moduleName ? r.moduleName : "?");
+        },
+        nullptr);
 }
 
 /**

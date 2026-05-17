@@ -216,7 +216,13 @@ static void updateStatusIcon(StatusIcon icon, bool active, bool& last) {
 static void updateBatteryIndicator() {
     bool present = s_deps.power->isBatteryPresent();
     if (present != s_lastBatteryPresent) {
-        s_lockScreen->setBatteryPercent(present ? s_deps.power->getBatteryPercent() : -1);
+        if (present) {
+            s_lockScreen->removeStatusIcon(StatusIcon::NO_BATTERY);
+            s_lockScreen->setBatteryPercent(s_deps.power->getBatteryPercent());
+        } else {
+            s_lockScreen->addStatusIcon(StatusIcon::NO_BATTERY);
+            s_lockScreen->setBatteryPercent(0);
+        }
         s_lastBatteryPresent = present;
     } else if (present) {
         s_lockScreen->setBatteryPercent(s_deps.power->getBatteryPercent());
@@ -308,7 +314,7 @@ static bool onPinVerify(const char* pin) {
 static void onPinSuccess() {
     ViewStack::instance().replace(s_mainMenu);
     core::ModuleRegistry::instance().dispatchUnlock();
-    if (s_deps.display) s_deps.display->setBacklight(1000);
+    if (s_deps.display) s_deps.display->backlightOn();
 }
 
 /**
@@ -559,6 +565,12 @@ void ui_init(const UiDeps& deps) {
     }
 
     s_lockScreen->setOnUnlock(onUnlockRequested);
+    s_lockScreen->setPreRenderCallback([]() {
+        if (s_deps.power) {
+            s_deps.power->refresh();
+        }
+        updatePowerStatusIcons();
+    });
 
     if (!core::TropicSlotMap::instance().isValid()) {
         const char* msg = core::TropicSlotMap::instance().errorMessage();

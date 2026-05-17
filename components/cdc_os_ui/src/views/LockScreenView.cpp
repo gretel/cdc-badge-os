@@ -464,25 +464,29 @@ void LockScreenView::renderStatusIcons(void* gfxPtr, int x, int y) {
         iconX -= iconSpacing;
     }
 
-    // WiFi icon - classic arc style
+    // WiFi icon - three stacked ripple arcs with a base dot
     if ((statusIcons_ & StatusIcon::WIFI) != StatusIcon::NONE) {
-        int cx = iconX + 4;
-        int cy = y + 10;
-        // Base dot
-        gfx->fillCircle(cx, cy, 1, EPD_BLACK);
-        // Arc 1 (small)
-        gfx->drawLine(cx - 2, cy - 3, cx, cy - 4, EPD_BLACK);
-        gfx->drawLine(cx, cy - 4, cx + 2, cy - 3, EPD_BLACK);
-        // Arc 2 (medium)
-        gfx->drawLine(cx - 4, cy - 5, cx - 2, cy - 7, EPD_BLACK);
-        gfx->drawLine(cx - 2, cy - 7, cx + 2, cy - 7, EPD_BLACK);
-        gfx->drawLine(cx + 2, cy - 7, cx + 4, cy - 5, EPD_BLACK);
-        // Arc 3 (large) - rounded top to avoid the flat-roof look
-        gfx->drawLine(cx - 6, cy - 7, cx - 4, cy - 8, EPD_BLACK);
-        gfx->drawLine(cx - 4, cy - 8, cx - 2, cy - 9, EPD_BLACK);
-        gfx->drawLine(cx - 2, cy - 9, cx + 2, cy - 9, EPD_BLACK);
-        gfx->drawLine(cx + 2, cy - 9, cx + 4, cy - 8, EPD_BLACK);
-        gfx->drawLine(cx + 4, cy - 8, cx + 6, cy - 7, EPD_BLACK);
+        const int cx = iconX + 5;
+        const int cy = y + 10;
+
+        // Arc 3 (large): 5px horizontal cap with stepped sides
+        gfx->drawLine(cx - 2, cy - 8, cx + 2, cy - 8, EPD_BLACK);
+        gfx->drawPixel(cx - 3, cy - 7, EPD_BLACK);
+        gfx->drawPixel(cx + 3, cy - 7, EPD_BLACK);
+        gfx->drawPixel(cx - 4, cy - 6, EPD_BLACK);
+        gfx->drawPixel(cx + 4, cy - 6, EPD_BLACK);
+
+        // Arc 2 (medium): 3px horizontal cap with stepped sides
+        gfx->drawLine(cx - 1, cy - 5, cx + 1, cy - 5, EPD_BLACK);
+        gfx->drawPixel(cx - 2, cy - 4, EPD_BLACK);
+        gfx->drawPixel(cx + 2, cy - 4, EPD_BLACK);
+
+        // Arc 1 (small): single-pixel peak
+        gfx->drawPixel(cx, cy - 2, EPD_BLACK);
+
+        // Base dot (2x2)
+        gfx->fillRect(cx, cy, 2, 2, EPD_BLACK);
+
         iconX -= iconSpacing;
     }
 
@@ -585,6 +589,10 @@ void LockScreenView::renderDeepSleepScreen() {
  * \param partial `true` for partial redraw, `false` for full redraw.
  */
 void LockScreenView::render(bool partial) {
+    if (preRenderCb_) {
+        preRenderCb_();
+    }
+
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;
 

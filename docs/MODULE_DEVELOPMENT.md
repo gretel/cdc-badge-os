@@ -485,7 +485,7 @@ The TROPIC01 secure element has two storage types:
 | 4 | mod_ca (reserved) |
 | 5-31 | mod_fido2 |
 
-### R-Memory Slots (512 slots: 0-511, 454 bytes payload each)
+### R-Memory Slots (512 slots: 0-511, 422 bytes payload each, 444-byte slot incl. 22-byte header)
 
 | Slots | Reserved For |
 |-------|--------------|
@@ -574,7 +574,7 @@ If your module needs secure storage in TROPIC01:
 ```cpp
 SlotRequest req = {};
 req.mapName = getName();
-req.minRmemSlots = 10;  // R-Memory slots (454 bytes payload each)
+req.minRmemSlots = 10;  // R-Memory slots (422 bytes payload each)
 req.minEccSlots = 2;    // ECC key slots (optional)
 return req;
 ```

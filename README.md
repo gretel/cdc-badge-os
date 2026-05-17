@@ -32,6 +32,7 @@ Modular firmware for the CDC Badge v1.0/v1.1 hardware security key featuring TRO
 
 - [ ] Badge Mode (QR code vCard display)
 - [ ] Certificate Authority (CA) module
+- [ ] TROPIC01 firmware updater
 
 ## Architecture
 
@@ -89,7 +90,7 @@ After 3 failed attempts, the device locks for 60 seconds. Retries reset after su
 ### TROPIC01 Secure Element
 
 - 32 ECC key slots (P-256 and Ed25519)
-- 512 R-Memory slots (454 bytes payload each)
+- 512 R-Memory slots (422 bytes payload each)
 - Hardware random number generator
 - Tamper-resistant key storage
 - Keys cannot be extracted or cloned

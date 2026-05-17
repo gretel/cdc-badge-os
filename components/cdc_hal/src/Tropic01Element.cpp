@@ -75,6 +75,8 @@ public:
     SeResult eccDelete(uint8_t slot) override;
     bool eccSlotUsed(uint8_t slot) const override;
 
+    bool getFwVersion(uint8_t riscvVer[4], uint8_t spectVer[4]) override;
+
     // Signing
     SeResult ecdsaSign(uint8_t slot, const uint8_t* hash, size_t hashLen,
                        uint8_t* sig, size_t* sigLen) override;
@@ -99,7 +101,6 @@ public:
 
     // Diagnostics
     bool getChipId(uint8_t* serialNum, uint8_t size) override;
-    bool getFwVersion(uint8_t* riscvVer, uint8_t* spectVer) override;
 
 private:
     // Public-API helpers
@@ -903,7 +904,7 @@ bool Tropic01Element::getChipId(uint8_t* serialNum, uint8_t size) {
 /**
  * \brief Reads RISC-V and SPECT firmware major version bytes.
  */
-bool Tropic01Element::getFwVersion(uint8_t* riscvVer, uint8_t* spectVer) {
+bool Tropic01Element::getFwVersion(uint8_t riscvVer[4], uint8_t spectVer[4]) {
     if (core::SystemLock::instance().isLocked()) return false;
     if (!riscvVer || !spectVer) {
         return false;
@@ -915,12 +916,12 @@ bool Tropic01Element::getFwVersion(uint8_t* riscvVer, uint8_t* spectVer) {
         uint8_t riscvFw[TR01_L2_GET_INFO_RISCV_FW_SIZE] = {0};
         lt_ret_t ret = lt_get_info_riscv_fw_ver(&handle_, riscvFw);
         if (ret == LT_OK) {
-            *riscvVer = riscvFw[0];
+            for (int i = 0; i < 4; i++) riscvVer[i] = riscvFw[i];
         }
         uint8_t spectFw[TR01_L2_GET_INFO_SPECT_FW_SIZE] = {0};
         lt_ret_t ret2 = lt_get_info_spect_fw_ver(&handle_, spectFw);
         if (ret2 == LT_OK) {
-            *spectVer = spectFw[0];
+            for (int i = 0; i < 4; i++) spectVer[i] = spectFw[i];
         }
         handleSessionError(ret);
         ok = (ret == LT_OK) && (ret2 == LT_OK);

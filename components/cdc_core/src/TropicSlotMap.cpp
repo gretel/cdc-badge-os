@@ -180,6 +180,25 @@ bool TropicSlotMap::getRangeByModuleId(uint8_t moduleId, SlotType type, SlotRang
 }
 
 /**
+ * \brief Iterates configured slot ranges of the given type in declaration order.
+ */
+void TropicSlotMap::forEachRange(SlotType type, RangeCallback cb, void* user) const {
+    if (!cb) return;
+    for (size_t i = 0; i < kSlotMapCount; i++) {
+        const auto& entry = kSlotMap[i];
+        if (entry.type != type) continue;
+        SlotRange r;
+        r.valid = true;
+        r.type = entry.type;
+        r.moduleName = entry.moduleName;
+        r.moduleId = entry.moduleId;
+        r.start = entry.start;
+        r.end = entry.end;
+        cb(r, user);
+    }
+}
+
+/**
  * \brief Checks whether RMEM slot is allowed for given module id.
  * \param slot RMEM slot.
  * \param moduleId Module identifier.

@@ -37,9 +37,10 @@ typedef enum {
 } fido2_user_presence_result_t;
 
 typedef enum {
-    FIDO2_ACTION_REGISTER = 0,  // makeCredential
+    FIDO2_ACTION_REGISTER = 0,  // makeCredential, new credential
     FIDO2_ACTION_AUTHENTICATE,  // getAssertion
-    FIDO2_ACTION_SELECT         // Browser probe (make.me.blink/.dummy) - no PIN required
+    FIDO2_ACTION_SELECT,        // Browser probe (make.me.blink/.dummy) - no PIN required
+    FIDO2_ACTION_OVERWRITE      // makeCredential replacing an existing resident credential
 } fido2_action_t;
 
 #ifdef __DOXYGEN__

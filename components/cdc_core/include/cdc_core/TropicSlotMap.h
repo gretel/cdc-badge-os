@@ -29,6 +29,9 @@ public:
     bool getRangeByModuleId(uint8_t moduleId, SlotType type, SlotRange* out) const;
     bool isRmemAllowedForModuleId(uint16_t slot, uint8_t moduleId) const;
 
+    using RangeCallback = void (*)(const SlotRange& range, void* user);
+    void forEachRange(SlotType type, RangeCallback cb, void* user) const;
+
     uint16_t rmemMax() const;
 
     uint32_t computeMapSignature() const;

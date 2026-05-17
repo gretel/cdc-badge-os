@@ -267,22 +267,32 @@ void ViewStack::render() {
         return;
     }
 
-    bool modalNeedsRender = modal_ && modal_->needsRender();
-    bool viewNeedsRender = view->needsRender();
+    hal::IDisplay* display = hal::getDisplayInstance();
 
-    if (!viewNeedsRender && !modalNeedsRender) {
+    if (modal_) {
+        // While a modal is shown, the underlying view must not redraw. Tick
+        // updates of the background would erase the modal overlay before the
+        // EPD flush completes. The modal owns the screen until it closes,
+        // at which point hideModal marks the view dirty again.
+        if (!modal_->needsRender()) {
+            return;
+        }
+        modal_->render(true);
+        if (display) {
+            hal::RefreshMode mode = needsFullRefresh_ ? hal::RefreshMode::FULL
+                                                      : hal::RefreshMode::PARTIAL;
+            display->flush(mode);
+        }
+        needsFullRefresh_ = false;
         return;
     }
 
-    if (viewNeedsRender) {
-        view->render(false);
+    if (!view->needsRender()) {
+        return;
     }
-    if (modal_ && modalNeedsRender) {
-        modal_->render(true);
-    }
+    view->render(false);
 
     hal::RefreshMode mode = needsFullRefresh_ ? hal::RefreshMode::FULL : hal::RefreshMode::PARTIAL;
-    hal::IDisplay* display = hal::getDisplayInstance();
     if (display) {
         display->flush(mode);
     }

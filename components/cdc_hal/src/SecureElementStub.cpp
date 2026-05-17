@@ -75,7 +75,7 @@ public:
 
     bool getRandom(uint8_t*, uint16_t) override { return false; }
     bool getChipId(uint8_t*, uint8_t) override { return false; }
-    bool getFwVersion(uint8_t*, uint8_t*) override { return false; }
+    bool getFwVersion(uint8_t[4], uint8_t[4]) override { return false; }
 
 private:
     core::ServiceState state_ = core::ServiceState::UNINITIALIZED;

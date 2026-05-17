@@ -33,6 +33,9 @@ inline const char* nextToken(const char* s, char* out, size_t outSize) {
         out[i++] = *s++;
     }
     out[i] = '\0';
+    while (*s && !std::isspace(static_cast<unsigned char>(*s))) {
+        s++;
+    }
     return s;
 }
 

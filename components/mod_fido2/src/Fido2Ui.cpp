@@ -4,6 +4,7 @@
  */
 
 #include "mod_fido2/Fido2Ui.h"
+#include "mod_fido2/ctaphid.h"
 #include "mod_fido2/fido2.h"
 #include "mod_fido2/fido2_storage.h"
 #include "cdc_core/KeyFingerprint.h"
@@ -12,6 +13,7 @@
 #include "cdc_log.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_ui/ViewStack.h"
+#include "cdc_views/ConfirmView.h"
 #include "cdc_views/ContextMenuView.h"
 #include "cdc_views/InfoView.h"
 #include "cdc_views/ListView.h"
@@ -38,7 +40,9 @@ static constexpr uint16_t STR_REGISTER_KEY = 4;
 static constexpr uint16_t STR_SIGN_IN = 5;
 static constexpr uint16_t STR_USE_DEVICE = 6;
 static constexpr uint16_t STR_NO_ENTRIES = 7;
-static constexpr uint16_t STR_COUNT = 8;
+static constexpr uint16_t STR_OVERWRITE_KEY = 8;
+static constexpr uint16_t STR_OVERWRITE_WARNING = 9;
+static constexpr uint16_t STR_COUNT = 10;
 
 /**
  * \brief Resolves module-localized string by offset.
@@ -69,6 +73,8 @@ static void registerStrings() {
     i18n.registerTranslation(s_strIdBase + STR_SIGN_IN, ui::Language::EN, "Sign In");
     i18n.registerTranslation(s_strIdBase + STR_USE_DEVICE, ui::Language::EN, "Use this device?");
     i18n.registerTranslation(s_strIdBase + STR_NO_ENTRIES, ui::Language::EN, "No entries");
+    i18n.registerTranslation(s_strIdBase + STR_OVERWRITE_KEY, ui::Language::EN, "OVERWRITE KEY!");
+    i18n.registerTranslation(s_strIdBase + STR_OVERWRITE_WARNING, ui::Language::EN, "Overwrite existing key?");
 
     // German (ASCII)
     i18n.registerTranslation(s_strIdBase + STR_WEB_AUTHN, ui::Language::DE, "WebAuthn");
@@ -79,6 +85,8 @@ static void registerStrings() {
     i18n.registerTranslation(s_strIdBase + STR_SIGN_IN, ui::Language::DE, "Anmelden");
     i18n.registerTranslation(s_strIdBase + STR_USE_DEVICE, ui::Language::DE, "Dieses Geraet nutzen?");
     i18n.registerTranslation(s_strIdBase + STR_NO_ENTRIES, ui::Language::DE, "Keine Eintraege");
+    i18n.registerTranslation(s_strIdBase + STR_OVERWRITE_KEY, ui::Language::DE, "SCHLUESSEL UEBERSCHREIBEN!");
+    i18n.registerTranslation(s_strIdBase + STR_OVERWRITE_WARNING, ui::Language::DE, "Schluessel ueberschreiben?");
 }
 
 /** \brief FIDO2 UI view and list state. */
@@ -102,6 +110,19 @@ static ui::IView* s_promptReturnView = nullptr;
 static bool s_promptWasLocked = false;
 static bool s_promptBacklightWasOn = false;
 static volatile bool s_promptActive = false;  // Race condition guard
+
+/** \brief Pre-confirm modal state for overwrite warning. */
+static SemaphoreHandle_t s_overwriteSem = nullptr;
+static volatile bool s_overwriteApproved = false;
+
+static void onOverwriteConfirm(void* /*ud*/) {
+    s_overwriteApproved = true;
+    if (s_overwriteSem) xSemaphoreGive(s_overwriteSem);
+}
+static void onOverwriteCancel(void* /*ud*/) {
+    s_overwriteApproved = false;
+    if (s_overwriteSem) xSemaphoreGive(s_overwriteSem);
+}
 
 /**
  * \brief Null-safe ASCII case-insensitive comparison.
@@ -314,7 +335,7 @@ static void promptComplete(fido2_user_presence_result_t result) {
     restoreView();
 
     if (result == FIDO2_UP_APPROVED &&
-        s_promptAction == FIDO2_ACTION_REGISTER &&
+        (s_promptAction == FIDO2_ACTION_REGISTER || s_promptAction == FIDO2_ACTION_OVERWRITE) &&
         s_promptReturnView == s_listView) {
         rebuildList();
     }
@@ -479,7 +500,8 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
     (void)user_name;
 
     const char* actionStr = (action == FIDO2_ACTION_SELECT) ? "SELECT" :
-                            (action == FIDO2_ACTION_REGISTER) ? "REGISTER" : "AUTH";
+                            (action == FIDO2_ACTION_REGISTER) ? "REGISTER" :
+                            (action == FIDO2_ACTION_OVERWRITE) ? "OVERWRITE" : "AUTH";
     LOG_I(TAG, "User presence: action=%s, rp='%s', strBase=%u, promptActive=%d",
           actionStr, rp_id ? rp_id : "(null)", s_strIdBase, s_promptActive ? 1 : 0);
 
@@ -511,6 +533,57 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
         if (!s_promptSem) {
             return FIDO2_UP_DENIED;
         }
+    }
+
+    if (action == FIDO2_ACTION_OVERWRITE) {
+        if (!s_overwriteSem) {
+            s_overwriteSem = xSemaphoreCreateBinary();
+            if (!s_overwriteSem) {
+                return FIDO2_UP_DENIED;
+            }
+        }
+        while (xSemaphoreTake(s_overwriteSem, 0) == pdTRUE) {}
+
+        auto* display = cdc::hal::getDisplayInstance();
+        bool backlightWasOn = display && display->isBacklightOn();
+        if (display && !backlightWasOn) {
+            display->backlightOn();
+        }
+
+        const char* confirm_msg = mstr(STR_OVERWRITE_WARNING);
+
+        s_overwriteApproved = false;
+        ui::showConfirm(confirm_msg, onOverwriteConfirm, onOverwriteCancel,
+                        ui::ConfirmView::Icon::WARNING);
+
+        const uint32_t cid = ctaphid_get_current_cid();
+        const TickType_t poll = pdMS_TO_TICKS(100);
+        TickType_t remaining = pdMS_TO_TICKS(30000);
+        bool approved = false;
+        bool timedOut = true;
+        while (remaining > 0) {
+            TickType_t wait = remaining < poll ? remaining : poll;
+            if (xSemaphoreTake(s_overwriteSem, wait) == pdTRUE) {
+                approved = s_overwriteApproved;
+                timedOut = false;
+                break;
+            }
+            ctaphid_send_keepalive(cid, CTAPHID_STATUS_UPNEEDED);
+            remaining -= wait;
+        }
+        if (timedOut) {
+            LOG_W(TAG, "Overwrite confirm timeout");
+        }
+
+        if (!approved) {
+            if (display && !backlightWasOn) {
+                display->backlightOff();
+            }
+            LOG_I(TAG, "Overwrite denied/timeout - aborting registration");
+            return FIDO2_UP_DENIED;
+        }
+        LOG_I(TAG, "Overwrite acknowledged, proceeding to user-presence prompt");
+        action = FIDO2_ACTION_REGISTER;
     }
 
     strncpy(s_promptRpId, rp_id ? rp_id : "Unknown", sizeof(s_promptRpId) - 1);
@@ -550,15 +623,24 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
         headline = mstr(STR_USE_DEVICE);
     } else if (action == FIDO2_ACTION_REGISTER) {
         headline = mstr(STR_REGISTER_KEY);
+    } else if (action == FIDO2_ACTION_OVERWRITE) {
+        headline = mstr(STR_OVERWRITE_KEY);
     } else {
         headline = mstr(STR_SIGN_IN);
     }
 
-    static char prompt_text[200];
+    static char prompt_text[260];
     if (action == FIDO2_ACTION_SELECT) {
         snprintf(prompt_text, sizeof(prompt_text),
                  "%s\n\n%s",
                  headline,
+                 ui::tr(ui::StringId::HINT_APPROVE_DENY));
+    } else if (action == FIDO2_ACTION_OVERWRITE) {
+        snprintf(prompt_text, sizeof(prompt_text),
+                 "!!! %s !!!\n\n%s\n\n%s\n\n%s",
+                 headline,
+                 s_promptRpId,
+                 mstr(STR_OVERWRITE_WARNING),
                  ui::tr(ui::StringId::HINT_APPROVE_DENY));
     } else {
         snprintf(prompt_text, sizeof(prompt_text),
@@ -578,7 +660,20 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
     stack.resetInactivityTimer();
     stack.render();
 
-    if (xSemaphoreTake(s_promptSem, pdMS_TO_TICKS(30000)) == pdTRUE) {
+    const uint32_t up_cid = ctaphid_get_current_cid();
+    const TickType_t up_poll = pdMS_TO_TICKS(100);
+    TickType_t up_remaining = pdMS_TO_TICKS(30000);
+    bool up_done = false;
+    while (up_remaining > 0) {
+        TickType_t wait = up_remaining < up_poll ? up_remaining : up_poll;
+        if (xSemaphoreTake(s_promptSem, wait) == pdTRUE) {
+            up_done = true;
+            break;
+        }
+        ctaphid_send_keepalive(up_cid, CTAPHID_STATUS_UPNEEDED);
+        up_remaining -= wait;
+    }
+    if (up_done) {
         fido2_user_presence_result_t result = s_promptResult;
         s_promptActive = false;
         if (result == FIDO2_UP_PENDING) {

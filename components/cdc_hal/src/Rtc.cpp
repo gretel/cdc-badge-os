@@ -12,6 +12,9 @@
 #include "cdc_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "esp_clk_tree.h"
 #include <sys/time.h>
 #include <cstring>
 
@@ -20,10 +23,11 @@ static const char* TAG = "RTC";
 namespace cdc::hal {
 
 /**
- * \brief NVS namespace used to persist timezone metadata (not wall-clock time).
+ * \brief NVS namespace used to persist RTC state across resets.
  */
 static constexpr const char* NVS_NAMESPACE = "rtc";
 static constexpr const char* NVS_KEY_TZ = "tz_offset";
+static constexpr const char* NVS_KEY_TS = "last_ts";
 
 class Esp32Rtc : public IRtc {
 public:
@@ -70,17 +74,25 @@ bool Esp32Rtc::init() {
 
     LOG_I(TAG, "Initializing ESP32-S3 internal RTC");
 
-    // Load timezone from NVS (timezone is persisted, time is not)
+    esp_reset_reason_t reset_reason = esp_reset_reason();
+    int64_t rtc_us = esp_timer_get_time();
+    uint32_t rtc_clk_hz = 0;
+    esp_clk_tree_src_get_freq_hz(SOC_MOD_CLK_RTC_SLOW,
+                                  ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED,
+                                  &rtc_clk_hz);
+    LOG_W(TAG, "boot diag: reset=%d esp_timer=%lld us RTC_SLOW=%lu Hz",
+          static_cast<int>(reset_reason), (long long)rtc_us,
+          (unsigned long)rtc_clk_hz);
+
     loadTimezoneFromNvs();
     applyTimezone();
 
-    // Check if internal RTC has valid time (year >= 2024)
     time_t now;
     time(&now);
     struct tm timeinfo;
     localtime_r(&now, &timeinfo);
 
-    LOG_I(TAG, "Internal RTC: %04d-%02d-%02d %02d:%02d (ts=%ld)",
+    LOG_W(TAG, "boot RTC: %04d-%02d-%02d %02d:%02d (ts=%ld)",
              timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
              timeinfo.tm_hour, timeinfo.tm_min, (long)now);
 

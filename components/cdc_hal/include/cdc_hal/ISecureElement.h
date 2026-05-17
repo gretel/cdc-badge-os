@@ -42,7 +42,10 @@ public:
     // Slot limits
     static constexpr uint8_t ECC_SLOT_COUNT = 32;
     static constexpr uint16_t RMEM_SLOT_COUNT = 512;
-    static constexpr uint16_t RMEM_SLOT_SIZE = 476;
+    // Conservative limit matching TROPIC01 RISC-V FW < 2.x. Newer FW reports
+    // 475, but the actual value is queried by libtropic at runtime from chip
+    // attributes; this constant is the buffer-size ceiling we let callers use.
+    static constexpr uint16_t RMEM_SLOT_SIZE = 444;
     static constexpr uint8_t RMEM_NAME_LEN = 16;
 
     virtual ~ISecureElement() = default;
@@ -200,9 +203,10 @@ public:
     virtual bool getChipId(uint8_t* serialNum, uint8_t size) = 0;
 
     /**
-     * Get firmware version
+     * Get firmware version. Buffers receive the 4-byte version as reported by
+     * the chip: index 3 = major, 2 = minor, 1 = patch, 0 = build.
      */
-    virtual bool getFwVersion(uint8_t* riscvVer, uint8_t* spectVer) = 0;
+    virtual bool getFwVersion(uint8_t riscvVer[4], uint8_t spectVer[4]) = 0;
 };
 
 // Factory function to get secure element instance

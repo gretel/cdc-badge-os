@@ -9,9 +9,9 @@
 namespace cdc::mod_password {
 
 constexpr uint8_t PASSWORD_TITLE_LEN = 24;
-constexpr uint8_t PASSWORD_USERNAME_LEN = 16;
+constexpr uint8_t PASSWORD_USERNAME_LEN = 64;
 constexpr uint8_t PASSWORD_PASSWORD_LEN = 64;
-constexpr uint8_t PASSWORD_URL_LEN = 64;
+constexpr uint8_t PASSWORD_URL_LEN = 96;
 
 constexpr size_t PASSWORD_PAYLOAD_MAX =
     cdc::hal::ISecureElement::RMEM_SLOT_SIZE - sizeof(cdc::hal::ISecureElement::RMemHeader);

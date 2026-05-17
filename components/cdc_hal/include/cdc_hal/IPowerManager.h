@@ -86,6 +86,14 @@ public:
      * Update power status (poll from main loop)
      */
     virtual void update() = 0;
+
+    /**
+     * Force a synchronous re-read of charger status registers. Bypasses the
+     * IRQ-driven cache so the caller observes the current hardware state.
+     * Intended for paths that need an up-to-date reading on demand, e.g. the
+     * lock-screen refresh.
+     */
+    virtual void refresh() = 0;
 };
 
 // Factory function to get power manager instance

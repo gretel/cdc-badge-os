@@ -142,7 +142,9 @@ bool PasswordStore::addEntry(const PasswordEntry& entry) {
     );
 
     if (res != cdc::hal::SeResult::OK) {
-        LOG_E(TAG, "Failed to write slot %u", slot);
+        LOG_E(TAG, "Failed to write slot %u (SeResult=%u, payload=%u bytes)",
+              slot, static_cast<unsigned>(res),
+              static_cast<unsigned>(sizeof(payload)));
         return false;
     }
 

@@ -273,6 +273,75 @@ static void cmd_password_add(const char* args) {
 }
 
 /**
+ * \brief Serial command handler editing one password entry by index.
+ *        Dash ("-") in any field keeps the existing value.
+ */
+static void cmd_password_edit(const char* args) {
+    char indexBuf[8] = {};
+    char title[PasswordStore::TITLE_LEN + 1] = {};
+    char username[PasswordStore::USERNAME_LEN + 1] = {};
+    char password[PasswordStore::PASSWORD_LEN + 1] = {};
+    char url[PasswordStore::URL_LEN + 1] = {};
+    char totpBuf[8] = {};
+
+    const char* p = nextToken(args, indexBuf, sizeof(indexBuf));
+    if (!p || !indexBuf[0]) {
+        cdc::serial::Console::printf("Usage: PASSWORD_EDIT <index> <title|- > <username|- > <password|- > <url|- > [totpSlot|- ] [notes|- ]\r\n");
+        return;
+    }
+
+    uint16_t index = static_cast<uint16_t>(atoi(indexBuf));
+    uint16_t slot = 0;
+    if (!findSlotByIndex(index, &slot)) {
+        cdc::serial::Console::printf("ERROR: invalid index\r\n");
+        return;
+    }
+
+    PasswordEntry entry = {};
+    if (!PasswordStore::instance().readEntry(slot, &entry)) {
+        cdc::serial::Console::printf("ERROR: read failed\r\n");
+        return;
+    }
+
+    p = nextToken(p, title, sizeof(title));
+    p = nextToken(p, username, sizeof(username));
+    p = nextToken(p, password, sizeof(password));
+    p = nextToken(p, url, sizeof(url));
+    p = nextToken(p, totpBuf, sizeof(totpBuf));
+    const char* notes = skipSpaces(p);
+
+    if (title[0] && strcmp(title, "-") != 0) {
+        memset(entry.title, 0, sizeof(entry.title));
+        strncpy(entry.title, title, sizeof(entry.title) - 1);
+    }
+    if (username[0] && strcmp(username, "-") != 0) {
+        memset(entry.username, 0, sizeof(entry.username));
+        strncpy(entry.username, username, sizeof(entry.username) - 1);
+    }
+    if (password[0] && strcmp(password, "-") != 0) {
+        memset(entry.password, 0, sizeof(entry.password));
+        strncpy(entry.password, password, sizeof(entry.password) - 1);
+    }
+    if (url[0] && strcmp(url, "-") != 0) {
+        memset(entry.url, 0, sizeof(entry.url));
+        strncpy(entry.url, url, sizeof(entry.url) - 1);
+    }
+    if (totpBuf[0] && strcmp(totpBuf, "-") != 0) {
+        int totp = atoi(totpBuf);
+        if (totp >= 0 && totp <= 255) {
+            entry.totpSlot = static_cast<uint8_t>(totp);
+        }
+    }
+    if (notes && notes[0] && strncmp(notes, "-", 1) != 0) {
+        memset(entry.notes, 0, sizeof(entry.notes));
+        strncpy(entry.notes, notes, sizeof(entry.notes) - 1);
+    }
+
+    bool ok = PasswordStore::instance().updateEntry(slot, entry);
+    cdc::serial::Console::printf(ok ? "OK\r\n" : "ERROR\r\n");
+}
+
+/**
  * \brief Serial command handler deleting one password entry by index.
  * \param args Command arguments (`<index>`).
  */
@@ -304,6 +373,7 @@ static void registerCommands() {
     reg.registerCommand({"PASSWORD_LIST", "List password entries", cmd_password_list, CMD_MODULE, true});
     reg.registerCommand({"PASSWORD_GET", "Get password entry", cmd_password_get, CMD_MODULE, true});
     reg.registerCommand({"PASSWORD_ADD", "Add password entry", cmd_password_add, CMD_MODULE, true});
+    reg.registerCommand({"PASSWORD_EDIT", "Edit password entry", cmd_password_edit, CMD_MODULE, true});
     reg.registerCommand({"PASSWORD_DEL", "Delete password entry", cmd_password_del, CMD_MODULE, true});
 }
 

@@ -108,6 +108,7 @@ public:
     void setChargingEnabled(bool enabled) override;
     void enterShipMode() override;
     void update() override;
+    void refresh() override;
     /** \} */
 
 private:
@@ -591,6 +592,13 @@ void BQ25895Power::update() {
         charger_irq_pending = false;
         readChargerStatus();
     }
+}
+
+/**
+ * \brief Forces a synchronous re-read of charger status registers.
+ */
+void BQ25895Power::refresh() {
+    readChargerStatus();
 }
 
 /**

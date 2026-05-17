@@ -7,6 +7,7 @@
 #include "cdc_views/ConfirmView.h"
 #include "cdc_views/KeyCodes.h"
 #include "cdc_views/RenderHelpers.h"
+#include "cdc_ui/I18n.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_hal/IDisplay.h"
 #include <goodisplay/gdey029T94.h>
@@ -181,9 +182,10 @@ void ConfirmView::render(bool partial) {
         gfx->print(lineBuf);
     }
 
-    // Draw Y/N hint at bottom
-    gfx->setCursor(boxX + BOX_WIDTH / 2 - 30, boxY + BOX_HEIGHT - 12);
-    gfx->print("Y=Ja  N=Nein");
+    const char* hint = ui::tr(ui::StringId::HINT_APPROVE_DENY);
+    int hintWidth = static_cast<int>(std::strlen(hint)) * 6;
+    gfx->setCursor(boxX + BOX_WIDTH / 2 - hintWidth / 2, boxY + BOX_HEIGHT - 12);
+    gfx->print(hint);
 
     dirty_ = false;
 }

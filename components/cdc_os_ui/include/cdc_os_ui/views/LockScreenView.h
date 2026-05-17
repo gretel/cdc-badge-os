@@ -121,6 +121,14 @@ public:
      */
     void toggleBacklight();
 
+    /**
+     * Callback invoked at the start of every render so the host can sync the
+     * lock-screen state (battery percent, charge/USB icons) with current
+     * hardware readings. No automatic polling happens outside this hook.
+     */
+    using PreRenderCallback = void (*)();
+    void setPreRenderCallback(PreRenderCallback callback) { preRenderCb_ = callback; }
+
 private:
     char name_[MAX_TEXT_LEN] = {};
     char info_[MAX_TEXT_LEN] = {};
@@ -130,6 +138,7 @@ private:
     uint8_t batteryPercent_ = 0;
     StatusIcon statusIcons_ = StatusIcon::NONE;
     UnlockCallback onUnlock_ = nullptr;
+    PreRenderCallback preRenderCb_ = nullptr;
 
     // Long-press N for deep sleep (flight mode)
     uint32_t nPressStartMs_ = 0;

@@ -111,7 +111,7 @@ Private keys and secrets are stored in the TROPIC01 secure element:
 | Resource | Capacity | Usage |
 |----------|----------|-------|
 | ECC Slots | 32 (0-31) | Cryptographic keys |
-| R-Memory Slots | 512 (0-511) | Encrypted data (454 bytes each) |
+| R-Memory Slots | 512 (0-511) | Encrypted data (422 bytes payload each, 444-byte slot incl. 22-byte header) |
 
 Slot allocation is defined in `main/tropic_slot_map.h`. See [Module Development](MODULE_DEVELOPMENT.md) for details.
 
