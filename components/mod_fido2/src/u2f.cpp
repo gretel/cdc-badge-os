@@ -88,12 +88,9 @@ static bool u2f_attest_sign(const uint8_t *data, size_t data_len,
         return false;
     }
 
-    uint8_t hash[32];
-    sha256(data, data_len, hash);
-
     uint8_t raw_sig[64];  // R || S (each 32 bytes)
     size_t raw_len = sizeof(raw_sig);
-    if (se->ecdsaSign(U2F_ATTEST_SLOT, hash, sizeof(hash), raw_sig, &raw_len) !=
+    if (se->ecdsaSign(U2F_ATTEST_SLOT, data, data_len, raw_sig, &raw_len) !=
             cdc::hal::SeResult::OK ||
         raw_len != sizeof(raw_sig)) {
         LOG_E(TAG, "Attestation signing failed");

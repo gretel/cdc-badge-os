@@ -107,14 +107,15 @@ public:
     // === Signing Operations ===
 
     /**
-     * ECDSA signature (P-256)
+     * ECDSA signature (P-256). Implementation hashes the message internally
+     * with SHA-256; callers MUST NOT pre-hash.
      * @param slot Key slot
-     * @param hash Hash to sign (32 bytes)
-     * @param hashLen Hash length
-     * @param sig Output signature (64 bytes)
+     * @param msg Message to sign (arbitrary length)
+     * @param msgLen Message length in bytes
+     * @param sig Output signature (raw R||S, 64 bytes)
      * @param sigLen Output signature length
      */
-    virtual SeResult ecdsaSign(uint8_t slot, const uint8_t* hash, size_t hashLen,
+    virtual SeResult ecdsaSign(uint8_t slot, const uint8_t* msg, size_t msgLen,
                                uint8_t* sig, size_t* sigLen) = 0;
 
     /**

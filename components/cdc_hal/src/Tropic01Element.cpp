@@ -576,10 +576,10 @@ bool Tropic01Element::eccSlotUsed(uint8_t slot) const {
 /**
  * \brief Signs a 32-byte hash using ECDSA key in slot.
  */
-SeResult Tropic01Element::ecdsaSign(uint8_t slot, const uint8_t* hash, size_t hashLen,
+SeResult Tropic01Element::ecdsaSign(uint8_t slot, const uint8_t* msg, size_t msgLen,
                                      uint8_t* sig, size_t* sigLen) {
     if (core::SystemLock::instance().isLocked()) return SeResult::ALARM_MODE;
-    if (slot >= ECC_SLOT_COUNT || !hash || hashLen != 32 || !sig || !sigLen) {
+    if (slot >= ECC_SLOT_COUNT || !msg || msgLen == 0 || !sig || !sigLen) {
         return SeResult::INVALID_PARAM;
     }
     if (!acquireBus()) return SeResult::ERROR;
@@ -589,7 +589,7 @@ SeResult Tropic01Element::ecdsaSign(uint8_t slot, const uint8_t* hash, size_t ha
         result = SeResult::SESSION_REQUIRED;
     } else {
         lt_ret_t ret = lt_ecc_ecdsa_sign(&handle_, static_cast<lt_ecc_slot_t>(slot),
-                                          hash, static_cast<uint32_t>(hashLen), sig);
+                                          msg, static_cast<uint32_t>(msgLen), sig);
         if (ret == LT_OK) {
             *sigLen = TR01_ECDSA_EDDSA_SIGNATURE_LENGTH;
         }

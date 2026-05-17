@@ -1946,7 +1946,7 @@ uint8_t ctap2_get_assertion(const uint8_t *params, uint16_t params_len,
  * \return CTAP2 status code.
  */
 uint8_t ctap2_get_next_assertion(uint8_t *response, uint16_t *response_len) {
-    if (g_ctap2.assertion_count == 0 || !g_ctap2.assertion_up_done) {
+    if (g_ctap2.assertion_count == 0) {
         response[0] = CTAP2_ERR_NOT_ALLOWED;
         *response_len = 1;
         return CTAP2_ERR_NOT_ALLOWED;

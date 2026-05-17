@@ -304,29 +304,6 @@ static uint8_t raw_sig_to_der(const uint8_t raw_sig[FIDO2_SIG_SIZE], uint8_t* de
     return static_cast<uint8_t>(end - der_sig);
 }
 
-/** \brief Signs a digest in secure element and returns raw 64-byte signature. */
-/**
- * \brief Signs 32-byte hash using ECDSA key from logical slot.
- * \param logical_slot Logical credential slot.
- * \param hash Input digest.
- * \param raw_sig Output raw signature (`R||S`, 64 bytes).
- * \return `true` on success.
- */
-static bool ecdsa_sign_hash(uint8_t logical_slot, const uint8_t hash[FIDO2_SHA256_DIGEST_SIZE],
-                            uint8_t raw_sig[FIDO2_SIG_SIZE]) {
-    auto* se = get_se();
-    if (!se) return false;
-
-    uint8_t phys_slot = ecc_slot_for_logical(logical_slot);
-    size_t raw_len = FIDO2_SIG_SIZE;
-
-    if (se->ecdsaSign(phys_slot, hash, FIDO2_SHA256_DIGEST_SIZE, raw_sig, &raw_len) !=
-        cdc::hal::SeResult::OK || raw_len != FIDO2_SIG_SIZE) {
-        LOG_E(TAG, "ECDSA sign failed for slot %d", logical_slot);
-        return false;
-    }
-    return true;
-}
 
 /**
  * \brief Writes credential metadata to R-Memory after erasing the destination slot.
@@ -962,12 +939,16 @@ bool fido2_storage_sign(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
         return false;
     }
 
-    // ECDSA sign: hash message and sign
-    uint8_t hash[FIDO2_SHA256_DIGEST_SIZE];
-    sha256(msg, msg_len, hash);
+    auto* se = get_se();
+    if (!se) return false;
 
     uint8_t raw_sig[FIDO2_SIG_SIZE];
-    if (!ecdsa_sign_hash(slot, hash, raw_sig)) {
+    size_t raw_len = sizeof(raw_sig);
+    uint8_t phys_slot = ecc_slot_for_logical(slot);
+    if (se->ecdsaSign(phys_slot, msg, msg_len, raw_sig, &raw_len) !=
+            cdc::hal::SeResult::OK ||
+        raw_len != FIDO2_SIG_SIZE) {
+        LOG_E(TAG, "ECDSA sign failed for slot %d", slot);
         return false;
     }
 
@@ -1008,10 +989,14 @@ bool fido2_storage_sign_raw(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
         *sig_len = FIDO2_SIG_SIZE;  // Ed25519 signature is always 64 bytes
         LOG_D(TAG, "EdDSA signed %d bytes with slot %d", msg_len, slot);
     } else {
-        // ECDSA sign: sign SHA-256 hash
-        uint8_t hash[FIDO2_SHA256_DIGEST_SIZE];
-        sha256(msg, msg_len, hash);
-        if (!ecdsa_sign_hash(slot, hash, signature)) {
+        auto* se = get_se();
+        if (!se) return false;
+        uint8_t phys_slot = ecc_slot_for_logical(slot);
+        size_t raw_len = FIDO2_SIG_SIZE;
+        if (se->ecdsaSign(phys_slot, msg, msg_len, signature, &raw_len) !=
+                cdc::hal::SeResult::OK ||
+            raw_len != FIDO2_SIG_SIZE) {
+            LOG_E(TAG, "ECDSA sign failed for slot %d", slot);
             return false;
         }
         *sig_len = FIDO2_SIG_SIZE;  // Raw P-256 signature (R||S) is always 64 bytes
@@ -1037,12 +1022,16 @@ bool fido2_storage_sign_der(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
         return false;
     }
 
-    // ECDSA sign: hash message and sign
-    uint8_t hash[FIDO2_SHA256_DIGEST_SIZE];
-    sha256(msg, msg_len, hash);
+    auto* se = get_se();
+    if (!se) return false;
 
     uint8_t raw_sig[FIDO2_SIG_SIZE];
-    if (!ecdsa_sign_hash(slot, hash, raw_sig)) {
+    size_t raw_len = sizeof(raw_sig);
+    uint8_t phys_slot = ecc_slot_for_logical(slot);
+    if (se->ecdsaSign(phys_slot, msg, msg_len, raw_sig, &raw_len) !=
+            cdc::hal::SeResult::OK ||
+        raw_len != FIDO2_SIG_SIZE) {
+        LOG_E(TAG, "ECDSA sign failed for slot %d", slot);
         return false;
     }
 
