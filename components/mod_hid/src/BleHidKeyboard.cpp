@@ -61,6 +61,12 @@ static hal::GattServiceDef s_gattSvcDef;
 /** \brief Singleton pointer used by static callbacks. */
 static BleHidKeyboard* s_instance = nullptr;
 
+/** \brief Tokens for cleanup of BLE controller callbacks during deinit. */
+static hal::IBluetoothController::ListenerToken s_tokConn =
+    hal::IBluetoothController::INVALID_LISTENER;
+static hal::IBluetoothController::ListenerToken s_tokDisconn =
+    hal::IBluetoothController::INVALID_LISTENER;
+
 // ============================================================================
 // Singleton
 // ============================================================================
@@ -100,10 +106,18 @@ bool BleHidKeyboard::init() {
 
     using namespace hal;
 
-    // HID Information (read-only)
+    // Report Reference descriptor for the keyboard input report.
+    // Layout: [reportId, reportType] where reportType=1 is Input.
+    static const GattDescriptor s_inputReportRefDesc = {
+        GattDescriptorKind::REPORT_REFERENCE,
+        { 0x01, 0x01, 0x00, 0x00 },
+        2,
+    };
+
+    // HID Information (read-only, encrypted)
     s_gattChars[0].uuid = BleUuid::from16(0x2A4A);
     s_gattChars[0].properties = GattProp::READ;
-    s_gattChars[0].permissions = GattPerm::READ;
+    s_gattChars[0].permissions = GattPerm::READ_ENC;
     s_gattChars[0].valueHandle = nullptr;
     s_gattChars[0].onWrite = nullptr;
     s_gattChars[0].onRead = [](uint16_t, uint16_t, uint8_t* buf, uint16_t* len) -> int {
@@ -114,10 +128,10 @@ bool BleHidKeyboard::init() {
         return 0;
     };
 
-    // Report Map (read-only)
+    // Report Map (read-only, encrypted)
     s_gattChars[1].uuid = BleUuid::from16(0x2A4B);
     s_gattChars[1].properties = GattProp::READ;
-    s_gattChars[1].permissions = GattPerm::READ;
+    s_gattChars[1].permissions = GattPerm::READ_ENC;
     s_gattChars[1].valueHandle = nullptr;
     s_gattChars[1].onWrite = nullptr;
     s_gattChars[1].onRead = [](uint16_t, uint16_t, uint8_t* buf, uint16_t* len) -> int {
@@ -128,10 +142,10 @@ bool BleHidKeyboard::init() {
         return 0;
     };
 
-    // Keyboard Input Report (read + notify)
+    // Keyboard Input Report (read + notify, encrypted, with Report Reference descriptor)
     s_gattChars[2].uuid = BleUuid::from16(0x2A4D);
     s_gattChars[2].properties = GattProp::READ | GattProp::NOTIFY;
-    s_gattChars[2].permissions = GattPerm::READ;
+    s_gattChars[2].permissions = GattPerm::READ_ENC;
     s_gattChars[2].valueHandle = &s_reportHandle;
     s_gattChars[2].onWrite = nullptr;
     s_gattChars[2].onRead = [](uint16_t, uint16_t, uint8_t* buf, uint16_t* len) -> int {
@@ -141,11 +155,13 @@ bool BleHidKeyboard::init() {
         *len = copyLen;
         return 0;
     };
+    s_gattChars[2].descriptors = &s_inputReportRefDesc;
+    s_gattChars[2].numDescriptors = 1;
 
-    // HID Control Point (write-only, no response)
+    // HID Control Point (write-only, no response, encrypted)
     s_gattChars[3].uuid = BleUuid::from16(0x2A4C);
     s_gattChars[3].properties = GattProp::WRITE_NO_RSP;
-    s_gattChars[3].permissions = GattPerm::WRITE;
+    s_gattChars[3].permissions = GattPerm::WRITE_ENC;
     s_gattChars[3].valueHandle = nullptr;
     s_gattChars[3].onRead = nullptr;
     s_gattChars[3].onWrite = [](uint16_t, uint16_t, const uint8_t* data, uint16_t len) -> int {
@@ -156,10 +172,10 @@ bool BleHidKeyboard::init() {
         return 0;
     };
 
-    // Protocol Mode (read + write-no-response)
+    // Protocol Mode (read + write-no-response, encrypted)
     s_gattChars[4].uuid = BleUuid::from16(0x2A4E);
     s_gattChars[4].properties = GattProp::READ | GattProp::WRITE_NO_RSP;
-    s_gattChars[4].permissions = GattPerm::READ | GattPerm::WRITE;
+    s_gattChars[4].permissions = GattPerm::READ_ENC | GattPerm::WRITE_ENC;
     s_gattChars[4].valueHandle = nullptr;
     s_gattChars[4].onRead = [](uint16_t, uint16_t, uint8_t* buf, uint16_t* len) -> int {
         buf[0] = s_protocolMode;
@@ -182,10 +198,10 @@ bool BleHidKeyboard::init() {
     }
 
     // Register connection callbacks via API
-    ble->addConnectionCallback([](uint16_t connHandle) {
+    s_tokConn = ble->addConnectionCallback([](uint16_t connHandle) {
         if (s_instance) s_instance->onConnect(connHandle);
     });
-    ble->addDisconnectionCallback([](uint16_t connHandle, int reason) {
+    s_tokDisconn = ble->addDisconnectionCallback([](uint16_t connHandle, int reason) {
         if (s_instance) s_instance->onDisconnect(connHandle, reason);
     });
 
@@ -199,6 +215,12 @@ void BleHidKeyboard::deinit() {
     if (!initialized_) return;
 
     stopAdvertising();
+    if (auto* ble = hal::getBluetoothControllerInstance()) {
+        ble->removeConnectionCallback(s_tokConn);
+        ble->removeDisconnectionCallback(s_tokDisconn);
+    }
+    s_tokConn = hal::IBluetoothController::INVALID_LISTENER;
+    s_tokDisconn = hal::IBluetoothController::INVALID_LISTENER;
     s_instance = nullptr;
     initialized_ = false;
     snprintf(statusText_, sizeof(statusText_), "Not initialized");
@@ -284,16 +306,25 @@ void BleHidKeyboard::onHostResume() {
 // ============================================================================
 
 bool BleHidKeyboard::sendKeyReport(uint8_t modifier, uint8_t keycode) {
+    uint8_t one[1] = { keycode };
+    return sendKeyReport(modifier, one, keycode == 0 ? 0 : 1);
+}
+
+bool BleHidKeyboard::sendKeyReport(uint8_t modifier, const uint8_t* keycodes,
+                                    uint8_t numKeys) {
     if (!isConnected() || s_reportHandle == 0) return false;
 
     auto* ble = hal::getBluetoothControllerInstance();
     if (!ble) return false;
 
-    // Update current report state
+    if (numKeys > 6) numKeys = 6;
+
     s_currentReport.modifier = modifier;
     s_currentReport.reserved = 0;
     memset(s_currentReport.keycodes, 0, sizeof(s_currentReport.keycodes));
-    s_currentReport.keycodes[0] = keycode;
+    if (keycodes && numKeys > 0) {
+        memcpy(s_currentReport.keycodes, keycodes, numKeys);
+    }
 
     return ble->sendNotification(
         ble->getConnectionHandle(), s_reportHandle,

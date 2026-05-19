@@ -1,204 +1,234 @@
-# GPG Module
+# GPG / OpenPGP Smartcard
 
-OpenPGP smartcard functionality for the CDC Badge using the TROPIC01 secure element.
+The CDC Badge implements the OpenPGP 3.4 smartcard application over USB CCID. It works end-to-end with GnuPG on Linux, macOS, and Windows for signing, verification, encryption, decryption, and SSH authentication.
 
-## Overview
+## What runs where
 
-| Feature | Description |
-|---------|-------------|
-| **Key Storage** | Private keys in TROPIC01 ECC slots 1-3 |
-| **Key Types** | Signature (SIG), Decryption (DEC), Authentication (AUT) |
-| **Supported Curves** | Ed25519 (SIG/AUT), P-256 ECDH (DEC), P-256 ECDSA (all) |
-| **USB CCID** | OpenPGP 3.4 smartcard interface |
-| **Cross-Signing** | Key exchange with other badges via BLE |
+The TROPIC01 secure element supports ECDSA (P-256) and EdDSA (Ed25519) signing in hardware, but does **not** support ECDH. The badge fills that gap with a hybrid architecture: keys that need ECDH (the DEC role) live wrapped in TROPIC01 R-Memory and are decrypted on-the-fly by the ESP32; the chip-bound wrap key cannot be regenerated without the same TROPIC01 instance.
 
-## Quick Start
+### TROPIC01 (hardware-side)
 
-### Generate Keys via Menu
+| Function | Slot | Used for |
+|----------|------|----------|
+| EdDSA-Sign Ed25519 | ECC 1, 3 | PSO:CDS (SIG), INTERNAL_AUTHENTICATE (AUT) |
+| ECDSA-Sign P-256 | ECC 1, 3 | dito when host selects P-256 |
+| ECC Key generation (TRNG-backed) | ECC 1, 3 | GENERATE_KEYPAIR for SIG + AUT |
+| Public key export | ECC 0–31 | Read-pub for every role |
+| ECDSA-Sign on attestation slot | ECC 0 | Signs PIN blob (PinManager) and OpenPGP NVS state |
+| Hardware TRNG | global | Nonces, salts, reset-confirmation tokens |
+| R-Memory R/W | RMEM 0–511 | Persistent storage backbone |
+| Bus locking + session management | — | Serialises concurrent access from FIDO2, BLE, GPG |
 
-1. Main Menu → **GPG**
-2. Select **Generate Key**
-3. Enter name (T9 keyboard)
-4. Enter email
-5. Select curve (Ed25519 recommended)
-6. Wait for key generation
+Private key material for SIG and AUT never leaves the secure element.
 
-### Generate Keys via Serial
+### ESP32 mbedtls (software-side)
 
-```bash
-# Generate with Ed25519 (SIG/AUT) + P-256 (DEC)
-echo "GPG_GENERATE 1 Max Mustermann <max@example.com>" > /dev/ttyACM0
+| Function | Why on host | Privkey location |
+|----------|-------------|------------------|
+| ECDH P-256 (PSO:DECIPHER) | TROPIC01 has no ECDH | 32-byte buffer in internal DRAM, unwrapped on use, immediately zeroized |
+| DEC privkey wrap storage | Tropic stores no plaintext ECDH key | AES-256-GCM blob in R-Mem slot 502 (64 bytes total) |
+| AES-256-GCM wrap/unwrap | Tropic has no AEAD primitive | mbedtls, 12-byte nonce from `getRandomStrict`, 16-byte tag |
+| HKDF-SHA256 storage-key derivation | per-slot wrap key | IKM derived from TROPIC01 chip-bound material |
+| Iterated S2K (PIN, RC, OpenPGP hashes) | OpenPGP spec | analogous to PinManager |
+| ECDSA-Verify (P-256) for NVS-state signature | Host verifies Tropic-produced sig | mbedtls_ecdsa_verify against attestation pubkey |
+| Card application logic, APDU parser, T=1 block protocol, CCID class driver | reine Anwendungs- und Transportschicht | `components/mod_gpg/` |
 
-# Generate with P-256 for all keys
-echo "GPG_GENERATE 2 Max Mustermann <max@example.com>" > /dev/ttyACM0
+### What it looks like in practice
 
-# Check status
-echo "GPG_STATUS" > /dev/ttyACM0
+`gpg --sign` (handled entirely in hardware):
+
+```
+gpg → PSO:CDS(hash)
+  ↳ ESP32 OpenPGP app routes APDU
+    ↳ TROPIC01: lt_ecc_eddsa_sign(slot=1, hash)   # hardware
+  ← signature → APDU response
 ```
 
-**Note:** `GPG_GENERATE` creates three keys:
-- **SIG** (Slot 1): Signature - Ed25519 or P-256 ECDSA
-- **DEC** (Slot 2): Decryption - Always P-256 ECDH
-- **AUT** (Slot 3): Authentication - Ed25519 or P-256 ECDSA
+`gpg --decrypt` (the hybrid path):
 
-## Using with GnuPG
-
-The badge functions as an OpenPGP 3.4 smartcard via USB CCID.
-
-### Card Detection
-
-```bash
-# Detect card
-gpg --card-status
-
-# Fetch public key from card
-gpg --card-edit
-> fetch
-
-# Verify key import
-gpg --list-keys
-
-# Test signature
-echo "test" | gpg --sign --armor | gpg --verify
+```
+gpg → PSO:DECIPHER(peer-pubkey)
+  ↳ ESP32 OpenPGP app
+    ↳ TROPIC01: rmemRead slot 502 (encrypted DEC blob, 64 B)
+    ↳ mbedtls: HKDF over chip-bound material → AES key
+    ↳ mbedtls: AES-GCM-decrypt → 32-byte plaintext privkey in DRAM
+    ↳ mbedtls: ECDH P-256 (privkey × peer-pubkey)
+    ↳ mbedtls_platform_zeroize over privkey buffer
+  ← shared secret → APDU response
 ```
 
-### Card Identification
+## Card identification
 
 | Property | Value |
 |----------|-------|
-| Manufacturer ID | "CD" (0x4344) |
+| Manufacturer ID | 0x4344 (`"CD"`, displayed as `unknown` by gpg) |
 | Serial Number | Derived from ESP32 MAC address |
-| VID/PID | 0x08E6:0x4433 (Gemalto compatible) |
+| AID | `D2 76 00 01 24 01 03 04 43 44 <serial> 00 00` |
+| VID:PID | 0x08E6:0x4433 (Gemalto IDBridge K30 compatible — bypasses libccid whitelist) |
+| Card capability bits | T=1, extended-length APDUs, GET CHALLENGE |
 
-The Gemalto VID/PID bypasses libccid whitelist requirements.
+## Key roles and curves
 
-## Serial Commands
+| Role | Tag | Slot | Default curve | Supports |
+|------|-----|------|---------------|----------|
+| SIG (Signature) | 0xB6 | ECC 1 | Ed25519 | Ed25519, P-256 ECDSA |
+| DEC (Decryption) | 0xB8 | ECC 2 (logical, software) | P-256 ECDH | P-256 ECDH only (Tropic constraint) |
+| AUT (Authentication) | 0xA4 | ECC 3 | Ed25519 | Ed25519, P-256 ECDSA |
+
+The host can switch SIG/AUT between Ed25519 and P-256 ECDSA via `PUT DATA C1`/`C3`. DEC is hard-wired to P-256 ECDH (RSA and X25519 are not supported).
+
+## Storage map
+
+```
+TROPIC01 R-Memory:
+  Slot 0       : PIN payload + ECDSA attestation signature (PinManager)
+  Slot 1–3     : reserved for legacy GPG metadata
+  Slot 502     : DEC privkey, AES-256-GCM wrapped (4 magic + 12 nonce + 32 ct + 16 tag = 64 B)
+  Slot 503     : AES symmetric key for PSO:ENCIPHER/DECIPHER (optional, same wrap)
+  Slot 504–511 : reserved for GPG growth
+
+ESP32 NVS namespace "openpgp":
+  Key "state"  : OpenpgpNvsState payload + 64-byte ECDSA signature
+                 Holds fingerprints, gen-times, signature counter, cardholder data,
+                 RC salt + hash + retry counter. Signature is produced with the
+                 TROPIC01 attestation slot; a tampered blob is detected on boot
+                 and triggers re-initialisation to defaults.
+```
+
+## End-to-end usage
+
+The badge needs three things on the host side to integrate with gpg + SSH:
+
+1. **`gpg-agent.conf`** with `enable-ssh-support` and a `pinentry-program` that can show a dialog (e.g. `pinentry-mac` on macOS, `pinentry-gtk2` on Linux).
+2. **`sshcontrol`** containing the keygrip of the card's AUT subkey.
+3. **`SSH_AUTH_SOCK`** pointing at the gpg-agent SSH socket, not the OS default (relevant on macOS, less so on Linux).
+
+### Bootstrap
+
+```bash
+# 1. Initial generation (do this exactly once per card serial)
+gpg --card-edit
+# admin
+# generate
+# Make off-card backup of encryption key? n     <-- important: do not pick y unless you set a passphrase
+# Key valid forever? y
+# Real name: <your name>
+# Email: <optional>
+# Comment: <optional>
+# o (Okay)
+# Wait for "public and secret key created and signed."
+
+# 2. Find the AUT subkey keygrip
+gpg --list-keys --with-keygrip <primary-fingerprint>
+# Use the keygrip of the [A]-flagged subkey
+
+# 3. Wire SSH up
+echo "<AUT-keygrip>" >> ~/.gnupg/sshcontrol
+echo "enable-ssh-support" >> ~/.gnupg/gpg-agent.conf
+echo "pinentry-program $(which pinentry-mac)" >> ~/.gnupg/gpg-agent.conf     # macOS
+gpgconf --kill gpg-agent
+gpg-connect-agent /bye
+
+# 4. Set SSH_AUTH_SOCK for the current shell
+export SSH_AUTH_SOCK="$(gpgconf --list-dirs agent-ssh-socket)"
+# Persist in ~/.zshrc:
+echo 'export SSH_AUTH_SOCK="$(gpgconf --list-dirs agent-ssh-socket)"' >> ~/.zshrc
+
+# 5. Verify
+ssh-add -L     # must show "ssh-ed25519 ... cardno:<serial>"
+ssh <host>     # first time: pinentry-mac asks for PW1, subsequent calls use cache (default 600 s)
+```
+
+### Sign + verify
+
+```bash
+echo "hello" > /tmp/m.txt
+gpg --sign /tmp/m.txt          # triggers PSO:CDS on the card
+gpg --verify /tmp/m.txt.gpg    # pure host-side EdDSA verify
+```
+
+### Encrypt + decrypt
+
+```bash
+gpg --encrypt --recipient <your-key-id> --trust-model always -o /tmp/m.enc.gpg /tmp/m.txt
+gpg --decrypt -o /tmp/m.dec.txt /tmp/m.enc.gpg
+diff /tmp/m.txt /tmp/m.dec.txt
+```
+
+The decrypt step is where the ESP32 ECDH path runs. Expect a one-off pinentry prompt for PW1 if the cache has expired.
+
+## Serial commands
 
 | Command | Description |
 |---------|-------------|
-| `GPG_STATUS` | Show key status (User-ID, fingerprints, curves) |
-| `GPG_GENERATE <curve> <user_id>` | Generate keys (1=Ed25519, 2=P-256) |
-| `GPG_EXPORT` | Export public keys as PEM |
-| `GPG_RESET` | Delete all keys (requires CONFIRM) |
-| `GPG_RECV_LIST` | List received cross-signing keys |
-| `GPG_RECV_INFO <index>` | Show received key details |
-| `GPG_CROSS_SIGN <index>` | Sign a received key |
-| `GPG_RECV_DELETE <index>` | Delete a received key |
+| `GPG_STATUS` | Show keys, fingerprints, counters |
+| `GPG_GENERATE <curve> <user_id>` | Generate SIG + DEC + AUT in one shot (curve 1 = Ed25519 for SIG/AUT, 2 = P-256 ECDSA for SIG/AUT — DEC is always P-256 ECDH) |
+| `GPG_EXPORT` | Print primary + subkey pubkeys as PEM |
+| `GPG_RESET` | Two-step destructive reset (see below) |
+| `GPG_RECV_LIST` / `GPG_RECV_INFO` / `GPG_CROSS_SIGN` / `GPG_RECV_DELETE` | Cross-signing helpers — see [CROSS_SIGNING.md](CROSS_SIGNING.md) |
 
-## Storage
+### Reset workflow
 
-### TROPIC01 Allocation
+`GPG_RESET` wipes all three ECC slots, the DEC backup in R-Mem 502, the AES key, and resets PINs to factory defaults. To prevent fat-fingered loss, the command is two-step:
 
-| Slot | Type | Usage |
-|------|------|-------|
-| 1 | ECC | Signature Key (SIG) |
-| 2 | ECC | Decryption Key (DEC) |
-| 3 | ECC | Authentication Key (AUT) |
+```text
+> GPG_RESET
+WARNING: this wipes ALL GPG keys (SIG/DEC/AUT), the DEC backup, and PINs.
+Confirm within 30s: GPG_RESET A4F921
 
-### Metadata Storage
-
-| Location | Usage |
-|----------|-------|
-| NVS `openpgp` | Card state, fingerprints, generation times |
-| NVS `gpg_recv` | Received public keys (max 16) |
-
-## Cross-Signing (Badge-to-Badge)
-
-Exchange and sign GPG public keys with other badges via BLE.
-
-### Workflow
-
-1. **Send Key**: GPG Menu → Send Key → Select peer badge
-2. **Receive Keys**: GPG Menu → Received Keys → View list
-3. **Sign Key**: Select key → Sign → Verify fingerprint → Confirm
-
-### Signature Format
-
-```
-SHA256(fingerprint || user_id)
+> GPG_RESET A4F921
+OK
 ```
 
-The signature is created using your SIG key. See [Cross-Signing Protocol](CROSS_SIGNING.md) for technical details.
+The token is regenerated each time and only valid for 30 seconds. The same reset is also reachable from the GPG menu on the device (with on-screen confirmation) and via the OpenPGP `TERMINATE_DF` + `ACTIVATE_FILE` APDU pair triggered by `gpg --card-edit → factory-reset`.
 
-## Security Model
+## Security model
 
-### Hardware-Protected Keys (SIG/AUT)
+### What is hardware-secured
 
-Signature and authentication keys are stored in TROPIC01 ECC slots. Private key material **never leaves the secure element**.
+- **SIG / AUT private keys** live exclusively in TROPIC01 ECC slots. Every signature is computed by the TROPIC01 chip. Flash dump alone is not enough to forge signatures; only physical possession of the secure element (and breaking it) would compromise these keys.
+- **PIN material and OpenPGP state** are signed with the attestation key in slot 0 before being persisted. A tampered flash image is detected on boot and the affected store is reinitialised to defaults.
 
-| Aspect | SIG/AUT Keys |
-|--------|--------------|
-| Private Key Location | TROPIC01 hardware |
-| Crypto Operations | Hardware accelerated |
-| Key in RAM | Never |
-| Security Level | High |
+### What is in software
 
-### Software ECDH (DEC Key)
+- **DEC private key**: TROPIC01 cannot perform ECDH, so the private key has to be available in plaintext during decryption. It is stored AES-256-GCM-encrypted in R-Mem 502; the wrap key is derived from TROPIC01-resident chip-bound material via HKDF. The plaintext exists in DRAM only for the duration of the ECDH computation (~30 ms on ESP32-S3) and is zeroized immediately.
+- **AES PSO key**: same construction as the DEC privkey, used for OpenPGP-style symmetric encryption (PSO:ENCIPHER / PSO:DECIPHER aes-128/256).
 
-The TROPIC01 does **not support native ECDH**. For GPG decryption, the DEC private key uses a hybrid approach:
+### Threat model summary
 
-| Aspect | DEC Key |
-|--------|---------|
-| Private Key Location | R-Memory (AES-256-GCM encrypted) |
-| Crypto Operations | Software (MbedTLS) |
-| Key in RAM | Temporary (~10ms during ECDH) |
-| Security Level | Medium |
+| Tier | Attacker has | Recoverable secret? |
+|------|--------------|---------------------|
+| T1 | USB only | None (PIN brute-force limited to 3 retries; counter is pre-decremented before the compare, so power-cycle attacks don't reset the counter) |
+| T2 | Stolen badge, can dump flash, no chip-decap | SIG/AUT keys safe (in TROPIC01). DEC ciphertext readable but useless without TROPIC01 chip — wrap key is chip-bound. PIN hashes salted + S2K-iterated. |
+| T3 | T2 + working attack on TROPIC01 | All keys reachable. The badge does not claim resistance to this — it is a DIY-grade hardware key, not a CC-EAL-certified smartcard. |
 
-### DEC Key Protection
+### Realistic limits
 
-The decryption key is protected by:
-
-1. **AES-256-GCM encryption** at rest in R-Memory
-2. **Device-specific key** derived via HKDF-SHA256 from TROPIC01 Chip ID
-3. **PIN verification** required before any operation
-4. **Immediate RAM clearing** after ECDH computation
-
-### Security Recommendations
-
-**For high-security applications:**
-- Use only signature functions (PSO:CDS)
-- Perform encryption with a separate system
-- The badge provides strong authentication via hardware-backed signatures
-
-**For standard use:**
-- ECDH implementation is acceptably secure
-- Comparable to software-only GPG implementations
-- PIN protection provides access control
-
-### Security Checklist
-
-Before deploying GPG decryption:
-- [ ] Enable Secure Boot on ESP32
-- [ ] Control physical access to device
-- [ ] Configure strong PIN
-- [ ] Understand DEC key has different security model
+- Anything that depends on live glitching while the card is actively performing crypto is **out of scope**: an attacker with that level of access already has the operation's result. The badge does not attempt to defend against this.
+- The badge is most robust as a **signing key + SSH authentication device**. Decryption works correctly, but is a software ECDH and has the same attack surface as any software OpenPGP key — except that the wrap binds the secret to this specific TROPIC01.
 
 ## Limitations
 
 | Limitation | Reason |
 |------------|--------|
-| No RSA support | TROPIC01 hardware limitation |
-| No X25519 for ECDH | Uses P-256 instead |
-| No traditional subkeys | Uses dedicated slots |
-| Max 16 received keys | NVS storage limit |
-| DEC key in software | TROPIC01 has no ECDH API |
+| No RSA | TROPIC01 has no RSA primitives, ESP32-side RSA via mbedtls would push DEC blobs into multi-slot wrap territory and is not implemented |
+| No X25519 / Curve25519 ECDH | Tropic constraint, DEC is P-256 only |
+| No additional ECDH curves (P-384, P-521, secp256k1) | Same |
+| Off-card backup of DEC during `generate` requires a passphrase | This is GnuPG's host-side behaviour, not a card limitation — answer `n` to "Make off-card backup of encryption key?" to keep the key card-only |
 
 ## Troubleshooting
 
-### Key Generation Fails
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `gpg --card-status`: `General key info..: [none]` | Generate flow aborted before `public and secret key created and signed.` was printed | Run `gpg --card-edit → admin → generate → n` again, all the way through |
+| `ssh-add -L`: `The agent has no identities.` | `SSH_AUTH_SOCK` points at OS-native ssh-agent, or `sshcontrol` is missing the AUT keygrip | See bootstrap section above |
+| `ssh ...`: `agent refused operation` | `pinentry-program` missing or pinentry can't open a dialog from the SSH context | Configure `pinentry-program` and `export GPG_TTY=$(tty); gpg-connect-agent updatestartuptty /bye` |
+| `read_public_key DEC: load_dec_privkey failed` in serial log | R-Mem slot 502 was written by an older firmware version with a different wrap-key derivation | Run `gpg --card-edit → admin → generate` to rewrite the slot with the current scheme |
+| Serial console silent on boot | Release build (`DEBUG_MODE=0`); console is auth-gated until `auth <pin>` | Authenticate, or build with `DEBUG_MODE=1` (the default for development) |
 
-1. Check User-ID is set: `GPG_STATUS`
-2. Check TROPIC01 status: `TR01_STATUS`
-3. Check slot availability: `TR01_SLOTS`
+## Reference
 
-### CCID Not Recognized
-
-1. Verify GPG module is enabled in build
-2. Reconnect USB cable
-3. Debug with: `gpg --debug ccid --card-status`
-
-### Cross-Sign Not Working
-
-1. Own keys must exist
-2. BLE must be enabled
-3. Other badge must be in range and discoverable
+- OpenPGP smartcard 3.4 specification (gnupg.org/ftp/specs/OpenPGP-smart-card-application-3.4.1.pdf)
+- TROPIC01 datasheet for ECC/R-Memory primitives
+- [CROSS_SIGNING.md](CROSS_SIGNING.md) — badge-to-badge GPG key exchange
+- [SERIAL_COMMANDS.md](SERIAL_COMMANDS.md) — full serial command reference

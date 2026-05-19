@@ -7,8 +7,6 @@
 extern "C" {
 #endif
 
-// === Slot Range Management ===
-
 void gpg_storage_set_slot_range(uint16_t eccStart, uint16_t eccEnd);
 void gpg_storage_set_rmem_range(uint16_t rmemStart, uint16_t rmemEnd);
 bool gpg_storage_ready(void);
@@ -16,67 +14,66 @@ uint8_t gpg_storage_sig_slot(void);
 uint8_t gpg_storage_dec_slot(void);
 uint8_t gpg_storage_aut_slot(void);
 
-// === DEC Private Key Storage (Encrypted in R-Memory) ===
-//
-// SECURITY NOTE:
-// The TROPIC01 secure element does NOT support native ECDH operations.
-// For GPG decryption (PSO:DECIPHER), the DEC private key is stored
-// encrypted in R-Memory using AES-256-GCM with a PIN-derived key.
-//
-// See docs/GPG_ECDH_SECURITY.md for security analysis.
-
 /**
- * Save DEC private key encrypted to R-Memory
- * @param privkey    32-byte P-256 private key scalar
- * @param pin        User PIN (PW1) for key derivation
- * @return true on success
- *
- * Storage format in R-Memory:
- * [4 bytes]  Magic ("ECDH")
- * [12 bytes] AES-GCM Nonce
- * [32 bytes] Encrypted Private Key
- * [16 bytes] GCM Authentication Tag
+ * \brief Saves a DEC private key into R-Memory using PIN-bound AES-GCM.
+ * \param privkey 32-byte P-256 private key scalar.
+ * \param pin Session PIN; `nullptr` falls back to chip-bound key.
+ * \return `true` on success.
  */
 bool gpg_storage_save_dec_privkey(const uint8_t* privkey, const char* pin);
 
 /**
- * Load and decrypt DEC private key from R-Memory
- * @param privkey_out 32-byte output buffer for private key
- * @param pin         User PIN (PW1) for key derivation
- * @return true on success
- *
- * SECURITY: Caller MUST clear privkey_out buffer after use!
+ * \brief Loads and decrypts the DEC private key from R-Memory.
+ * \param privkey_out 32-byte output buffer.
+ * \param pin Session PIN; `nullptr` falls back to chip-bound key.
+ * \return `true` on success.
  */
 bool gpg_storage_load_dec_privkey(uint8_t* privkey_out, const char* pin);
 
-/**
- * Check if DEC private key exists in R-Memory
- */
+/** \brief Returns `true` if encrypted DEC private key record exists. */
 bool gpg_storage_has_dec_privkey(void);
 
-/**
- * Delete DEC private key from R-Memory
- */
+/** \brief Deletes DEC private key record. */
 bool gpg_storage_delete_dec_privkey(void);
 
 /**
- * Get current PW1 PIN hash for key derivation
- * Used internally for session-based decryption
- * @param hash_out  32-byte output buffer
- * @return true if PIN is set and verified in current session
+ * \brief Saves the symmetric AES key for PSO:DECIPHER (DO 0xD5).
+ * \param key AES key bytes (16 or 32).
+ * \param key_len Key length (16 or 32).
+ * \param pin Session PIN; `nullptr` falls back to chip-bound key.
+ * \return `true` on success.
+ */
+bool gpg_storage_save_aes_key(const uint8_t* key, size_t key_len, const char* pin);
+
+/**
+ * \brief Loads the symmetric AES key from R-Memory.
+ * \param key_out Output buffer (must hold at least 32 bytes).
+ * \param key_len_out Receives the stored key length (16 or 32).
+ * \param pin Session PIN; `nullptr` falls back to chip-bound key.
+ * \return `true` on success.
+ */
+bool gpg_storage_load_aes_key(uint8_t* key_out, size_t* key_len_out, const char* pin);
+
+/** \brief Returns `true` if a symmetric AES key record exists. */
+bool gpg_storage_has_aes_key(void);
+
+/** \brief Deletes the symmetric AES key record. */
+bool gpg_storage_delete_aes_key(void);
+
+/**
+ * \brief Returns current session key if session is active.
+ * \param key_out 32-byte output buffer.
+ * \return `true` if session key is available.
  */
 bool gpg_storage_get_session_key(uint8_t* key_out);
 
 /**
- * Set session key after successful PIN verification
- * Called by VERIFY command handler
- * @param pin  Verified PIN string
+ * \brief Stores session PIN-derived key after successful PIN verification.
+ * \param pin Verified PIN string.
  */
 void gpg_storage_set_session_pin(const char* pin);
 
-/**
- * Clear session key (on deselect or timeout)
- */
+/** \brief Clears the cached session key. */
 void gpg_storage_clear_session(void);
 
 #ifdef __cplusplus

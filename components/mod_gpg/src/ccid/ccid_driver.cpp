@@ -7,6 +7,7 @@ extern "C" {
 #include "device/usbd_pvt.h"
 }
 
+#include <esp_attr.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -16,6 +17,13 @@ static const char* TAG = "CCID";
 #define CCID_LOG_E(tag, fmt, ...) LOG_E(tag, fmt, ##__VA_ARGS__)
 #define CCID_LOG_W(tag, fmt, ...) LOG_W(tag, fmt, ##__VA_ARGS__)
 
+#define CCID_RX_BUF_SIZE (CCID_MAX_MSG_SIZE + CCID_HEADER_SIZE)
+#define CCID_TX_BUF_SIZE (CCID_MAX_MSG_SIZE + CCID_HEADER_SIZE)
+
+// Must live in internal SRAM: ESP32-S3 USB OTG DMA cannot access PSRAM.
+static uint8_t ccid_rx_buf[CCID_RX_BUF_SIZE];
+static uint8_t ccid_tx_buf[CCID_TX_BUF_SIZE];
+
 static struct {
     bool initialized;
     uint8_t itf_num;
@@ -23,8 +31,6 @@ static struct {
     uint8_t ep_out;
     uint8_t rhport;
 
-    uint8_t rx_buf[512];
-    uint8_t tx_buf[512];
     uint16_t rx_len;
     bool rx_pending;
 
@@ -93,7 +99,7 @@ static uint16_t ccid_driver_open(uint8_t rhport, tusb_desc_interface_t const* de
     }
 
     if (ccid_state.ep_out) {
-        bool ok = usbd_edpt_xfer(rhport, ccid_state.ep_out, ccid_state.rx_buf, sizeof(ccid_state.rx_buf));
+        bool ok = usbd_edpt_xfer(rhport, ccid_state.ep_out, ccid_rx_buf, sizeof(ccid_rx_buf));
         ccid_state.rx_pending = ok;
     }
 
@@ -108,14 +114,38 @@ static bool ccid_driver_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_cont
         request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_INTERFACE &&
         request->wIndex == ccid_state.itf_num) {
 
-        switch (request->bRequest) {
-            case 0x01:  // CCID_ABORT
-            case 0x02:  // CCID_GET_CLOCK_FREQUENCIES
-            case 0x03:  // CCID_GET_DATA_RATES
-                return tud_control_status(rhport, request);
-            default:
-                return false;
+        // CCID 1.10 §5.3.1 — CCID_ABORT.
+        // Host clears a stalled XFR_BLOCK; we just acknowledge the status
+        // stage, drop any pending response remainder, and let the bulk EP
+        // reset naturally on the next request.
+        if (request->bRequest == 0x01) {
+            ccid_state.rx_pending = false;
+            ccid_state.rx_len = 0;
+            return tud_control_status(rhport, request);
         }
+
+        // CCID 1.10 §5.3.2 — GET_CLOCK_FREQUENCIES.
+        // Returns the supported clock frequencies as little-endian uint32
+        // values in kHz. We advertise 4000 kHz to match dwDefaultClock /
+        // dwMaximumClock from the functional descriptor.
+        if (request->bRequest == 0x02) {
+            static const uint8_t clocks[] = {0xA0, 0x0F, 0x00, 0x00};  // 4000 kHz
+            return tud_control_xfer(rhport, request,
+                                    const_cast<uint8_t*>(clocks),
+                                    sizeof(clocks));
+        }
+
+        // CCID 1.10 §5.3.3 — GET_DATA_RATES.
+        // Returns the supported asynchronous data rates as little-endian
+        // uint32 values in bits/s. We mirror dwDataRate / dwMaxDataRate
+        // (1200 bps) so libccid keeps using our descriptor defaults.
+        if (request->bRequest == 0x03) {
+            static const uint8_t rates[] = {0xB0, 0x04, 0x00, 0x00};   // 1200 bps
+            return tud_control_xfer(rhport, request,
+                                    const_cast<uint8_t*>(rates),
+                                    sizeof(rates));
+        }
+        return false;
     }
 
     return false;
@@ -132,27 +162,36 @@ static bool ccid_driver_xfer_cb(uint8_t rhport, uint8_t ep_addr, xfer_result_t r
         ccid_state.rx_len = xferred_bytes;
         ccid_state.rx_pending = false;
 
-        if (xferred_bytes >= 10) {
-            uint32_t data_len = ccid_state.rx_buf[1] | (ccid_state.rx_buf[2] << 8) |
-                               (ccid_state.rx_buf[3] << 16) | (ccid_state.rx_buf[4] << 24);
-            uint32_t total_len = 10 + data_len;
+        if (xferred_bytes >= CCID_HEADER_SIZE) {
+            uint32_t data_len = (uint32_t)ccid_rx_buf[1] |
+                                ((uint32_t)ccid_rx_buf[2] << 8) |
+                                ((uint32_t)ccid_rx_buf[3] << 16) |
+                                ((uint32_t)ccid_rx_buf[4] << 24);
 
-            if (ccid_state.rx_len >= total_len) {
-                int resp_len = ccid_process_message(ccid_state.rx_buf, total_len,
-                                                    ccid_state.tx_buf, sizeof(ccid_state.tx_buf));
-                if (resp_len > 0) {
-                    ccid_state.tx_count++;
-                    bool ok = usbd_edpt_xfer(rhport, ccid_state.ep_in, ccid_state.tx_buf, resp_len);
-                    if (!ok) {
+            // Reject host-controlled lengths that would overflow the rx buffer.
+            // Subtractive form avoids integer wraparound on attacker-chosen sizes.
+            if (data_len > sizeof(ccid_rx_buf) - CCID_HEADER_SIZE) {
+                ccid_state.error_count++;
+            } else {
+                uint32_t total_len = CCID_HEADER_SIZE + data_len;
+
+                if ((uint32_t)ccid_state.rx_len >= total_len) {
+                    int resp_len = ccid_process_message(ccid_rx_buf, total_len,
+                                                        ccid_tx_buf, sizeof(ccid_tx_buf));
+                    if (resp_len > 0) {
+                        ccid_state.tx_count++;
+                        bool ok = usbd_edpt_xfer(rhport, ccid_state.ep_in, ccid_tx_buf, resp_len);
+                        if (!ok) {
+                            ccid_state.error_count++;
+                        }
+                    } else if (resp_len < 0) {
                         ccid_state.error_count++;
                     }
-                } else if (resp_len < 0) {
-                    ccid_state.error_count++;
                 }
             }
         }
 
-        bool rx_ok = usbd_edpt_xfer(rhport, ccid_state.ep_out, ccid_state.rx_buf, sizeof(ccid_state.rx_buf));
+        bool rx_ok = usbd_edpt_xfer(rhport, ccid_state.ep_out, ccid_rx_buf, sizeof(ccid_rx_buf));
         if (!rx_ok) {
             ccid_state.error_count++;
         }
@@ -178,6 +217,13 @@ static usbd_class_driver_t const ccid_driver = {
     .xfer_isr         = NULL,
     .sof              = NULL
 };
+
+// Symbol referenced from ccid.cpp so the linker pulls this translation
+// unit into the final image. Without an external reference, the only
+// strong symbol here would be usbd_app_driver_get_cb — which tinyusb
+// already provides as a weak default, leading the linker to drop our
+// strong override and silently disable the entire CCID class driver.
+extern "C" void ccid_driver_link_anchor(void) {}
 
 extern "C" usbd_class_driver_t const* usbd_app_driver_get_cb(uint8_t* driver_count) {
     *driver_count = 1;

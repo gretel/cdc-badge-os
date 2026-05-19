@@ -471,7 +471,7 @@ bool cbor_read_bytes(cbor_reader_t *r, uint8_t *out, size_t max_len, size_t *out
     if (out && copy_len > 0) {
         memcpy(out, item.bytes, copy_len);
     }
-    if (out_len) *out_len = item.length;
+    if (out_len) *out_len = copy_len;
     return true;
 }
 
@@ -500,7 +500,7 @@ bool cbor_read_text(cbor_reader_t *r, char *out, size_t max_len, size_t *out_len
     if (out && max_len > 0) {
         out[copy_len] = '\0';
     }
-    if (out_len) *out_len = item.length;
+    if (out_len) *out_len = copy_len;
     return true;
 }
 

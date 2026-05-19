@@ -362,6 +362,8 @@ void I18n::initCoreStrings() {
     REG(HINT_FIELD_NAV,     "[4] <  [6] >",         "[4] <  [6] >");
     REG(HINT_DATE_INPUT,    "[0-9] [Y] OK [N] Clear",   "[0-9] [Y] OK [N] Loeschen");
     REG(HINT_TIME_INPUT,    "[0-9] [Y] OK [N] Clear",   "[0-9] [Y] OK [N] Loeschen");
+    REG(HINT_PASSWORD_HIDDEN,   "[hold Y] Show [Y] Save", "[Y halten] Zeigen [Y] Speichern");
+    REG(HINT_PASSWORD_REVEALED, "[hold Y] Hide [Y] Save", "[Y halten] Verbergen [Y] Speichern");
 
     // === QR ===
     REG(QR_ERROR,           "QR Error",            "QR Fehler");

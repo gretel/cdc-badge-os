@@ -1,5 +1,6 @@
 #include "mod_gpg/gpg.h"
 #include "mod_gpg/GpgStorage.h"
+#include "cdc_core/pin_storage_c.h"
 #include "mod_gpg/openpgp/openpgp.h"
 #include "mod_gpg/openpgp/constants.h"
 #include "cdc_hal/ISecureElement.h"
@@ -65,17 +66,6 @@ static bool se_generate_key(uint8_t slot, uint8_t curve) {
     cdc::hal::EccCurve c = (curve == CDC_CURVE_ED25519) ? cdc::hal::EccCurve::ED25519
                                                          : cdc::hal::EccCurve::P256;
     return se->eccGenerate(slot, c) == cdc::hal::SeResult::OK;
-}
-
-/**
- * \brief Deletes a key from the secure element.
- * \param slot Secure element slot to erase.
- * \return `true` on success, otherwise `false`.
- */
-static bool se_delete_key(uint8_t slot) {
-    auto* se = cdc::hal::getSecureElementInstance();
-    if (!se) return false;
-    return se->eccDelete(slot) == cdc::hal::SeResult::OK;
 }
 
 /**
@@ -318,8 +308,32 @@ bool gpg_is_initialized(void) {
  */
 bool gpg_get_status(gpg_status_t *status) {
     if (!status) return false;
-    if (!s_initialized) return false;
     memset(status, 0, sizeof(*status));
+
+    // Primary source of truth is the OpenPGP card-application state, because
+    // gpg --card-edit writes there directly. The legacy mod_gpg metadata is
+    // only consulted as a fallback for UI-side generations that haven't been
+    // ported to the unified state yet.
+    if (openpgp_has_any_key()) {
+        status->initialized = true;
+        uint8_t fp[GPG_FINGERPRINT_LEN] = {0};
+        if (openpgp_get_fingerprint(KEY_SIG, fp)) {
+            memcpy(status->fingerprint, fp, sizeof(status->fingerprint));
+        }
+        status->created_at = openpgp_get_gen_time(KEY_SIG);
+        status->sign_count = openpgp_get_sig_count();
+        char name[64] = {0};
+        openpgp_get_cardholder_name(name, sizeof(name));
+        if (name[0]) {
+            strncpy(status->user_id, name, sizeof(status->user_id) - 1);
+        } else if (s_initialized && s_metadata.user_id[0]) {
+            strncpy(status->user_id, s_metadata.user_id, sizeof(status->user_id) - 1);
+        }
+        status->curve = s_initialized ? s_metadata.curve : CDC_CURVE_ED25519;
+        return true;
+    }
+
+    if (!s_initialized) return false;
     status->initialized = true;
     status->curve = s_metadata.curve;
     strncpy(status->user_id, s_metadata.user_id, sizeof(status->user_id) - 1);
@@ -431,13 +445,6 @@ bool gpg_generate_key(uint8_t curve) {
  */
 bool gpg_reset(void) {
     if (!gpg_storage_ready()) return false;
-    se_delete_key(gpg_storage_sig_slot());
-    se_delete_key(gpg_storage_dec_slot());
-    se_delete_key(gpg_storage_aut_slot());
-    uint8_t zero_fp[GPG_FINGERPRINT_LEN] = {};
-    openpgp_set_key_fingerprint(KEY_SIG, zero_fp, 0);
-    openpgp_set_key_fingerprint(KEY_DEC, zero_fp, 0);
-    openpgp_set_key_fingerprint(KEY_AUT, zero_fp, 0);
     memset(&s_metadata, 0, sizeof(s_metadata));
     s_initialized = false;
     nvs_handle_t handle;
@@ -446,6 +453,9 @@ bool gpg_reset(void) {
         nvs_commit(handle);
         nvs_close(handle);
     }
+    // Wipes ECC slots, DEC privkey, NVS state (sig_count, RC, gen_times,
+    // cardholder, fingerprints, selected curves) and PINs.
+    openpgp_factory_reset();
     return true;
 }
 
@@ -458,15 +468,41 @@ bool gpg_reset(void) {
  */
 bool gpg_export_pubkey_pem(char *buf, size_t size, size_t *out_len) {
     if (!buf || size < 256 || !out_len) {
-        return false;
-    }
-    if (!s_initialized) {
+        LOG_W("GPG", "export: bad args");
         return false;
     }
 
-    const uint8_t *pubkey = s_metadata.pubkey;
+    uint8_t pubkey_buf[64] = {0};
+    const uint8_t *pubkey = nullptr;
+    uint8_t curve = CDC_CURVE_ED25519;
 
-    if (s_metadata.curve == CDC_CURVE_ED25519) {
+    if (s_initialized && s_metadata.pubkey_len > 0) {
+        pubkey = s_metadata.pubkey;
+        curve = s_metadata.curve;
+    } else if (openpgp_has_any_key() && gpg_storage_ready()) {
+        // CCID-pfad: SIG-Pubkey direkt vom Tropic-Slot lesen
+        auto* se = cdc::hal::getSecureElementInstance();
+        if (!se) {
+            LOG_W("GPG", "export: no SE");
+            return false;
+        }
+        cdc::hal::EccCurve eccCurve = cdc::hal::EccCurve::P256;
+        uint8_t sigSlot = gpg_storage_sig_slot();
+        auto res = se->eccGetPublicKey(sigSlot, pubkey_buf, &eccCurve);
+        if (res != cdc::hal::SeResult::OK) {
+            LOG_W("GPG", "export: eccGetPublicKey slot=%u failed (%d)",
+                  sigSlot, static_cast<int>(res));
+            return false;
+        }
+        pubkey = pubkey_buf;
+        curve = (eccCurve == cdc::hal::EccCurve::ED25519) ? CDC_CURVE_ED25519
+                                                          : CDC_CURVE_P256;
+    } else {
+        LOG_W("GPG", "export: no key configured");
+        return false;
+    }
+
+    if (curve == CDC_CURVE_ED25519) {
         static const uint8_t ed25519_prefix[] = {
             0x30, 0x2a,
             0x30, 0x05,
@@ -557,7 +593,19 @@ bool gpg_export_pubkey_raw(uint8_t *pubkey, size_t *pubkey_len, uint8_t *curve) 
  * \return `true` on success, otherwise `false`.
  */
 bool gpg_get_fingerprint(uint8_t *fp_out) {
-    if (!fp_out || !s_initialized) return false;
+    if (!fp_out) return false;
+    uint8_t fp[GPG_FINGERPRINT_LEN] = {};
+    if (openpgp_get_fingerprint(KEY_SIG, fp)) {
+        bool all_zero = true;
+        for (size_t i = 0; i < sizeof(fp); ++i) {
+            if (fp[i] != 0) { all_zero = false; break; }
+        }
+        if (!all_zero) {
+            memcpy(fp_out, fp, sizeof(fp));
+            return true;
+        }
+    }
+    if (!s_initialized) return false;
     memcpy(fp_out, s_metadata.fingerprint, sizeof(s_metadata.fingerprint));
     return true;
 }

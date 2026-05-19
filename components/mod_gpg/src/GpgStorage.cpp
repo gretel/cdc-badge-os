@@ -1,12 +1,9 @@
 /**
- * GPG Storage Layer
+ * \brief Encrypted persistent storage for OpenPGP secret material.
  *
- * Manages ECC slots and R-Memory for GPG keys.
- * DEC private key is stored encrypted in R-Memory for software ECDH.
- *
- * SECURITY NOTE:
- * The TROPIC01 secure element does NOT support native ECDH operations.
- * See docs/GPG_ECDH_SECURITY.md for security analysis.
+ * Encrypts payloads with AES-256-GCM. The wrapping key is derived via HKDF
+ * over (chip_id || pin_hash) with the slot index appended; AAD binds the
+ * record to (slot_id, magic) to defeat slot-shuffle attacks.
  */
 
 #include "mod_gpg/GpgStorage.h"
@@ -22,29 +19,29 @@
 
 static const char* TAG = "GPGStorage";
 
-/**
- * \brief R-Memory slot index used for DEC private key payload within module range.
- */
+/** \brief R-Memory slot offset (relative) for the DEC private key payload. */
 static constexpr uint16_t RMEM_SLOT_DEC_KEY = 0;
 
-/**
- * \brief Magic marker used to validate encrypted DEC key records.
- */
+/** \brief R-Memory slot offset (relative) for the symmetric AES key payload. */
+static constexpr uint16_t RMEM_SLOT_AES_KEY = 1;
+
+/** \brief Magic marker for encrypted DEC private key records. */
 static constexpr uint8_t DEC_KEY_MAGIC[4] = {'E', 'C', 'D', 'H'};
 
-/**
- * \brief Serialized encrypted DEC key record field sizes.
- */
+/** \brief Magic marker for symmetric AES key records (DO 0xD5). */
+static constexpr uint8_t AES_KEY_MAGIC[4] = {'A', 'E', 'S', '1'};
+
 static constexpr size_t MAGIC_SIZE = 4;
 static constexpr size_t NONCE_SIZE = 12;
-static constexpr size_t PRIVKEY_SIZE = 32;
 static constexpr size_t TAG_SIZE = 16;
-static constexpr size_t TOTAL_SIZE = MAGIC_SIZE + NONCE_SIZE + PRIVKEY_SIZE + TAG_SIZE;
+static constexpr size_t PRIVKEY_SIZE = 32;
+static constexpr size_t AES_MAX_KEY_SIZE = 32;
+static constexpr size_t DEC_TOTAL_SIZE = MAGIC_SIZE + NONCE_SIZE + PRIVKEY_SIZE + TAG_SIZE;
+static constexpr size_t AES_RECORD_PAYLOAD = 1 + AES_MAX_KEY_SIZE;
+static constexpr size_t AES_TOTAL_SIZE = MAGIC_SIZE + NONCE_SIZE + AES_RECORD_PAYLOAD + TAG_SIZE;
 
-/**
- * \brief HKDF info string for PIN-derived DEC key encryption context.
- */
-static constexpr char HKDF_INFO[] = "GPG-DEC-KEY-V1";
+/** \brief HKDF info string for storage key derivation. */
+static constexpr char HKDF_INFO[] = "GPG-STORAGE-V2";
 
 #ifdef __DOXYGEN__
 namespace cdc::mod_gpg {
@@ -52,10 +49,17 @@ namespace cdc::mod_gpg {
 
 #pragma pack(push, 1)
 struct DecKeyStorage {
-    uint8_t magic[MAGIC_SIZE];     // "ECDH"
-    uint8_t nonce[NONCE_SIZE];     // AES-GCM nonce
-    uint8_t encrypted[PRIVKEY_SIZE]; // Encrypted private key
-    uint8_t tag[TAG_SIZE];         // GCM authentication tag
+    uint8_t magic[MAGIC_SIZE];
+    uint8_t nonce[NONCE_SIZE];
+    uint8_t encrypted[PRIVKEY_SIZE];
+    uint8_t tag[TAG_SIZE];
+};
+
+struct AesKeyStorage {
+    uint8_t magic[MAGIC_SIZE];
+    uint8_t nonce[NONCE_SIZE];
+    uint8_t encrypted[AES_RECORD_PAYLOAD];
+    uint8_t tag[TAG_SIZE];
 };
 #pragma pack(pop)
 
@@ -63,51 +67,30 @@ struct DecKeyStorage {
 } // namespace cdc::mod_gpg
 #endif
 
-static_assert(sizeof(DecKeyStorage) == TOTAL_SIZE, "DecKeyStorage size mismatch");
+static_assert(sizeof(DecKeyStorage) == DEC_TOTAL_SIZE, "DecKeyStorage size mismatch");
+static_assert(sizeof(AesKeyStorage) == AES_TOTAL_SIZE, "AesKeyStorage size mismatch");
 
 namespace {
 
-/**
- * \brief RAII wrapper around `mbedtls_gcm_context`.
- *
- * Ensures `mbedtls_gcm_init()` is paired with `mbedtls_gcm_free()` on
- * scope exit, removing the need for `goto cleanup` constructs.
- */
+/** \brief RAII wrapper around `mbedtls_gcm_context`. */
 class GcmContext {
 public:
-    /** \brief Initializes the underlying mbedTLS GCM context. */
     GcmContext() { mbedtls_gcm_init(&ctx_); }
-
-    /** \brief Releases mbedTLS GCM resources. */
     ~GcmContext() { mbedtls_gcm_free(&ctx_); }
-
     GcmContext(const GcmContext&) = delete;
     GcmContext& operator=(const GcmContext&) = delete;
     GcmContext(GcmContext&&) = delete;
     GcmContext& operator=(GcmContext&&) = delete;
-
-    /** \brief Returns mutable pointer to the wrapped mbedTLS context. */
     mbedtls_gcm_context* get() { return &ctx_; }
-
 private:
     mbedtls_gcm_context ctx_;
 };
 
-/**
- * \brief Securely zeroizes a fixed-size buffer.
- * \tparam N Buffer length in bytes.
- * \param buf Buffer to wipe.
- */
 template <size_t N>
 inline void secureWipe(uint8_t (&buf)[N]) {
     mbedtls_platform_zeroize(buf, N);
 }
 
-/**
- * \brief Securely zeroizes a typed object.
- * \tparam T Object type.
- * \param obj Object reference to wipe.
- */
 template <typename T>
 inline void secureWipeObject(T& obj) {
     mbedtls_platform_zeroize(&obj, sizeof(obj));
@@ -125,109 +108,97 @@ static struct {
     uint8_t decSlot = 0;
     uint8_t autSlot = 0;
 
-    // Session state for verified PIN
     bool sessionActive = false;
-    uint8_t sessionKey[32];  // HKDF-derived key from PIN
+    uint8_t sessionKey[32];
 } s_storage;
 
-/**
- * \brief Returns secure-element instance used by storage helpers.
- * \return Pointer to secure-element abstraction.
- */
 static cdc::hal::ISecureElement* get_se() {
     return cdc::hal::getSecureElementInstance();
 }
 
 /**
- * \brief Derives a device-bound encryption key using HKDF-SHA256.
- * \param key_out Output buffer receiving the 32-byte derived key.
- * \return `true` on successful key derivation, otherwise `false`.
+ * \brief Computes SHA-256 over a PIN string.
+ * \param pin PIN string; may be empty/`nullptr`.
+ * \param hash_out 32-byte output buffer.
+ * \return `true` on success.
  */
-static bool derive_device_key(uint8_t* key_out) {
-    if (!key_out) return false;
-
-    // Get chip ID as IKM (Input Keying Material)
-    uint8_t chip_id[16] = {};
-    auto* se = get_se();
-    if (se) {
-        se->getChipId(chip_id, sizeof(chip_id));
-    }
-
-    // Fixed salt for device key (different from PIN key)
-    static constexpr char DEVICE_KEY_INFO[] = "GPG-DEC-DEVICE-KEY-V1";
-    static const uint8_t DEVICE_SALT[16] = {
-        0x47, 0x50, 0x47, 0x2D, 0x44, 0x45, 0x43, 0x2D,  // "GPG-DEC-"
-        0x53, 0x41, 0x4C, 0x54, 0x2D, 0x56, 0x31, 0x00   // "SALT-V1."
-    };
-
-    const mbedtls_md_info_t* md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-    if (!md) return false;
-
-    int ret = mbedtls_hkdf(
-        md,
-        DEVICE_SALT, sizeof(DEVICE_SALT),
-        chip_id, sizeof(chip_id),
-        reinterpret_cast<const uint8_t*>(DEVICE_KEY_INFO), strlen(DEVICE_KEY_INFO),
-        key_out, 32
-    );
-
-    mbedtls_platform_zeroize(chip_id, sizeof(chip_id));
-    return ret == 0;
+static bool pin_to_hash(const char* pin, uint8_t* hash_out) {
+    if (!hash_out) return false;
+    const uint8_t* in = pin ? reinterpret_cast<const uint8_t*>(pin) : reinterpret_cast<const uint8_t*>("");
+    size_t in_len = pin ? strlen(pin) : 0;
+    return mbedtls_sha256(in, in_len, hash_out, 0) == 0;
 }
 
 /**
- * \brief Derives an encryption key from the user PIN or falls back to a device key.
- * \param pin PIN string used as input key material; may be `nullptr`.
- * \param key_out Output buffer receiving the 32-byte derived key.
- * \return `true` if derivation succeeded, otherwise `false`.
+ * \brief Derives a 32-byte storage key for a specific slot.
+ * \param slot_id Absolute R-Memory slot identifier (used in HKDF salt).
+ * \param pin_hash Optional 32-byte PIN hash; `nullptr` falls back to chip-bound key.
+ * \param key_out 32-byte output buffer.
+ * \return `true` on success.
  */
-static bool derive_key_from_pin(const char* pin, uint8_t* key_out) {
+static bool derive_storage_key(uint16_t slot_id, const uint8_t* pin_hash, uint8_t* key_out) {
     if (!key_out) return false;
 
-    // If no PIN provided, use device-specific key
-    if (!pin || pin[0] == '\0') {
-        return derive_device_key(key_out);
-    }
-
-    // Get chip ID as salt (unique per device)
-    uint8_t salt[16] = {};
+    uint8_t ikm[16 + 32] = {};
+    size_t ikm_len = 16;
     auto* se = get_se();
     if (se) {
-        se->getChipId(salt, sizeof(salt));
+        se->getChipId(ikm, 16);
+    }
+    if (pin_hash) {
+        memcpy(ikm + 16, pin_hash, 32);
+        ikm_len = 16 + 32;
     }
 
-    // HKDF: PIN -> 32-byte key
+    uint8_t salt[2];
+    salt[0] = static_cast<uint8_t>((slot_id >> 8) & 0xFF);
+    salt[1] = static_cast<uint8_t>(slot_id & 0xFF);
+
     const mbedtls_md_info_t* md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-    if (!md) return false;
+    if (!md) {
+        mbedtls_platform_zeroize(ikm, sizeof(ikm));
+        return false;
+    }
 
     int ret = mbedtls_hkdf(
         md,
         salt, sizeof(salt),
-        reinterpret_cast<const uint8_t*>(pin), strlen(pin),
+        ikm, ikm_len,
         reinterpret_cast<const uint8_t*>(HKDF_INFO), strlen(HKDF_INFO),
         key_out, 32
     );
 
+    mbedtls_platform_zeroize(ikm, sizeof(ikm));
     return ret == 0;
 }
 
 /**
- * \brief Configures ECC slot range and derives SIG/DEC/AUT slot assignments.
- * \param eccStart First ECC slot assigned to OpenPGP module.
- * \param eccEnd Last ECC slot assigned to OpenPGP module.
+ * \brief Builds the 6-byte AAD for a slot: slot_id (BE) || magic (4).
+ * \param slot_id Absolute R-Memory slot identifier.
+ * \param magic 4-byte magic marker.
+ * \param aad_out 6-byte output buffer.
  */
+static void build_aad(uint16_t slot_id, const uint8_t magic[MAGIC_SIZE], uint8_t aad_out[6]) {
+    aad_out[0] = static_cast<uint8_t>((slot_id >> 8) & 0xFF);
+    aad_out[1] = static_cast<uint8_t>(slot_id & 0xFF);
+    memcpy(aad_out + 2, magic, MAGIC_SIZE);
+}
+
+/**
+ * \brief Resolves an absolute R-Memory slot index relative to the module range.
+ * \param rel_index Offset within the module range.
+ * \return Absolute slot index.
+ */
+static uint16_t resolve_slot(uint16_t rel_index) {
+    return static_cast<uint16_t>(s_storage.rmemStart + rel_index);
+}
+
 void gpg_storage_set_slot_range(uint16_t eccStart, uint16_t eccEnd) {
     s_storage.ready = false;
     s_storage.eccStart = eccStart;
     s_storage.eccEnd = eccEnd;
 
-    if (eccStart == 0 || eccEnd == 0) {
-        return;
-    }
-    if (eccStart > eccEnd) {
-        return;
-    }
-    if ((eccEnd - eccStart + 1) < 3) {
+    if (eccStart == 0 || eccEnd == 0 || eccStart > eccEnd || (eccEnd - eccStart + 1) < 3) {
         return;
     }
 
@@ -237,286 +208,283 @@ void gpg_storage_set_slot_range(uint16_t eccStart, uint16_t eccEnd) {
     s_storage.ready = true;
 }
 
-/**
- * \brief Configures R-Memory slot range used by OpenPGP storage.
- * \param rmemStart First assigned R-Memory slot.
- * \param rmemEnd Last assigned R-Memory slot.
- */
 void gpg_storage_set_rmem_range(uint16_t rmemStart, uint16_t rmemEnd) {
     s_storage.rmemStart = rmemStart;
     s_storage.rmemEnd = rmemEnd;
 }
 
-/**
- * \brief Returns whether storage slot configuration is complete and usable.
- * \return `true` when storage ranges are valid.
- */
-bool gpg_storage_ready(void) {
-    return s_storage.ready;
-}
+bool gpg_storage_ready(void) { return s_storage.ready; }
+uint8_t gpg_storage_sig_slot(void) { return s_storage.sigSlot; }
+uint8_t gpg_storage_dec_slot(void) { return s_storage.decSlot; }
+uint8_t gpg_storage_aut_slot(void) { return s_storage.autSlot; }
 
 /**
- * \brief Returns configured slot ID for signature key material.
- * \return Signature ECC slot index.
+ * \brief Encrypts and writes an arbitrary payload to a slot.
+ * \param slot_id Absolute R-Memory slot.
+ * \param magic 4-byte magic marker.
+ * \param payload Plaintext bytes.
+ * \param payload_len Plaintext length.
+ * \param record_buf Scratch buffer; must hold MAGIC + NONCE + payload_len + TAG.
+ * \param record_buf_len Length of `record_buf`.
+ * \param pin Session PIN; `nullptr` falls back to chip-bound key.
+ * \return `true` on success.
  */
-uint8_t gpg_storage_sig_slot(void) {
-    return s_storage.sigSlot;
-}
-
-/**
- * \brief Returns configured slot ID for decryption key material.
- * \return Decryption ECC slot index.
- */
-uint8_t gpg_storage_dec_slot(void) {
-    return s_storage.decSlot;
-}
-
-/**
- * \brief Returns configured slot ID for authentication key material.
- * \return Authentication ECC slot index.
- */
-uint8_t gpg_storage_aut_slot(void) {
-    return s_storage.autSlot;
-}
-
-/**
- * \brief Encrypted DEC private-key storage operations.
- */
-
-/**
- * \brief Encrypts and stores DEC private key into module R-Memory.
- * \param privkey Raw 32-byte DEC private key.
- * \param pin Optional PIN string for key derivation context.
- * \return `true` if encrypted record was written successfully.
- */
-bool gpg_storage_save_dec_privkey(const uint8_t* privkey, const char* pin) {
-    if (!privkey) {
-        LOG_E(TAG, "Invalid parameters for save_dec_privkey");
-        return false;
-    }
-    // Note: pin can be NULL - derive_key_from_pin will use device key in that case
-
+static bool save_slot_encrypted(uint16_t slot_id,
+                                const uint8_t magic[MAGIC_SIZE],
+                                const uint8_t* payload, size_t payload_len,
+                                uint8_t* record_buf, size_t record_buf_len,
+                                const char* pin) {
     auto* se = get_se();
-    if (!se) {
-        LOG_E(TAG, "Secure element not available");
+    if (!se) return false;
+    if (record_buf_len < MAGIC_SIZE + NONCE_SIZE + payload_len + TAG_SIZE) return false;
+
+    uint8_t pin_hash[32];
+    bool have_pin = (pin && pin[0] != '\0');
+    if (have_pin && !pin_to_hash(pin, pin_hash)) {
+        mbedtls_platform_zeroize(pin_hash, sizeof(pin_hash));
         return false;
     }
 
-    // Derive encryption key from PIN. Wiped on scope exit via secureWipe().
     uint8_t enc_key[32];
-    if (!derive_key_from_pin(pin, enc_key)) {
-        LOG_E(TAG, "Failed to derive encryption key");
+    bool ok = derive_storage_key(slot_id, have_pin ? pin_hash : nullptr, enc_key);
+    mbedtls_platform_zeroize(pin_hash, sizeof(pin_hash));
+    if (!ok) {
+        secureWipe(enc_key);
         return false;
     }
 
-    // Prepare storage structure (wiped on scope exit).
-    DecKeyStorage storage = {};
-    memcpy(storage.magic, DEC_KEY_MAGIC, MAGIC_SIZE);
+    uint8_t* p_magic = record_buf;
+    uint8_t* p_nonce = record_buf + MAGIC_SIZE;
+    uint8_t* p_ct    = record_buf + MAGIC_SIZE + NONCE_SIZE;
+    uint8_t* p_tag   = p_ct + payload_len;
 
-    const uint16_t rmem_slot = s_storage.rmemStart + RMEM_SLOT_DEC_KEY;
-
-    // Generate random nonce
-    if (!se->getRandom(storage.nonce, NONCE_SIZE)) {
-        esp_fill_random(storage.nonce, NONCE_SIZE);
+    memcpy(p_magic, magic, MAGIC_SIZE);
+    if (!se->getRandomStrict(p_nonce, NONCE_SIZE)) {
+        secureWipe(enc_key);
+        LOG_E(TAG, "Cannot get hardware entropy for nonce on slot %u", slot_id);
+        return false;
     }
 
-    // RAII-managed GCM context: mbedtls_gcm_free() runs automatically.
-    GcmContext gcm;
-    bool success = false;
+    uint8_t aad[6];
+    build_aad(slot_id, magic, aad);
 
+    GcmContext gcm;
     int ret = mbedtls_gcm_setkey(gcm.get(), MBEDTLS_CIPHER_ID_AES, enc_key, 256);
     if (ret == 0) {
         ret = mbedtls_gcm_crypt_and_tag(
-            gcm.get(),
-            MBEDTLS_GCM_ENCRYPT,
-            PRIVKEY_SIZE,
-            storage.nonce, NONCE_SIZE,
-            storage.magic, MAGIC_SIZE,  // AAD = magic bytes
-            privkey,
-            storage.encrypted,
-            TAG_SIZE,
-            storage.tag
-        );
-        if (ret != 0) {
-            LOG_E(TAG, "GCM encrypt failed: %d", ret);
-        }
-    } else {
-        LOG_E(TAG, "GCM setkey failed: %d", ret);
+            gcm.get(), MBEDTLS_GCM_ENCRYPT, payload_len,
+            p_nonce, NONCE_SIZE,
+            aad, sizeof(aad),
+            payload, p_ct,
+            TAG_SIZE, p_tag);
     }
-
-    if (ret == 0) {
-        // Erase existing data first
-        se->rmemErase(rmem_slot);
-
-        // Write encrypted key to R-Memory
-        if (se->rmemWrite(rmem_slot, reinterpret_cast<uint8_t*>(&storage), TOTAL_SIZE)
-                == cdc::hal::SeResult::OK) {
-            LOG_I(TAG, "Saved encrypted DEC private key to R-Memory slot %d", rmem_slot);
-            success = true;
-        } else {
-            LOG_E(TAG, "Failed to write encrypted DEC key to R-Memory slot %d", rmem_slot);
-        }
-    }
-
     secureWipe(enc_key);
-    secureWipeObject(storage);
-    return success;
-}
-
-/**
- * \brief Loads and decrypts DEC private key from module R-Memory.
- * \param privkey_out Output buffer for decrypted 32-byte private key.
- * \param pin Optional PIN string for key derivation context.
- * \return `true` if key was successfully decrypted and validated.
- */
-bool gpg_storage_load_dec_privkey(uint8_t* privkey_out, const char* pin) {
-    if (!privkey_out) {
-        LOG_E(TAG, "Invalid parameters for load_dec_privkey");
-        return false;
-    }
-    // Note: pin can be NULL - derive_key_from_pin will use device key in that case
-
-    auto* se = get_se();
-    if (!se) {
-        LOG_E(TAG, "Secure element not available");
+    if (ret != 0) {
+        LOG_E(TAG, "GCM encrypt failed: %d", ret);
         return false;
     }
 
-    // Read from R-Memory
-    uint16_t rmem_slot = s_storage.rmemStart + RMEM_SLOT_DEC_KEY;
-    uint8_t data[128];
-    uint16_t data_len = 0;
-
-    if (se->rmemRead(rmem_slot, data, sizeof(data), &data_len) != cdc::hal::SeResult::OK ||
-        data_len < TOTAL_SIZE) {
-        LOG_W(TAG, "No DEC private key in R-Memory slot %d", rmem_slot);
+    se->rmemErase(slot_id);
+    size_t total_len = MAGIC_SIZE + NONCE_SIZE + payload_len + TAG_SIZE;
+    if (se->rmemWrite(slot_id, record_buf, static_cast<uint16_t>(total_len)) != cdc::hal::SeResult::OK) {
+        LOG_E(TAG, "rmemWrite slot %u failed", slot_id);
         return false;
     }
-
-    auto* storage = reinterpret_cast<DecKeyStorage*>(data);
-
-    // Verify magic
-    if (memcmp(storage->magic, DEC_KEY_MAGIC, MAGIC_SIZE) != 0) {
-        LOG_W(TAG, "Invalid magic in DEC key storage");
-        return false;
-    }
-
-    // Derive decryption key from PIN. Wiped on scope exit via secureWipe().
-    uint8_t dec_key[32];
-    if (!derive_key_from_pin(pin, dec_key)) {
-        LOG_E(TAG, "Failed to derive decryption key");
-        return false;
-    }
-
-    // RAII-managed GCM context: mbedtls_gcm_free() runs automatically.
-    GcmContext gcm;
-    bool success = false;
-
-    int ret = mbedtls_gcm_setkey(gcm.get(), MBEDTLS_CIPHER_ID_AES, dec_key, 256);
-    if (ret == 0) {
-        ret = mbedtls_gcm_auth_decrypt(
-            gcm.get(),
-            PRIVKEY_SIZE,
-            storage->nonce, NONCE_SIZE,
-            storage->magic, MAGIC_SIZE,  // AAD = magic bytes
-            storage->tag, TAG_SIZE,
-            storage->encrypted,
-            privkey_out
-        );
-        if (ret == 0) {
-            LOG_D(TAG, "Successfully decrypted DEC private key");
-            success = true;
-        } else {
-            LOG_W(TAG, "GCM decrypt failed (wrong PIN or corrupted data): %d", ret);
-            mbedtls_platform_zeroize(privkey_out, PRIVKEY_SIZE);
-        }
-    } else {
-        LOG_E(TAG, "GCM setkey failed: %d", ret);
-    }
-
-    secureWipe(dec_key);
-    mbedtls_platform_zeroize(data, sizeof(data));
-    return success;
-}
-
-/**
- * \brief Checks whether encrypted DEC private key record exists in R-Memory.
- * \return `true` if a valid magic marker is present.
- */
-bool gpg_storage_has_dec_privkey(void) {
-    auto* se = get_se();
-    if (!se) return false;
-
-    uint16_t rmem_slot = s_storage.rmemStart + RMEM_SLOT_DEC_KEY;
-    uint8_t data[MAGIC_SIZE + 1];
-    uint16_t data_len = 0;
-
-    if (se->rmemRead(rmem_slot, data, sizeof(data), &data_len) != cdc::hal::SeResult::OK ||
-        data_len < MAGIC_SIZE) {
-        return false;
-    }
-
-    return memcmp(data, DEC_KEY_MAGIC, MAGIC_SIZE) == 0;
-}
-
-/**
- * \brief Deletes stored encrypted DEC private key from R-Memory.
- * \return `true` if erase operation succeeded.
- */
-bool gpg_storage_delete_dec_privkey(void) {
-    auto* se = get_se();
-    if (!se) return false;
-
-    uint16_t rmem_slot = s_storage.rmemStart + RMEM_SLOT_DEC_KEY;
-
-    if (se->rmemErase(rmem_slot) != cdc::hal::SeResult::OK) {
-        LOG_E(TAG, "Failed to erase DEC key from R-Memory slot %d", rmem_slot);
-        return false;
-    }
-
-    LOG_I(TAG, "Deleted DEC private key from R-Memory slot %d", rmem_slot);
     return true;
 }
 
 /**
- * \brief Session key management for verified PIN context.
+ * \brief Reads and decrypts a payload from a slot.
+ * \param slot_id Absolute R-Memory slot.
+ * \param magic 4-byte magic marker.
+ * \param payload_out Output buffer.
+ * \param payload_len Expected plaintext length.
+ * \param pin Session PIN; `nullptr` falls back to chip-bound key.
+ * \return `true` on success.
  */
+static bool load_slot_decrypted(uint16_t slot_id,
+                                const uint8_t magic[MAGIC_SIZE],
+                                uint8_t* payload_out, size_t payload_len,
+                                const char* pin) {
+    auto* se = get_se();
+    if (!se) return false;
 
-/**
- * \brief Derives and stores session key from verified PIN.
- * \param pin Verified PIN string, or `nullptr` to clear session.
- */
+    uint8_t buf[128];
+    uint16_t buf_len = 0;
+    size_t expected = MAGIC_SIZE + NONCE_SIZE + payload_len + TAG_SIZE;
+    if (expected > sizeof(buf)) return false;
+
+    if (se->rmemRead(slot_id, buf, sizeof(buf), &buf_len) != cdc::hal::SeResult::OK || buf_len < expected) {
+        return false;
+    }
+    if (memcmp(buf, magic, MAGIC_SIZE) != 0) {
+        return false;
+    }
+
+    uint8_t pin_hash[32];
+    bool have_pin = (pin && pin[0] != '\0');
+    if (have_pin && !pin_to_hash(pin, pin_hash)) {
+        mbedtls_platform_zeroize(pin_hash, sizeof(pin_hash));
+        mbedtls_platform_zeroize(buf, sizeof(buf));
+        return false;
+    }
+
+    uint8_t dec_key[32];
+    bool ok = derive_storage_key(slot_id, have_pin ? pin_hash : nullptr, dec_key);
+    mbedtls_platform_zeroize(pin_hash, sizeof(pin_hash));
+    if (!ok) {
+        secureWipe(dec_key);
+        mbedtls_platform_zeroize(buf, sizeof(buf));
+        return false;
+    }
+
+    const uint8_t* p_nonce = buf + MAGIC_SIZE;
+    const uint8_t* p_ct    = buf + MAGIC_SIZE + NONCE_SIZE;
+    const uint8_t* p_tag   = p_ct + payload_len;
+
+    uint8_t aad[6];
+    build_aad(slot_id, magic, aad);
+
+    GcmContext gcm;
+    int ret = mbedtls_gcm_setkey(gcm.get(), MBEDTLS_CIPHER_ID_AES, dec_key, 256);
+    if (ret == 0) {
+        ret = mbedtls_gcm_auth_decrypt(
+            gcm.get(), payload_len,
+            p_nonce, NONCE_SIZE,
+            aad, sizeof(aad),
+            p_tag, TAG_SIZE,
+            p_ct, payload_out);
+    }
+    secureWipe(dec_key);
+    mbedtls_platform_zeroize(buf, sizeof(buf));
+    if (ret != 0) {
+        mbedtls_platform_zeroize(payload_out, payload_len);
+        return false;
+    }
+    return true;
+}
+
+bool gpg_storage_save_dec_privkey(const uint8_t* privkey, const char* pin) {
+    if (!privkey) return false;
+    uint16_t slot = resolve_slot(RMEM_SLOT_DEC_KEY);
+    uint8_t record[DEC_TOTAL_SIZE];
+    bool ok = save_slot_encrypted(slot, DEC_KEY_MAGIC, privkey, PRIVKEY_SIZE,
+                                  record, sizeof(record), pin);
+    secureWipe(record);
+    if (ok) {
+        LOG_I(TAG, "Saved DEC private key (slot %u)", slot);
+    }
+    return ok;
+}
+
+bool gpg_storage_load_dec_privkey(uint8_t* privkey_out, const char* pin) {
+    if (!privkey_out) return false;
+    uint16_t slot = resolve_slot(RMEM_SLOT_DEC_KEY);
+    return load_slot_decrypted(slot, DEC_KEY_MAGIC, privkey_out, PRIVKEY_SIZE, pin);
+}
+
+bool gpg_storage_has_dec_privkey(void) {
+    auto* se = get_se();
+    if (!se) return false;
+    uint16_t slot = resolve_slot(RMEM_SLOT_DEC_KEY);
+    uint8_t buf[DEC_TOTAL_SIZE];
+    uint16_t buf_len = 0;
+    if (se->rmemRead(slot, buf, sizeof(buf), &buf_len) != cdc::hal::SeResult::OK || buf_len < MAGIC_SIZE) {
+        return false;
+    }
+    return memcmp(buf, DEC_KEY_MAGIC, MAGIC_SIZE) == 0;
+}
+
+bool gpg_storage_delete_dec_privkey(void) {
+    auto* se = get_se();
+    if (!se) return false;
+    uint16_t slot = resolve_slot(RMEM_SLOT_DEC_KEY);
+    return se->rmemErase(slot) == cdc::hal::SeResult::OK;
+}
+
+bool gpg_storage_save_aes_key(const uint8_t* key, size_t key_len, const char* pin) {
+    if (!key) return false;
+    if (key_len != 16 && key_len != 32) return false;
+    uint16_t slot = resolve_slot(RMEM_SLOT_AES_KEY);
+
+    uint8_t payload[AES_RECORD_PAYLOAD];
+    payload[0] = static_cast<uint8_t>(key_len);
+    memcpy(payload + 1, key, key_len);
+    if (key_len < AES_MAX_KEY_SIZE) {
+        memset(payload + 1 + key_len, 0, AES_MAX_KEY_SIZE - key_len);
+    }
+
+    uint8_t record[AES_TOTAL_SIZE];
+    bool ok = save_slot_encrypted(slot, AES_KEY_MAGIC, payload, sizeof(payload),
+                                  record, sizeof(record), pin);
+    secureWipe(payload);
+    secureWipe(record);
+    if (ok) {
+        LOG_I(TAG, "Saved AES key (slot %u, %zu bytes)", slot, key_len);
+    }
+    return ok;
+}
+
+bool gpg_storage_load_aes_key(uint8_t* key_out, size_t* key_len_out, const char* pin) {
+    if (!key_out || !key_len_out) return false;
+    uint16_t slot = resolve_slot(RMEM_SLOT_AES_KEY);
+
+    uint8_t payload[AES_RECORD_PAYLOAD];
+    if (!load_slot_decrypted(slot, AES_KEY_MAGIC, payload, sizeof(payload), pin)) {
+        return false;
+    }
+    size_t len = payload[0];
+    if (len != 16 && len != 32) {
+        secureWipe(payload);
+        return false;
+    }
+    memcpy(key_out, payload + 1, len);
+    *key_len_out = len;
+    secureWipe(payload);
+    return true;
+}
+
+bool gpg_storage_has_aes_key(void) {
+    auto* se = get_se();
+    if (!se) return false;
+    uint16_t slot = resolve_slot(RMEM_SLOT_AES_KEY);
+    uint8_t buf[MAGIC_SIZE];
+    uint16_t buf_len = 0;
+    if (se->rmemRead(slot, buf, sizeof(buf), &buf_len) != cdc::hal::SeResult::OK || buf_len < MAGIC_SIZE) {
+        return false;
+    }
+    return memcmp(buf, AES_KEY_MAGIC, MAGIC_SIZE) == 0;
+}
+
+bool gpg_storage_delete_aes_key(void) {
+    auto* se = get_se();
+    if (!se) return false;
+    uint16_t slot = resolve_slot(RMEM_SLOT_AES_KEY);
+    return se->rmemErase(slot) == cdc::hal::SeResult::OK;
+}
+
 void gpg_storage_set_session_pin(const char* pin) {
     if (!pin) {
         gpg_storage_clear_session();
         return;
     }
-
-    if (derive_key_from_pin(pin, s_storage.sessionKey)) {
+    uint8_t hash[32];
+    if (pin_to_hash(pin, hash)) {
+        memcpy(s_storage.sessionKey, hash, sizeof(hash));
         s_storage.sessionActive = true;
-        LOG_D(TAG, "Session key derived from PIN");
     }
+    mbedtls_platform_zeroize(hash, sizeof(hash));
 }
 
-/**
- * \brief Returns current session key if session is active.
- * \param key_out Output buffer for 32-byte session key.
- * \return `true` when session key is available.
- */
 bool gpg_storage_get_session_key(uint8_t* key_out) {
     if (!s_storage.sessionActive || !key_out) {
         return false;
     }
-
     memcpy(key_out, s_storage.sessionKey, 32);
     return true;
 }
 
-/**
- * \brief Clears session key material from memory.
- */
 void gpg_storage_clear_session(void) {
     mbedtls_platform_zeroize(s_storage.sessionKey, sizeof(s_storage.sessionKey));
     s_storage.sessionActive = false;
-    LOG_D(TAG, "Session cleared");
 }

@@ -192,9 +192,16 @@ void WifiHandlers::disconnect() {
 
 /**
  * \brief Synchronizes system time via NTP.
- * \return `true` if synchronization succeeded.
+ *
+ * Always contacts an NTP server; callers that only want a sync when the time
+ * is currently unset should check `IRtc::isTimeSet()` themselves before
+ * calling. The `disconnectAfter` flag controls whether a connection opened
+ * by this function is also torn down on return; an existing connection
+ * (opened by the caller) is never disconnected here.
+ *
+ * \return `true` if the system time is valid after the call.
  */
-bool WifiHandlers::syncNtp() {
+bool WifiHandlers::syncNtp(bool disconnectAfter) {
     auto* wifi = hal::getWifiControllerInstance();
     if (!wifi) {
         lastError_ = "No WiFi HW";
@@ -250,14 +257,13 @@ bool WifiHandlers::syncNtp() {
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 
-    // Disconnect if we established the connection
-    if (weConnected) {
+    // Only disconnect if we opened the connection AND the caller asked us to
+    if (weConnected && disconnectAfter) {
         wifi->disconnect();
         wifi->disable();
     }
 
     if (synced) {
-        // Save time to RTC/NVS for persistence
         auto* rtc = hal::getRtcInstance();
         if (rtc) {
             rtc->markTimeSet();
@@ -268,6 +274,46 @@ bool WifiHandlers::syncNtp() {
 
     lastError_ = "NTP timeout";
     return false;
+}
+
+/**
+ * \brief Ensures WiFi is connected; runs NTP sync only when the time is unset.
+ *
+ * Connection stays open after return. The caller must call \ref disconnect()
+ * when done. Triggers an NTP sync that reuses the connection (no tear-down).
+ *
+ * \return `true` on a usable connection.
+ */
+bool WifiHandlers::ensureConnected() {
+    auto* wifi = hal::getWifiControllerInstance();
+    if (!wifi) {
+        lastError_ = "No WiFi HW";
+        return false;
+    }
+
+    auto syncTimeIfNeeded = [this]() {
+        auto* rtc = hal::getRtcInstance();
+        if (!rtc || !rtc->isTimeSet()) {
+            syncNtp(/*disconnectAfter=*/false);  // best-effort, ignore result
+        }
+    };
+
+    if (wifi->isConnected()) {
+        syncTimeIfNeeded();
+        return true;
+    }
+    if (!config_.valid) {
+        loadConfig();
+    }
+    if (!config_.valid) {
+        lastError_ = "No WLAN configured";
+        return false;
+    }
+    if (!connect()) {
+        return false;
+    }
+    syncTimeIfNeeded();
+    return true;
 }
 
 } // namespace cdc::ui

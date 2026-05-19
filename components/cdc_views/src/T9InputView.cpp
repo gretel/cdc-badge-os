@@ -170,14 +170,24 @@ void T9InputView::backspace() {
 void T9InputView::forceDigit(char key) {
     if (key < '0' || key > '9') return;
 
-    // Commit any pending character first
+    // A long-press is always preceded by a short-press of the same key, which
+    // already inserted the first T9 multi-tap character for that key. Replace
+    // that pending character with the literal digit instead of appending.
+    if (lastKey_ == key && len_ > 0) {
+        text_[len_ - 1] = key;
+        commitCharacter();
+        dirty_ = true;
+        LOG_D(TAG, "forceDigit (replace): key='%c', text='%s'", key, text_);
+        return;
+    }
+
     commitCharacter();
 
     if (len_ < maxLen_) {
         text_[len_++] = key;
         text_[len_] = '\0';
         dirty_ = true;
-        LOG_D(TAG, "forceDigit: key='%c', text='%s'", key, text_);
+        LOG_D(TAG, "forceDigit (append): key='%c', text='%s'", key, text_);
     } else {
         ui::showToastError(ui::tr(ui::StringId::T9_FULL), 800);
     }

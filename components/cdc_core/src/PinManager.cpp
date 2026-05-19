@@ -9,6 +9,9 @@
 #include "cdc_hal/ISecureElement.h"
 #include "cdc_log.h"
 #include "mbedtls/sha256.h"
+#include "mbedtls/ecdsa.h"
+#include "mbedtls/ecp.h"
+#include "mbedtls/bignum.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include <cstring>
@@ -37,8 +40,16 @@ bool PinManager::init() {
     if (pinLoaded_) return true;
 
     if (!loadFromStorage()) {
-        LOG_I(TAG, "No PINs stored, using defaults");
+        // Either first-boot (R-Memory slot empty) or the chip-bound signature
+        // over the stored payload failed to verify. In both cases we fall
+        // back to defaults and immediately persist them so the slot ends up
+        // in a known-good, signed state. The TROPIC01 session might not be
+        // ready yet on the very first boot — in that case saveToStorage
+        // silently fails and we keep the defaults in RAM until the next
+        // mutating operation flushes them.
+        LOG_I(TAG, "Loading default PINs (storage empty or unreadable)");
         loadDefaults();
+        saveToStorage();
     }
 
     pinLoaded_ = true;
@@ -96,6 +107,64 @@ bool PinManager::isStorageAvailable() const {
  * \brief Loads serialized PIN/KDF state from secure-element R-Memory.
  * \return `true` on successful load and format validation.
  */
+/**
+ * \brief Verifies the ECDSA-P256 attestation signature appended to a stored
+ *        PIN payload. The signature is produced over the first PAYLOAD_SIZE
+ *        bytes with the chip-bound key in ECC slot 0 (AttestationKeyService).
+ *
+ * If the chip-bound public key has changed (slot 0 was regenerated, e.g. by
+ * an attacker who managed to rewrite that slot via the pairing key), the
+ * verification will fail and the caller will trigger a re-init with fresh
+ * defaults. The signature itself uses random-k ECDSA, so re-saving the same
+ * payload produces a different signature — that is fine, only verification
+ * matters here.
+ */
+static bool verify_payload_signature(hal::ISecureElement* se,
+                                     const uint8_t* payload, size_t payload_len,
+                                     const uint8_t* sig, size_t sig_len) {
+    if (sig_len != 64) return false;
+    uint8_t pub_raw[64];
+    hal::EccCurve curve = hal::EccCurve::P256;
+    if (se->eccGetPublicKey(PinManager::ATTESTATION_ECC_SLOT, pub_raw, &curve) != hal::SeResult::OK) {
+        LOG_W(TAG, "Attestation pubkey read failed");
+        return false;
+    }
+    if (curve != hal::EccCurve::P256) {
+        LOG_W(TAG, "Attestation key is not P-256");
+        return false;
+    }
+
+    uint8_t pub_sec1[65];
+    pub_sec1[0] = 0x04;
+    memcpy(pub_sec1 + 1, pub_raw, 64);
+
+    uint8_t hash[SHA256_DIGEST_SIZE];
+    mbedtls_sha256(payload, payload_len, hash, 0);
+
+    mbedtls_ecp_group grp;
+    mbedtls_ecp_point Q;
+    mbedtls_mpi r, s;
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_ecp_point_init(&Q);
+    mbedtls_mpi_init(&r);
+    mbedtls_mpi_init(&s);
+
+    bool ok = false;
+    do {
+        if (mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1) != 0) break;
+        if (mbedtls_ecp_point_read_binary(&grp, &Q, pub_sec1, sizeof(pub_sec1)) != 0) break;
+        if (mbedtls_mpi_read_binary(&r, sig + 0, 32) != 0) break;
+        if (mbedtls_mpi_read_binary(&s, sig + 32, 32) != 0) break;
+        ok = (mbedtls_ecdsa_verify(&grp, hash, SHA256_DIGEST_SIZE, &Q, &r, &s) == 0);
+    } while (0);
+
+    mbedtls_mpi_free(&r);
+    mbedtls_mpi_free(&s);
+    mbedtls_ecp_point_free(&Q);
+    mbedtls_ecp_group_free(&grp);
+    return ok;
+}
+
 bool PinManager::loadFromStorage() {
     hal::ISecureElement* se = hal::getSecureElementInstance();
     if (!se || !se->isSessionActive()) {
@@ -107,8 +176,23 @@ bool PinManager::loadFromStorage() {
     uint16_t actualLen = 0;
 
     hal::SeResult result = se->rmemRead(RMEM_SLOT_PIN, data, STORAGE_SIZE, &actualLen);
-    if (result != hal::SeResult::OK || actualLen != STORAGE_SIZE || data[0] != MAGIC_V3) {
-        LOG_D(TAG, "No valid PIN data (len=%d, magic=0x%02X)", actualLen, data[0]);
+    if (result != hal::SeResult::OK) {
+        LOG_D(TAG, "No PIN data in R-Memory (read err=%d)",
+              static_cast<int>(result));
+        return false;
+    }
+
+    // Only the signed format is accepted. Any other state (wrong magic,
+    // wrong length, or invalid signature) falls back to defaults so the
+    // slot ends up freshly signed by the chip-bound attestation key.
+    if (actualLen != STORAGE_SIZE || data[0] != MAGIC) {
+        LOG_W(TAG, "PIN storage unrecognised (len=%u magic=0x%02X) - using defaults",
+              actualLen, actualLen > 0 ? data[0] : 0);
+        return false;
+    }
+    if (!verify_payload_signature(se, data, PAYLOAD_SIZE,
+                                  data + PAYLOAD_SIZE, SIGNATURE_SIZE)) {
+        LOG_W(TAG, "PIN storage signature invalid - re-initializing");
         return false;
     }
 
@@ -144,6 +228,11 @@ bool PinManager::loadFromStorage() {
     pw1Retries_ = data[pos++];
     pw3Retries_ = data[pos++];
 
+    // Mirror starts in sync with whatever is on the chip.
+    persistedBadgeRetries_ = badgeRetries_;
+    persistedPw1Retries_   = pw1Retries_;
+    persistedPw3Retries_   = pw3Retries_;
+
     // Check if badge PIN differs from default
     uint8_t defaultHash[BADGE_HASH_SIZE];
     computeBadgeHash(DEFAULT_BADGE_PIN, defaultHash);
@@ -168,7 +257,7 @@ bool PinManager::saveToStorage() {
     uint8_t data[STORAGE_SIZE];
     size_t pos = 0;
 
-    data[pos++] = MAGIC_V3;
+    data[pos++] = MAGIC;
 
     // Badge hash
     memcpy(&data[pos], badgeHash_, BADGE_HASH_SIZE);
@@ -203,6 +292,24 @@ bool PinManager::saveToStorage() {
     data[pos++] = pw1Retries_;
     data[pos++] = pw3Retries_;
 
+    // pos must now equal PAYLOAD_SIZE — append a P-256 ECDSA signature over
+    // bytes [0..PAYLOAD_SIZE) using the chip-bound attestation key in slot 0.
+    // A subsequent load that finds the signature invalid (because the slot 0
+    // key was regenerated or the payload was tampered with) will silently
+    // re-initialize the storage with defaults, exactly as requested by spec.
+    if (pos != PAYLOAD_SIZE) {
+        LOG_E(TAG, "Payload size mismatch (built=%zu, expected=%u)", pos, PAYLOAD_SIZE);
+        return false;
+    }
+    size_t sig_len = SIGNATURE_SIZE;
+    hal::SeResult sign_res = se->ecdsaSign(ATTESTATION_ECC_SLOT,
+                                           data, PAYLOAD_SIZE,
+                                           data + PAYLOAD_SIZE, &sig_len);
+    if (sign_res != hal::SeResult::OK || sig_len != SIGNATURE_SIZE) {
+        LOG_E(TAG, "Attestation sign failed (%d)", static_cast<int>(sign_res));
+        return false;
+    }
+
     se->rmemErase(RMEM_SLOT_PIN);
 
     hal::SeResult result = se->rmemWrite(RMEM_SLOT_PIN, data, STORAGE_SIZE);
@@ -211,7 +318,12 @@ bool PinManager::saveToStorage() {
         return false;
     }
 
-    LOG_I(TAG, "PINs saved to R-Memory slot %d", RMEM_SLOT_PIN);
+    persistedBadgeRetries_ = badgeRetries_;
+    persistedPw1Retries_   = pw1Retries_;
+    persistedPw3Retries_   = pw3Retries_;
+
+    LOG_D(TAG, "PINs saved to R-Memory slot %d (signed, %u bytes)",
+          RMEM_SLOT_PIN, STORAGE_SIZE);
     return true;
 }
 
@@ -358,25 +470,41 @@ bool PinManager::verifyPin(PinSlot slot, const char* pin) {
 
     if (!hashOk) return false;
 
+    // Pre-decrement strategy: persist the lower counter BEFORE compareHash so
+    // a power-cycle between hash and persist cannot reset the retry counter.
+    // To minimise R-Memory wear we only call saveToStorage() when the value
+    // we are about to commit would actually change the stored counter (mirror
+    // diverges). On success we restore the counter only in RAM; the on-chip
+    // value stays one step lower until the next failed verify reasserts the
+    // mirror (the worst case is the user has one fewer retry after a reboot).
+    uint8_t* mirror = nullptr;
+    switch (slot) {
+        case PinSlot::BADGE: mirror = &persistedBadgeRetries_; break;
+        case PinSlot::PW1:   mirror = &persistedPw1Retries_; break;
+        case PinSlot::PW3:   mirror = &persistedPw3Retries_; break;
+    }
+
+    const uint8_t before = *retries;
+    (*retries)--;
+    if (*retries < *mirror) {
+        if (!saveToStorage()) {
+            *retries = before;
+            return false;
+        }
+    }
+
     if (compareHash(storedHash, inputHash, hashSize)) {
-        switch (slot) {
-            case PinSlot::BADGE:
-                resetBadgeRetries();
-                lockoutActive_ = false;  // Clear lockout on success
-                break;
-            case PinSlot::PW1:
-                resetPW1Retries();
-                break;
-            case PinSlot::PW3:
-                resetPW3Retries();
-                break;
+        // Restore retries in RAM only - skip the flash write. The mirror is
+        // already at the lower value, so the next failed verify will persist
+        // again before any brute-force advantage can be gained.
+        *retries = MAX_RETRIES;
+        if (slot == PinSlot::BADGE) {
+            lockoutActive_ = false;
         }
         LOG_I(TAG, "%s verified", label);
         return true;
     }
 
-    (*retries)--;
-    saveToStorage();  // Persist retry count
     LOG_W(TAG, "Wrong %s, %d retries left", label, *retries);
 
     // Start lockout timer when badge retries are exhausted.

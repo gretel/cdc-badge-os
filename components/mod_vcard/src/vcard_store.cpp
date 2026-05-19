@@ -664,6 +664,320 @@ bool vcard_store_get_display(uint16_t slot, char* out, size_t max_len) {
 }
 
 /**
+ * \brief Copies a bounded value into a fixed-size destination buffer.
+ */
+static void copy_field(char* dst, size_t dst_size, const char* src, size_t src_len) {
+    if (!dst || dst_size == 0) return;
+    if (src_len >= dst_size) src_len = dst_size - 1;
+    if (src && src_len > 0) memcpy(dst, src, src_len);
+    dst[src_len] = '\0';
+}
+
+/**
+ * \brief Trims trailing CR and LF and whitespace characters from a length-bounded view.
+ */
+static size_t trim_line_len(const char* line, size_t len) {
+    while (len > 0 && (line[len - 1] == '\r' || line[len - 1] == '\n' ||
+                       line[len - 1] == ' '  || line[len - 1] == '\t')) {
+        len--;
+    }
+    return len;
+}
+
+/**
+ * \brief Returns pointer to the value portion of a vCard line and its length.
+ *        For a line like `TEL;TYPE=HOME:1234`, this returns the part after the first colon.
+ * \param line Pointer to start of line.
+ * \param line_len Length of the line (without terminator).
+ * \param out_len Output: length of the value portion.
+ * \return Pointer into `line` at value start, or nullptr if no colon found.
+ */
+static const char* line_value(const char* line, size_t line_len, size_t* out_len) {
+    const char* colon = static_cast<const char*>(memchr(line, ':', line_len));
+    if (!colon) return nullptr;
+    const char* val = colon + 1;
+    size_t val_len = line_len - static_cast<size_t>(val - line);
+    val_len = trim_line_len(val, val_len);
+    if (out_len) *out_len = val_len;
+    return val;
+}
+
+/**
+ * \brief Tests whether one vCard property prefix matches a line, optionally
+ *        accepting a TYPE=... parameter and a value sub-prefix (for IMPP).
+ *        Matching is case-insensitive for the property name and parameter value.
+ * \param line Pointer to line start.
+ * \param line_len Total line length.
+ * \param prop Property name (e.g. "TEL", "EMAIL").
+ * \param type_value Optional TYPE= match (e.g. "HOME"); pass nullptr to skip.
+ * \return `true` if the line matches.
+ */
+static bool match_property(const char* line, size_t line_len, const char* prop,
+                           const char* type_value) {
+    size_t prop_len = strlen(prop);
+    if (line_len < prop_len) return false;
+    if (strncasecmp(line, prop, prop_len) != 0) return false;
+    if (line_len == prop_len) return false;
+
+    char next = line[prop_len];
+    if (type_value) {
+        if (next != ';') return false;
+        const char* params_end = static_cast<const char*>(memchr(line, ':', line_len));
+        if (!params_end) return false;
+        size_t params_len = static_cast<size_t>(params_end - (line + prop_len + 1));
+        const char* params = line + prop_len + 1;
+        const char* type_token = "TYPE=";
+        size_t token_len = strlen(type_token);
+        if (params_len < token_len) return false;
+        size_t value_len = strlen(type_value);
+        for (size_t i = 0; i + token_len <= params_len; i++) {
+            if (strncasecmp(params + i, type_token, token_len) == 0) {
+                const char* v = params + i + token_len;
+                size_t v_len = params_len - i - token_len;
+                if (v_len > value_len &&
+                    (v[value_len] == ';' || v[value_len] == ',') &&
+                    strncasecmp(v, type_value, value_len) == 0) {
+                    return true;
+                }
+                if (v_len == value_len &&
+                    strncasecmp(v, type_value, value_len) == 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    return next == ':' || next == ';';
+}
+
+/**
+ * \brief Parses a single vCard line into the structured data, when recognized.
+ */
+static void parse_line_into_struct(const char* line, size_t line_len, vcard_data_t* out) {
+    line_len = trim_line_len(line, line_len);
+    if (line_len == 0) return;
+
+    size_t val_len = 0;
+    const char* val = nullptr;
+
+    if (match_property(line, line_len, "FN", nullptr)) {
+        val = line_value(line, line_len, &val_len);
+        if (val) copy_field(out->formatted_name, sizeof(out->formatted_name), val, val_len);
+        return;
+    }
+
+    if (match_property(line, line_len, "N", nullptr)) {
+        val = line_value(line, line_len, &val_len);
+        if (val) {
+            char tmp[256];
+            size_t copy = val_len < sizeof(tmp) - 1 ? val_len : sizeof(tmp) - 1;
+            memcpy(tmp, val, copy);
+            tmp[copy] = '\0';
+
+            char* family = tmp;
+            char* given = nullptr;
+            char* sep = strchr(tmp, ';');
+            if (sep) {
+                *sep = '\0';
+                given = sep + 1;
+                char* sep2 = strchr(given, ';');
+                if (sep2) *sep2 = '\0';
+            }
+            copy_field(out->family_name, sizeof(out->family_name),
+                       family, family ? strlen(family) : 0);
+            if (given) {
+                copy_field(out->given_name, sizeof(out->given_name),
+                           given, strlen(given));
+            }
+        }
+        return;
+    }
+
+    if (match_property(line, line_len, "ORG", nullptr)) {
+        val = line_value(line, line_len, &val_len);
+        if (val) copy_field(out->organization, sizeof(out->organization), val, val_len);
+        return;
+    }
+    if (match_property(line, line_len, "TITLE", nullptr)) {
+        val = line_value(line, line_len, &val_len);
+        if (val) copy_field(out->title, sizeof(out->title), val, val_len);
+        return;
+    }
+    if (match_property(line, line_len, "EMAIL", nullptr)) {
+        val = line_value(line, line_len, &val_len);
+        if (val) copy_field(out->email, sizeof(out->email), val, val_len);
+        return;
+    }
+    if (match_property(line, line_len, "URL", nullptr)) {
+        val = line_value(line, line_len, &val_len);
+        if (val) copy_field(out->url, sizeof(out->url), val, val_len);
+        return;
+    }
+    if (match_property(line, line_len, "NOTE", nullptr)) {
+        val = line_value(line, line_len, &val_len);
+        if (val) copy_field(out->note, sizeof(out->note), val, val_len);
+        return;
+    }
+    if (match_property(line, line_len, "X-SOCIALPROFILE", nullptr)) {
+        val = line_value(line, line_len, &val_len);
+        if (val) copy_field(out->social_profile, sizeof(out->social_profile), val, val_len);
+        return;
+    }
+
+    if (match_property(line, line_len, "TEL", "CELL")) {
+        val = line_value(line, line_len, &val_len);
+        if (val) copy_field(out->tel_cell, sizeof(out->tel_cell), val, val_len);
+        return;
+    }
+    if (match_property(line, line_len, "TEL", "HOME")) {
+        val = line_value(line, line_len, &val_len);
+        if (val) copy_field(out->tel_home, sizeof(out->tel_home), val, val_len);
+        return;
+    }
+    if (match_property(line, line_len, "TEL", "WORK")) {
+        val = line_value(line, line_len, &val_len);
+        if (val) copy_field(out->tel_work, sizeof(out->tel_work), val, val_len);
+        return;
+    }
+
+    if (line_len >= 5 && strncasecmp(line, "IMPP:", 5) == 0) {
+        const char* rest = line + 5;
+        size_t rest_len = line_len - 5;
+        const char* scheme_end = static_cast<const char*>(memchr(rest, ':', rest_len));
+        if (scheme_end) {
+            size_t scheme_len = static_cast<size_t>(scheme_end - rest);
+            const char* impp_val = scheme_end + 1;
+            size_t impp_val_len = rest_len - scheme_len - 1;
+            impp_val_len = trim_line_len(impp_val, impp_val_len);
+
+            if (scheme_len == 8 && strncasecmp(rest, "telegram", 8) == 0) {
+                copy_field(out->impp_telegram, sizeof(out->impp_telegram),
+                           impp_val, impp_val_len);
+            } else if (scheme_len == 6 && strncasecmp(rest, "signal", 6) == 0) {
+                copy_field(out->impp_signal, sizeof(out->impp_signal),
+                           impp_val, impp_val_len);
+            } else if (scheme_len == 6 && strncasecmp(rest, "matrix", 6) == 0) {
+                copy_field(out->impp_matrix, sizeof(out->impp_matrix),
+                           impp_val, impp_val_len);
+            } else if (scheme_len == 7 && strncasecmp(rest, "threema", 7) == 0) {
+                copy_field(out->impp_threema, sizeof(out->impp_threema),
+                           impp_val, impp_val_len);
+            }
+        }
+    }
+}
+
+/**
+ * \brief Parses raw vCard 4.0 text into a structured representation.
+ */
+bool vcard_parse_to_struct(const char* raw, vcard_data_t* out) {
+    if (!out) return false;
+    memset(out, 0, sizeof(*out));
+    if (!raw) return false;
+
+    bool saw_begin = false;
+    const char* p = raw;
+    while (*p) {
+        const char* line_start = p;
+        while (*p && *p != '\n') p++;
+        size_t line_len = static_cast<size_t>(p - line_start);
+
+        if (line_len >= 11 && strncasecmp(line_start, "BEGIN:VCARD", 11) == 0) {
+            saw_begin = true;
+        } else if (line_len >= 9 && strncasecmp(line_start, "END:VCARD", 9) == 0) {
+            break;
+        } else if (saw_begin) {
+            parse_line_into_struct(line_start, line_len, out);
+        }
+
+        if (*p == '\n') p++;
+    }
+    return saw_begin;
+}
+
+/**
+ * \brief Appends `prefix:value\n` to the output buffer if value is non-empty.
+ */
+static bool append_field(char* buf, size_t buf_size, size_t* pos,
+                         const char* prefix, const char* value) {
+    if (!value || value[0] == '\0') return true;
+    size_t prefix_len = strlen(prefix);
+    size_t value_len = strlen(value);
+    size_t need = prefix_len + value_len + 1;
+    if (*pos + need >= buf_size) return false;
+    memcpy(buf + *pos, prefix, prefix_len);
+    *pos += prefix_len;
+    memcpy(buf + *pos, value, value_len);
+    *pos += value_len;
+    buf[(*pos)++] = '\n';
+    return true;
+}
+
+/**
+ * \brief Generates a vCard 4.0 text representation from the structured data.
+ */
+size_t vcard_generate_from_struct(const vcard_data_t* data, char* out_buf, size_t buf_len) {
+    if (!data || !out_buf || buf_len < 32) return 0;
+    size_t pos = 0;
+
+    static const char* k_begin   = "BEGIN:VCARD\n";
+    static const char* k_version = "VERSION:4.0\n";
+    static const char* k_end     = "END:VCARD\n";
+
+    size_t begin_len = strlen(k_begin);
+    size_t version_len = strlen(k_version);
+    if (pos + begin_len >= buf_len) return 0;
+    memcpy(out_buf + pos, k_begin, begin_len); pos += begin_len;
+    if (pos + version_len >= buf_len) return 0;
+    memcpy(out_buf + pos, k_version, version_len); pos += version_len;
+
+    // N: family;given;;;  -- emit only when at least one name part is set
+    if (data->family_name[0] || data->given_name[0]) {
+        char n_line[160];
+        snprintf(n_line, sizeof(n_line), "N:%s;%s;;;",
+                 data->family_name, data->given_name);
+        if (!append_field(out_buf, buf_len, &pos, "", n_line)) return 0;
+    }
+
+    // FN: fallback to "given family" when empty
+    if (data->formatted_name[0]) {
+        if (!append_field(out_buf, buf_len, &pos, "FN:", data->formatted_name)) return 0;
+    } else if (data->given_name[0] || data->family_name[0]) {
+        char fn_fallback[128];
+        if (data->given_name[0] && data->family_name[0]) {
+            snprintf(fn_fallback, sizeof(fn_fallback), "%s %s",
+                     data->given_name, data->family_name);
+        } else if (data->given_name[0]) {
+            snprintf(fn_fallback, sizeof(fn_fallback), "%s", data->given_name);
+        } else {
+            snprintf(fn_fallback, sizeof(fn_fallback), "%s", data->family_name);
+        }
+        if (!append_field(out_buf, buf_len, &pos, "FN:", fn_fallback)) return 0;
+    }
+
+    if (!append_field(out_buf, buf_len, &pos, "ORG:",          data->organization))   return 0;
+    if (!append_field(out_buf, buf_len, &pos, "TITLE:",        data->title))          return 0;
+    if (!append_field(out_buf, buf_len, &pos, "EMAIL:",        data->email))          return 0;
+    if (!append_field(out_buf, buf_len, &pos, "TEL;TYPE=CELL:",data->tel_cell))       return 0;
+    if (!append_field(out_buf, buf_len, &pos, "TEL;TYPE=HOME:",data->tel_home))       return 0;
+    if (!append_field(out_buf, buf_len, &pos, "TEL;TYPE=WORK:",data->tel_work))       return 0;
+    if (!append_field(out_buf, buf_len, &pos, "URL:",          data->url))            return 0;
+    if (!append_field(out_buf, buf_len, &pos, "IMPP:telegram:",data->impp_telegram))  return 0;
+    if (!append_field(out_buf, buf_len, &pos, "IMPP:signal:",  data->impp_signal))    return 0;
+    if (!append_field(out_buf, buf_len, &pos, "IMPP:matrix:",  data->impp_matrix))    return 0;
+    if (!append_field(out_buf, buf_len, &pos, "IMPP:threema:", data->impp_threema))   return 0;
+    if (!append_field(out_buf, buf_len, &pos, "X-SOCIALPROFILE:", data->social_profile)) return 0;
+    if (!append_field(out_buf, buf_len, &pos, "NOTE:",         data->note))           return 0;
+
+    size_t end_len = strlen(k_end);
+    if (pos + end_len >= buf_len) return 0;
+    memcpy(out_buf + pos, k_end, end_len); pos += end_len;
+
+    out_buf[pos] = '\0';
+    return pos;
+}
+
+/**
  * \brief Returns slot indices of stored cards sorted by last name.
  * \param out_slots Output slot-index array.
  * \param max_slots Maximum writable entries.

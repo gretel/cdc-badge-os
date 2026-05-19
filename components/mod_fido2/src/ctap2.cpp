@@ -21,7 +21,7 @@
 #include <mbedtls/md.h>
 #include <mbedtls/sha256.h>
 #include <mbedtls/aes.h>
-#include "mod_fido2/pin_storage.h"
+#include "cdc_core/pin_storage_c.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_attr.h>
@@ -184,6 +184,7 @@ static int ctap2_random(void *ctx, unsigned char *out, size_t len) {
  * \param pubkey Public key bytes.
  * \param curve Public-key curve identifier.
  * \param out Destination buffer.
+ * \param out_size Capacity of `out` in bytes.
  * \param out_len Output length of encoded structure.
  * \return `true` on success, otherwise `false`.
  */
@@ -192,8 +193,13 @@ static bool ctap2_build_attested_cred(const uint8_t *cred_id,
                                       const uint8_t *pubkey,
                                       uint8_t curve,
                                       uint8_t *out,
+                                      size_t out_size,
                                       uint16_t *out_len) {
     if (!out || !out_len) return false;
+
+    const size_t fixed_prefix = 16 + 2 + cred_id_len;
+    if (out_size < fixed_prefix) return false;
+
     uint16_t off = 0;
 
     memcpy(out + off, AAGUID, 16);
@@ -206,7 +212,7 @@ static bool ctap2_build_attested_cred(const uint8_t *cred_id,
     off += cred_id_len;
 
     cbor_writer_t cose_w;
-    cbor_writer_init(&cose_w, out + off, 200 - off);
+    cbor_writer_init(&cose_w, out + off, out_size - off);
     if (curve == CDC_CURVE_ED25519) {
         cbor_encode_cose_key_ed25519(&cose_w, pubkey);
     } else {
@@ -1058,7 +1064,8 @@ static uint8_t handle_browser_probe(const MakeCredentialParams *p,
     }
 
     if (!ctap2_build_attested_cred(dummy_cred_id, FIDO2_CRED_ID_LEN, dummy_pubkey,
-                                   CDC_CURVE_P256, attested_cred, &attested_len)) {
+                                   CDC_CURVE_P256, attested_cred, sizeof(attested_cred),
+                                   &attested_len)) {
         mbedtls_ecp_keypair_free(&ephemeral_key);
         response[0] = CTAP2_ERR_OTHER;
         *response_len = 1;
@@ -1144,7 +1151,8 @@ static uint8_t create_credential_and_respond(const MakeCredentialParams *p,
     uint16_t auth_data_len = 0;
 
     if (!ctap2_build_attested_cred(cred_id, FIDO2_CRED_ID_LEN, pubkey, curve,
-                                   attested_cred, &attested_len) ||
+                                   attested_cred, sizeof(attested_cred),
+                                   &attested_len) ||
         !ctap2_build_auth_data_for_cred(p->rp_id_hash, attested_cred, attested_len,
                                         p->cred_protect, auth_data, &auth_data_len)) {
         response[0] = CTAP2_ERR_OTHER;
@@ -1890,6 +1898,11 @@ uint8_t ctap2_get_assertion(const uint8_t *params, uint16_t params_len,
 
     // Step 8: Build authenticator data
     uint32_t sign_count = fido2_storage_increment_sign_count(slot);
+    if (sign_count == 0) {
+        response[0] = CTAP2_ERR_OTHER;
+        *response_len = 1;
+        return CTAP2_ERR_OTHER;
+    }
 
     uint8_t flags = p.option_up ? 0x01 : 0x00;  // UP=1 only if user presence was requested
     if (uv_verified) {
@@ -1973,6 +1986,11 @@ uint8_t ctap2_get_next_assertion(uint8_t *response, uint16_t *response_len) {
     }
 
     uint32_t sign_count = fido2_storage_increment_sign_count(slot);
+    if (sign_count == 0) {
+        response[0] = CTAP2_ERR_OTHER;
+        *response_len = 1;
+        return CTAP2_ERR_OTHER;
+    }
 
     uint8_t auth_data[128];
     uint16_t auth_data_len;

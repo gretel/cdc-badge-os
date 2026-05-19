@@ -102,6 +102,20 @@ static void buildHardwareInfoText(char* buf, size_t bufSize) {
            (unsigned long)(usedHeap / 1024),
            (unsigned long)(totalHeap / 1024));
 
+    size_t intFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t intTotal = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+    size_t intLargest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    append("DRAM: %lu/%lu KB free, largest %lu B\n",
+           (unsigned long)(intFree / 1024),
+           (unsigned long)(intTotal / 1024),
+           (unsigned long)intLargest);
+
+    size_t dmaFree = heap_caps_get_free_size(MALLOC_CAP_DMA);
+    size_t dmaLargest = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
+    append("DMA: %lu KB free, largest %lu B\n",
+           (unsigned long)(dmaFree / 1024),
+           (unsigned long)dmaLargest);
+
     size_t psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     size_t psramTotal = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
     size_t psramUsed = (psramTotal > psramFree) ? (psramTotal - psramFree) : 0;

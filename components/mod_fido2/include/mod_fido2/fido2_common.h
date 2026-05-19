@@ -27,11 +27,6 @@
 namespace cdc {
 namespace mod_fido2 {
 
-// Get secure element instance (inline to avoid linkage issues)
-inline hal::ISecureElement* get_se() {
-    return hal::getSecureElementInstance();
-}
-
 // Compute SHA-256 hash
 inline void sha256(const uint8_t* data, size_t len, uint8_t out[FIDO2_SHA256_DIGEST_SIZE]) {
     mbedtls_sha256(data, len, out, 0);

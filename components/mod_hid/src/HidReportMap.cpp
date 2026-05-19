@@ -38,8 +38,11 @@ const uint8_t HID_REPORT_MAP[] = {
     0x95, 0x01,        //   Report Count (1 byte)
     0x81, 0x01,        //   Input (Constant) - Reserved
 
-    // LED output report (optional, for Num/Caps/Scroll lock LEDs)
-    // We don't use this but hosts expect it
+    // LED output report (Num/Caps/Scroll lock).
+    // Report ID 2 keeps the output report addressable independently of the
+    // keyboard input report (ID 1). Linux/Windows reject mixed-ID descriptors
+    // that lack an explicit Report ID for the output collection.
+    0x85, 0x02,        //   Report ID (2)
     0x05, 0x08,        //   Usage Page (LEDs)
     0x19, 0x01,        //   Usage Minimum (Num Lock)
     0x29, 0x05,        //   Usage Maximum (Kana)
@@ -50,7 +53,8 @@ const uint8_t HID_REPORT_MAP[] = {
     0x95, 0x01,        //   Report Count (1)
     0x91, 0x01,        //   Output (Constant)
 
-    // Keycodes (6 bytes for 6KRO)
+    // Keycodes (6 bytes for 6KRO) - restore Report ID 1 for the input report
+    0x85, 0x01,        //   Report ID (1)
     0x05, 0x07,        //   Usage Page (Keyboard/Keypad)
     0x19, 0x00,        //   Usage Minimum (0)
     0x29, 0x65,        //   Usage Maximum (101 = Application key)

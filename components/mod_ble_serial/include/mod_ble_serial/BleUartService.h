@@ -1,5 +1,7 @@
 #pragma once
 
+#include "cdc_hal/IBluetoothController.h"
+#include <atomic>
 #include <cstdint>
 #include <cstddef>
 #include <functional>
@@ -118,15 +120,22 @@ private:
     ConnectCallback onConnect_;
     DisconnectCallback onDisconnect_;
 
-    // RX ring buffer
+    // RX ring buffer with atomic indices for safe interaction between the
+    // BLE host task (writer) and the application task (reader).
     static constexpr size_t RX_BUFFER_SIZE = 1024;
     uint8_t rxBuffer_[RX_BUFFER_SIZE] = {};
-    volatile size_t rxHead_ = 0;
-    volatile size_t rxTail_ = 0;
+    std::atomic<size_t> rxHead_{0};
+    std::atomic<size_t> rxTail_{0};
 
     // TX state
     volatile bool txCongested_ = false;
     volatile bool txInProgress_ = false;  // Recursion guard
+
+    // BLE callback tokens for safe removal on deinit.
+    cdc::hal::IBluetoothController::ListenerToken connToken_ =
+        cdc::hal::IBluetoothController::INVALID_LISTENER;
+    cdc::hal::IBluetoothController::ListenerToken disconnToken_ =
+        cdc::hal::IBluetoothController::INVALID_LISTENER;
 };
 
 } // namespace cdc::mod_ble_serial

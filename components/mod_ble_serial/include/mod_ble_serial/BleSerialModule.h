@@ -67,11 +67,9 @@ private:
     void registerConsoleHooks();
     void unregisterConsoleHooks();
 
-    // Pairing UI
-    uint16_t pairingConnHandle_ = 0xFFFF;
+    // Pairing UI is centralized in AppUi (see ui_init). Kept as a no-op
+    // for ABI stability of the .cpp call sites.
     void registerPairingCallback();
-    static void onPairingConfirm(void* userData);
-    static void onPairingReject(void* userData);
 
     // Settings
     void loadSettings();

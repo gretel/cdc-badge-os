@@ -6,6 +6,7 @@
 #include "cdc_hal/IKeypad.h"
 #include "cdc_hal/II2cBus.h"
 #include "cdc_hal/hw_config.h"
+#include "cdc_core/SystemLock.h"
 #include "cdc_log.h"
 #include "esp_attr.h"
 #include "driver/gpio.h"
@@ -28,7 +29,7 @@ static constexpr uint8_t REG_CONFIG_0   = 0x06;
 static constexpr uint8_t REG_CONFIG_1   = 0x07;
 
 /** \brief Keypad task scheduling configuration. */
-static constexpr uint32_t TASK_STACK_SIZE = 4096;
+static constexpr uint32_t TASK_STACK_SIZE = 3584;
 static constexpr UBaseType_t TASK_PRIORITY = 5;
 static constexpr uint32_t POLL_TIMEOUT_MS = 50;
 static constexpr uint32_t DEBOUNCE_MS = 10;
@@ -216,15 +217,11 @@ bool TCA9535Keypad::init() {
     uint8_t allInputs = 0xFF;
 
     // Set output registers high (for proper pull-up reading)
-    bus_->writeReg(device_, REG_OUTPUT_0, &allHigh, 1);
-    bus_->writeReg(device_, REG_OUTPUT_1, &allHigh, 1);
-
-    // No polarity inversion
-    bus_->writeReg(device_, REG_POLARITY_0, &noInvert, 1);
-    bus_->writeReg(device_, REG_POLARITY_1, &noInvert, 1);
-
-    // Configure all pins as inputs
-    if (bus_->writeReg(device_, REG_CONFIG_0, &allInputs, 1) != ESP_OK ||
+    if (bus_->writeReg(device_, REG_OUTPUT_0, &allHigh, 1) != ESP_OK ||
+        bus_->writeReg(device_, REG_OUTPUT_1, &allHigh, 1) != ESP_OK ||
+        bus_->writeReg(device_, REG_POLARITY_0, &noInvert, 1) != ESP_OK ||
+        bus_->writeReg(device_, REG_POLARITY_1, &noInvert, 1) != ESP_OK ||
+        bus_->writeReg(device_, REG_CONFIG_0, &allInputs, 1) != ESP_OK ||
         bus_->writeReg(device_, REG_CONFIG_1, &allInputs, 1) != ESP_OK) {
         LOG_E(TAG, "Failed to configure TCA9535");
         state_ = core::ServiceState::ERROR;
@@ -428,35 +425,53 @@ void TCA9535Keypad::taskFunc(void* arg) {
         // Small debounce delay
         vTaskDelay(pdMS_TO_TICKS(DEBOUNCE_MS));
 
+        // Drop input events while the system is heading into lockdown:
+        // the lockdown window leaves enough time for the e-paper to render
+        // the final screen and the user must not be able to mutate any
+        // residual state in that window.
+        if (cdc::core::SystemLock::instance().isLocked()) {
+            continue;
+        }
+
         // Read current state
         uint16_t raw = self->readInputs();
 
         if (raw != self->lastRawState_) {
-            Key key = rawToKey(raw);
+            // Count pressed (active-low) bits within the keypad mask.
+            // Multiple simultaneous keys are ambiguous: skip both press and release
+            // events until the user resolves to a single-key or no-key state.
+            uint16_t pressedBits = static_cast<uint16_t>((~raw) & KEY_MASK_ALL);
+            uint8_t pressedCount = __builtin_popcount(pressedBits);
 
-            // Key press detection
-            if (key != Key::KEY_NONE) {
-                self->bufferAddKey(key);
-
-                if (self->callback_) {
-                    self->callback_(key, true);
-                }
-
-                // Start long-press tracking
-                if (self->longPressEnabled_) {
-                    self->pressedKey_ = key;
-                    self->pressStartTime_ = xTaskGetTickCount() * portTICK_PERIOD_MS;
-                    self->longPressFired_ = false;
-                }
+            if (pressedCount > 1) {
+                // Ambiguous chord-press, do not emit events this tick.
             } else {
-                // Key release
-                if (self->callback_ && self->pressedKey_ != Key::KEY_NONE) {
-                    self->callback_(self->pressedKey_, false);
-                }
-                self->pressedKey_ = Key::KEY_NONE;
-            }
+                Key key = rawToKey(raw);
 
-            self->lastRawState_ = raw;
+                // Key press detection
+                if (key != Key::KEY_NONE) {
+                    self->bufferAddKey(key);
+
+                    if (self->callback_) {
+                        self->callback_(key, true);
+                    }
+
+                    // Start long-press tracking
+                    if (self->longPressEnabled_) {
+                        self->pressedKey_ = key;
+                        self->pressStartTime_ = xTaskGetTickCount() * portTICK_PERIOD_MS;
+                        self->longPressFired_ = false;
+                    }
+                } else {
+                    // Key release
+                    if (self->callback_ && self->pressedKey_ != Key::KEY_NONE) {
+                        self->callback_(self->pressedKey_, false);
+                    }
+                    self->pressedKey_ = Key::KEY_NONE;
+                }
+
+                self->lastRawState_ = raw;
+            }
         }
 
         // Long-press check

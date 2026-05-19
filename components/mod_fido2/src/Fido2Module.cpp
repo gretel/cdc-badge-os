@@ -1,6 +1,7 @@
 #include "mod_fido2/Fido2Module.h"
 #include "cdc_core/ModuleRegistry.h"
 #include "cdc_core/UsbManager.h"
+#include "cdc_core/EventBus.h"
 #include "cdc_log.h"
 #include "mod_fido2/Fido2Ui.h"
 #include "mod_fido2/fido2.h"
@@ -191,6 +192,17 @@ bool Fido2Module::start() {
     }
     fido2_set_user_presence_callback(fido2_ui_user_presence_callback);
 
+    static bool sleepHandlerRegistered = false;
+    if (!sleepHandlerRegistered) {
+        auto& bus = core::EventBus::instance();
+        bus.subscribe([](const core::Event&) {
+            if (fido2_ui_abort_prompt()) {
+                LOG_I(TAG, "Aborted active FIDO2 prompt before sleep");
+            }
+        }, core::EventBus::eventMask(core::EventType::SYSTEM_SLEEP_INCOMING));
+        sleepHandlerRegistered = true;
+    }
+
     state_ = core::ServiceState::STARTED;
     return true;
 }
@@ -199,6 +211,7 @@ bool Fido2Module::start() {
  * \brief Stops FIDO2 module and unregisters USB interface.
  */
 void Fido2Module::stop() {
+    fido2_storage_counter_flush();
     core::UsbManager::instance().unregisterInterface(core::UsbHidInterface::Fido, getName());
     state_ = core::ServiceState::STOPPED;
 }

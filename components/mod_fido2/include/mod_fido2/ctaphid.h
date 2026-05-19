@@ -65,6 +65,15 @@ typedef struct {
     uint16_t buffer_size;
     bool active;
     uint32_t last_activity;
+
+    // Per-channel response state.
+    uint8_t* response_buffer;
+    uint16_t response_buffer_size;
+    uint16_t response_len;
+    uint16_t response_offset;
+    uint32_t response_cid;
+    uint8_t response_cmd;
+    bool response_pending;
 } ctaphid_channel_t;
 
 #ifdef __DOXYGEN__

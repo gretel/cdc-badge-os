@@ -103,9 +103,10 @@ void QRCodeView::init(const char* data, const char* title, const char* subtitle)
  * \return Always requests pop from view stack.
  */
 InputResult QRCodeView::onKey(char key) {
-    (void)key;
-    // Any key closes the QR view
-    return InputResult::REQUEST_POP;
+    if (key == 'N' || key == 'n') {
+        return InputResult::REQUEST_POP;
+    }
+    return InputResult::CONSUMED;
 }
 
 /**
@@ -213,12 +214,12 @@ void QRCodeView::renderText() {
     auto* gfx = static_cast<Gdey029T94*>(display->getNativeHandle());
     if (!gfx) return;
 
-    // Calculate QR pixel size
-    int qrPixelSize = qrModuleCount_ * qrScale_;
-
-    // Right side text area starts after QR code
-    int textAreaX = QR_MARGIN + qrPixelSize + 8;
-    int textAreaWidth = DISPLAY_WIDTH - textAreaX - 4;
+    // Reserve a fixed square region of DISPLAY_HEIGHT px on the left for the QR.
+    // Text always starts at a fixed offset so the layout is stable regardless
+    // of the actual rendered QR pixel size (which varies with module count and scale).
+    constexpr int QR_AREA_WIDTH = DISPLAY_HEIGHT;
+    int textAreaX = QR_AREA_WIDTH + 4;
+    int textAreaWidth = DISPLAY_WIDTH - textAreaX - 2;
 
     // Draw title on right side (top)
     int y = 14;
@@ -247,23 +248,30 @@ void QRCodeView::renderText() {
         }
     }
 
-    // Subtitle below title
-    if (subtitle_ && subtitle_[0] && y < 98) {
+    // Subtitle below title; supports multi-line via '\n' separators.
+    if (subtitle_ && subtitle_[0]) {
         gfx->setFont(nullptr);
         int maxChars = textAreaWidth / 6;  // Approx char width for default font
         if (maxChars > 31) maxChars = 31;
 
+        const char* p = subtitle_;
         char line[32];
-        int len = 0;
-        while (subtitle_[len] && len < maxChars) {
-            line[len] = subtitle_[len];
-            len++;
-        }
-        line[len] = '\0';
+        y += 4;
+        while (*p && y < 110) {
+            int len = 0;
+            while (p[len] && p[len] != '\n' && len < maxChars) {
+                line[len] = p[len];
+                len++;
+            }
+            line[len] = '\0';
 
-        gfx->setCursor(textAreaX, y + 2);
-        gfx->print(line);
-        y += 12;
+            gfx->setCursor(textAreaX, y);
+            gfx->print(line);
+            y += 10;
+
+            p += len;
+            if (*p == '\n') p++;
+        }
     }
 
     // Draw hint at bottom right

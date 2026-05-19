@@ -3,6 +3,7 @@
 #include "cdc_core/ModuleRegistry.h"
 #include "cdc_core/UsbManager.h"
 #include "cdc_ui/I18n.h"
+#include "mod_gpg/openpgp/ccid.h"
 #include "mod_gpg/openpgp/openpgp.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_views/ListView.h"
@@ -13,11 +14,14 @@
 #include "cdc_views/ToastView.h"
 #include "cdc_os_ui/views/PinChangeView.h"
 #include "cdc_core/PinManager.h"
-#include "mod_gpg/pin_storage.h"
+#include "cdc_core/pin_storage_c.h"
 #include "serial_cmd/ICommandRegistry.h"
 #include "serial_cmd/Console.h"
 #include "mod_gpg/gpg.h"
 #include "cdc_log.h"
+#include "esp_timer.h"
+#include "esp_random.h"
+#include "esp_attr.h"
 #include <new>
 #include <cstring>
 #include <cstdio>
@@ -197,10 +201,31 @@ static void cmd_gpg_export(const char* args) {
  * \brief Serial command resetting GPG key material.
  * \param args Unused command arguments.
  */
+static char s_reset_token[7] = {};
+static uint64_t s_reset_token_ts_us = 0;
+static constexpr uint64_t RESET_TOKEN_TIMEOUT_US = 30ULL * 1000ULL * 1000ULL;
+
 static void cmd_gpg_reset(const char* args) {
-    (void)args;
-    bool ok = gpg_reset();
-    cdc::serial::Console::printf(ok ? "OK\r\n" : "ERROR\r\n");
+    const uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
+    const bool token_active = (s_reset_token[0] != '\0') &&
+                              ((now - s_reset_token_ts_us) < RESET_TOKEN_TIMEOUT_US);
+
+    if (args && *args && token_active && strcmp(args, s_reset_token) == 0) {
+        memset(s_reset_token, 0, sizeof(s_reset_token));
+        s_reset_token_ts_us = 0;
+        bool ok = gpg_reset();
+        cdc::serial::Console::printf(ok ? "OK\r\n" : "ERROR\r\n");
+        return;
+    }
+
+    uint8_t r[3];
+    esp_fill_random(r, sizeof(r));
+    snprintf(s_reset_token, sizeof(s_reset_token), "%02X%02X%02X", r[0], r[1], r[2]);
+    s_reset_token_ts_us = now;
+    cdc::serial::Console::printf(
+        "WARNING: this wipes ALL GPG keys (SIG/DEC/AUT), the DEC backup, and PINs.\r\n"
+        "Confirm within 30s: GPG_RESET %s\r\n",
+        s_reset_token);
 }
 
 static ui::ListView s_menuView;
@@ -244,12 +269,17 @@ static void onSettingsSelect(uint16_t index, void*);
  * \param userData Optional callback context (unused).
  */
 static void onMenuSelect(uint16_t index, void*) {
-    switch (index) {
-        case 0: showStatus(); break;
-        case 1: wizardStart(); break;
-        case 2: showExport(); break;
-        case 3: showSettings(); break;
-        case 4: confirmReset(); break;
+    // Menu shape depends on whether keys exist (see rebuildMenu): when keys are
+    // already present, the "Generate" entry is hidden so subsequent indices
+    // shift up by one.
+    const bool hasKeys = openpgp_has_any_key();
+    if (index == 0) { showStatus(); return; }
+    if (!hasKeys && index == 1) { wizardStart(); return; }
+    const uint16_t shift = hasKeys ? 0 : 1;
+    switch (index - shift) {
+        case 1: showExport(); break;
+        case 2: showSettings(); break;
+        case 3: confirmReset(); break;
         default: break;
     }
 }
@@ -259,11 +289,14 @@ static void onMenuSelect(uint16_t index, void*) {
  */
 static void rebuildMenu() {
     s_menuItems[0].label = mstr(STR_STATUS);
-    s_menuItems[1].label = mstr(STR_GENERATE);
-    s_menuItems[2].label = mstr(STR_EXPORT);
-    s_menuItems[3].label = mstr(STR_SETTINGS);
-    s_menuItems[4].label = mstr(STR_RESET);
-    s_menuView.init(mstr(STR_GPG), s_menuItems, 5);
+    uint8_t count = 1;
+    if (!openpgp_has_any_key()) {
+        s_menuItems[count++].label = mstr(STR_GENERATE);
+    }
+    s_menuItems[count++].label = mstr(STR_EXPORT);
+    s_menuItems[count++].label = mstr(STR_SETTINGS);
+    s_menuItems[count++].label = mstr(STR_RESET);
+    s_menuView.init(mstr(STR_GPG), s_menuItems, count);
 }
 
 /**
@@ -398,7 +431,7 @@ static void showStatus() {
                                                              : mstr(STR_CURVE_P256);
     static char detail[512];
     snprintf(detail, sizeof(detail),
-             "User-ID: %s\nCurve: %s\nFingerprint: %s\nCreated: %lu\nSign Count: %lu",
+             "User-ID: %s\nCurve: %s\nFP: %s\nCreated: %lu\nSign Count: %lu",
              status.user_id, curveName, fp_hex,
              static_cast<unsigned long>(status.created_at),
              static_cast<unsigned long>(status.sign_count));
@@ -500,14 +533,32 @@ static void onWizardCurve(uint16_t index, void*) {
  * \brief Exports public key to serial output and QR view.
  */
 static void showExport() {
-    static char pem_buf[2048];
+    EXT_RAM_BSS_ATTR static char pem_buf[2048];
+    static char detail_buf[96];
     size_t out_len = 0;
     if (!gpg_export_pubkey_pem(pem_buf, sizeof(pem_buf), &out_len)) {
         ui::showToastError(ui::tr(ui::StringId::FAILED));
         return;
     }
     cdc::serial::Console::printf("%s\r\n", pem_buf);
-    s_qrView.init(mstr(STR_EXPORT_TITLE), nullptr, pem_buf);
+
+    gpg_status_t status = {};
+    detail_buf[0] = '\0';
+    if (gpg_get_status(&status) && status.initialized) {
+        const char* uid = status.user_id[0] ? status.user_id : "(card)";
+        const char* curveName = (status.curve == CDC_CURVE_ED25519) ? "Ed25519" : "P-256";
+        char fp_tail[12] = {0};
+        for (int i = 0; i < 4; i++) {
+            snprintf(fp_tail + i * 2, sizeof(fp_tail) - i * 2,
+                     "%02X", status.fingerprint[GPG_FINGERPRINT_LEN - 4 + i]);
+        }
+        snprintf(detail_buf, sizeof(detail_buf),
+                 "%s\n%s\nFP ..%s",
+                 uid, curveName, fp_tail);
+    }
+
+    s_qrView.init(pem_buf, mstr(STR_EXPORT_TITLE),
+                  detail_buf[0] ? detail_buf : nullptr);
     ui::ViewStack::instance().push(&s_qrView);
 }
 
@@ -584,8 +635,13 @@ bool GpgModule::start() {
     spec.name = "OpenPGP SmartCard";
     spec.epInSize = 64;
     spec.epOutSize = 64;
-    if (!openpgp_init()) {
-        core::ModuleRegistry::instance().reportModuleError(getName(), "OpenPGP init failed");
+    // Call ccid_init() rather than openpgp_init() directly: it brings up
+    // OpenPGP and is the only external reference into ccid.cpp / ccid_driver.cpp.
+    // Without it the linker drops the entire CCID translation unit (including
+    // our strong usbd_app_driver_get_cb override), leaving tinyusb's weak
+    // default in place and the smart-card interface unenumerated.
+    if (!ccid_init()) {
+        core::ModuleRegistry::instance().reportModuleError(getName(), "CCID init failed");
     }
     if (!core::UsbManager::instance().registerInterface(core::UsbHidInterface::Ccid, getName(), spec)) {
         LOG_W(TAG, "Failed to register CCID interface");

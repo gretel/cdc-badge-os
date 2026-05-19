@@ -104,17 +104,17 @@ void RgbInputView::enterDigit(char digit) {
     if (!value) return;
 
     if (digitPos_ == 0) {
-        // First digit
-        *value = d * 100;
+        uint16_t staged = static_cast<uint16_t>(d) * 100u;
+        *value = static_cast<uint8_t>(staged > 255u ? 255u : staged);
         digitPos_ = 1;
     } else if (digitPos_ == 1) {
-        // Second digit
-        *value = (*value / 100) * 100 + d * 10;
+        uint16_t staged = static_cast<uint16_t>((*value / 100u) * 100u + d * 10u);
+        *value = static_cast<uint8_t>(staged > 255u ? 255u : staged);
         digitPos_ = 2;
     } else {
-        // Third digit - clamp and auto-advance
-        uint8_t base = (*value / 10) * 10;
-        *value = (d > 255 - base) ? 255 : (base + d);
+        uint16_t base = static_cast<uint16_t>((*value / 10u) * 10u);
+        uint16_t staged = static_cast<uint16_t>(base + d);
+        *value = static_cast<uint8_t>(staged > 255u ? 255u : staged);
         nextField();
     }
 

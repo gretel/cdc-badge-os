@@ -8,6 +8,10 @@ static const char* TAG = "EventBus";
 
 namespace cdc::core {
 
+static_assert(static_cast<size_t>(EventType::EVENT_COUNT) < 32,
+              "EventType count exceeds bitmask width; widen typeMask or change matching scheme");
+
+
 /**
  * \brief Returns singleton event-bus instance.
  * \return Reference to global `EventBus` instance.

@@ -15,6 +15,24 @@ enum class EccCurve : uint8_t {
 };
 
 /**
+ * \brief Maps an EccCurve to the module-level curve byte.
+ * \param c Curve identifier.
+ * \return `0` for Ed25519, `1` for P-256.
+ */
+inline uint8_t curveByte(EccCurve c) {
+    return (c == EccCurve::ED25519) ? 0 : 1;
+}
+
+/**
+ * \brief Maps a curve byte to its EccCurve enum.
+ * \param b Curve byte (`0` Ed25519, otherwise P-256).
+ * \return Corresponding EccCurve value.
+ */
+inline EccCurve curveFromByte(uint8_t b) {
+    return (b == 0) ? EccCurve::ED25519 : EccCurve::P256;
+}
+
+/**
  * Secure Element operation result
  */
 enum class SeResult : uint8_t {
@@ -189,11 +207,23 @@ public:
     // === Random Number Generator ===
 
     /**
-     * Get random bytes from hardware TRNG
+     * Get random bytes from hardware TRNG, with ESP32 TRNG fallback when the
+     * secure-element session is unavailable. A WARN is logged on fallback.
      * @param buffer Output buffer
      * @param size Number of bytes
+     * @return true if the buffer was filled (from either source)
      */
     virtual bool getRandom(uint8_t* buffer, uint16_t size) = 0;
+
+    /**
+     * Get random bytes from hardware TRNG without falling back. Returns false
+     * (and leaves the buffer untouched) when the TROPIC TRNG cannot be reached
+     * or returns an error. Use for keys/seeds where software RNG is unacceptable.
+     * @param buffer Output buffer
+     * @param size Number of bytes
+     * @return true only when bytes originated from the secure-element TRNG
+     */
+    virtual bool getRandomStrict(uint8_t* buffer, uint16_t size) = 0;
 
     // === Diagnostics ===
 

@@ -13,6 +13,7 @@ idf_component_register(
         "src/SleepManager.cpp"
         "src/views/PinChangeView.cpp"
         "src/views/LockScreenView.cpp"
+        "src/views/BlePairingPromptView.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES
@@ -21,7 +22,6 @@ idf_component_register(
         cdc_log
         cdc_ui
         cdc_views
-        mod_fido2
         serial_cmd
         Adafruit-GFX
         nvs_flash

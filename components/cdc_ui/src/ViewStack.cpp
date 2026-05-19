@@ -190,11 +190,13 @@ void ViewStack::popToAnchor(IView* anchor) {
 }
 
 IView* ViewStack::current() const {
+    StackLock lock(mutex_);
     if (depth_ == 0) return nullptr;
     return stack_[depth_ - 1];
 }
 
 IView* ViewStack::at(uint8_t idx) const {
+    StackLock lock(mutex_);
     if (idx >= depth_) return nullptr;
     return stack_[idx];
 }
@@ -329,6 +331,7 @@ void ViewStack::hideModal() {
 }
 
 void ViewStack::setInactivityTimeout(InactivityCallback callback, uint32_t timeoutMs) {
+    StackLock lock(mutex_);
     inactivityCallback_ = callback;
     inactivityTimeoutMs_ = timeoutMs;
     lastActivityMs_ = 0;
@@ -336,22 +339,36 @@ void ViewStack::setInactivityTimeout(InactivityCallback callback, uint32_t timeo
 }
 
 void ViewStack::resetInactivityTimer() {
+    StackLock lock(mutex_);
     lastActivityMs_ = 0;
 }
 
 void ViewStack::checkInactivity(uint32_t nowMs) {
-    if (inactivityTimeoutMs_ == 0 || !inactivityCallback_) {
-        return;
+    InactivityCallback cb = nullptr;
+    bool triggered = false;
+    uint32_t elapsedForLog = 0;
+
+    {
+        StackLock lock(mutex_);
+        if (inactivityTimeoutMs_ == 0 || !inactivityCallback_) {
+            return;
+        }
+        if (lastActivityMs_ == 0) {
+            lastActivityMs_ = nowMs;
+            return;
+        }
+        uint32_t elapsed = nowMs - lastActivityMs_;
+        if (elapsed >= inactivityTimeoutMs_) {
+            cb = inactivityCallback_;
+            triggered = true;
+            elapsedForLog = elapsed;
+            lastActivityMs_ = nowMs;
+        }
     }
-    if (lastActivityMs_ == 0) {
-        lastActivityMs_ = nowMs;
-        return;
-    }
-    uint32_t elapsed = nowMs - lastActivityMs_;
-    if (elapsed >= inactivityTimeoutMs_) {
-        LOG_I(TAG, "Inactivity timeout triggered after %lu ms", elapsed);
-        inactivityCallback_();
-        lastActivityMs_ = nowMs;
+
+    if (cb && triggered) {
+        LOG_I(TAG, "Inactivity timeout triggered after %lu ms", elapsedForLog);
+        cb();
     }
 }
 

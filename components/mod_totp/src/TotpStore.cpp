@@ -11,10 +11,10 @@ static const char* TAG = "TOTP";
 namespace cdc::mod_totp {
 
 /**
- * \brief Allowed TOTP digit count range (RFC 6238 typical 6-8, extended to 10).
+ * \brief Allowed TOTP digit count range per RFC 6238.
  */
 static constexpr uint8_t TOTP_DIGITS_MIN = 6;
-static constexpr uint8_t TOTP_DIGITS_MAX = 10;
+static constexpr uint8_t TOTP_DIGITS_MAX = 8;
 
 /**
  * \brief Allowed TOTP period range in seconds.
@@ -167,6 +167,8 @@ bool TotpStore::readAccount(uint16_t slot, TotpAccount* out) {
     memcpy(&payload, payloadBuf, sizeof(payload));
 
     memset(out, 0, sizeof(*out));
+    header.name[cdc::hal::ISecureElement::RMEM_NAME_LEN - 1] = '\0';
+    payload.issuer[sizeof(payload.issuer) - 1] = '\0';
     strncpy(out->name, header.name, sizeof(out->name) - 1);
     strncpy(out->issuer, payload.issuer, sizeof(out->issuer) - 1);
     memcpy(out->secret, payload.secret, sizeof(out->secret));
@@ -193,6 +195,12 @@ bool TotpStore::addAccount(const char* name, const char* issuer, const char* sec
                            uint8_t digits, uint32_t period, uint8_t algorithm) {
     if (!name || !secretBase32) return false;
     if (!slots_.hasSlotRange()) return false;
+
+    if (strlen(name) >= cdc::hal::ISecureElement::RMEM_NAME_LEN) {
+        LOG_W(TAG, "TOTP name too long (max %u)",
+              cdc::hal::ISecureElement::RMEM_NAME_LEN - 1);
+        return false;
+    }
 
     if (!validateTotpParams(digits, period, algorithm)) {
         return false;
@@ -259,6 +267,11 @@ bool TotpStore::updateAccount(uint16_t slot, const char* name, const char* issue
                               uint8_t digits, uint32_t period, uint8_t algorithm) {
     if (!name || !secretBase32) return false;
     if (!slots_.hasSlotRange()) return false;
+    if (strlen(name) >= cdc::hal::ISecureElement::RMEM_NAME_LEN) {
+        LOG_W(TAG, "TOTP name too long (max %u)",
+              cdc::hal::ISecureElement::RMEM_NAME_LEN - 1);
+        return false;
+    }
     if (!validateTotpParams(digits, period, algorithm)) {
         return false;
     }

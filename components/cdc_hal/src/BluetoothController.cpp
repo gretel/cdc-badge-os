@@ -25,6 +25,12 @@ static const char* TAG = "BT-Ctrl";
 #include "services/gatt/ble_svc_gatt.h"
 #include "host/ble_uuid.h"
 #include "host/ble_att.h"
+#include "host/util/util.h"
+#include "host/ble_store.h"
+#include "store/config/ble_store_config.h"
+
+/** \brief Forward declaration for NimBLE NVS-backed bond store initializer. */
+extern "C" void ble_store_config_init(void);
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <cstring>
@@ -55,8 +61,12 @@ static int gattcWriteCb(uint16_t connHandle, const struct ble_gatt_error* error,
 
 static constexpr uint8_t MAX_REGISTERED_SERVICES = 4;
 static constexpr uint8_t MAX_CHARS_PER_SERVICE = 6;
+static constexpr uint8_t MAX_DESCRIPTORS_PER_CHAR = 2;
 static constexpr uint8_t MAX_ADV_UUIDS = 4;
 static constexpr uint8_t MAX_CONN_CALLBACKS = 4;
+static constexpr uint8_t MAX_CONNECTIONS = 2;
+static constexpr uint8_t MAX_SUBSCRIBE_ENTRIES = 16;
+static constexpr uint8_t MAX_BONDS = 5;
 
 /**
  * \brief Persistent NimBLE-side storage for one registered service definition.
@@ -71,6 +81,12 @@ struct InternalService {
     // NimBLE characteristic + service definitions (must persist)
     ble_gatt_chr_def nimbleChars[MAX_CHARS_PER_SERVICE + 1]; // +1 terminator
     ble_gatt_svc_def nimbleSvcs[2];                          // +1 terminator
+
+    // Per-characteristic descriptor backing storage (e.g. HID Report Reference).
+    // Packed layout per descriptor slot: [0] = data length, [1..4] = data bytes.
+    ble_uuid_any_t dscUuids[MAX_CHARS_PER_SERVICE][MAX_DESCRIPTORS_PER_CHAR];
+    ble_gatt_dsc_def dscDefs[MAX_CHARS_PER_SERVICE][MAX_DESCRIPTORS_PER_CHAR + 1];
+    uint8_t dscPacked[MAX_CHARS_PER_SERVICE][MAX_DESCRIPTORS_PER_CHAR][5];
 
     // Callbacks registered by the module
     GattWriteCallback writeCallbacks[MAX_CHARS_PER_SERVICE];
@@ -127,6 +143,15 @@ static ble_gatt_chr_flags mapProperties(uint8_t props, uint8_t perms) {
  * \param arg Pointer to the owning internal service descriptor.
  * \return NimBLE ATT status code.
  */
+/**
+ * \brief Shared 512-byte access buffer used in the NimBLE host task only.
+ *
+ * NimBLE runs all GATT access callbacks on a single host task, so this buffer
+ * cannot race with itself. Hoisting it out of `gattServiceAccessCb` reclaims
+ * roughly 1 KB of host-task stack per call.
+ */
+static uint8_t s_gattAccessBuf[512];
+
 static int gattServiceAccessCb(uint16_t connHandle, uint16_t attrHandle,
                                 struct ble_gatt_access_ctxt* ctxt, void* arg) {
     auto* svc = static_cast<InternalService*>(arg);
@@ -137,17 +162,15 @@ static int gattServiceAccessCb(uint16_t connHandle, uint16_t attrHandle,
         if (ble_uuid_cmp(ctxt->chr->uuid, &svc->charUuids[i].u) == 0) {
             if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR && svc->writeCallbacks[i]) {
                 uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
-                uint8_t buf[512];
-                if (len > sizeof(buf)) len = sizeof(buf);
-                ble_hs_mbuf_to_flat(ctxt->om, buf, len, nullptr);
-                return svc->writeCallbacks[i](connHandle, attrHandle, buf, len);
+                if (len > sizeof(s_gattAccessBuf)) len = sizeof(s_gattAccessBuf);
+                ble_hs_mbuf_to_flat(ctxt->om, s_gattAccessBuf, len, nullptr);
+                return svc->writeCallbacks[i](connHandle, attrHandle, s_gattAccessBuf, len);
             }
             if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR && svc->readCallbacks[i]) {
-                uint8_t buf[512];
-                uint16_t len = sizeof(buf);
-                int rc = svc->readCallbacks[i](connHandle, attrHandle, buf, &len);
+                uint16_t len = sizeof(s_gattAccessBuf);
+                int rc = svc->readCallbacks[i](connHandle, attrHandle, s_gattAccessBuf, &len);
                 if (rc == 0 && len > 0) {
-                    os_mbuf_append(ctxt->om, buf, len);
+                    os_mbuf_append(ctxt->om, s_gattAccessBuf, len);
                 }
                 return rc;
             }
@@ -159,11 +182,31 @@ static int gattServiceAccessCb(uint16_t connHandle, uint16_t attrHandle,
 }
 
 /**
+ * \brief Read callback for static descriptors (e.g. HID Report Reference).
+ *
+ * The `arg` is interpreted as packed (data length << 8) | (data byte 0..3 word).
+ * We rely on the descriptor data being copied into `InternalService::dscData`
+ * and referenced by a `void*` pointer stored in `ble_gatt_dsc_def::arg`.
+ */
+static int gattStaticDescriptorAccessCb(uint16_t connHandle, uint16_t attrHandle,
+                                          struct ble_gatt_access_ctxt* ctxt, void* arg) {
+    (void)connHandle;
+    (void)attrHandle;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_DSC) return BLE_ATT_ERR_UNLIKELY;
+    if (!arg) return BLE_ATT_ERR_UNLIKELY;
+
+    // Layout: [0] = length, [1..4] = bytes
+    const uint8_t* packed = static_cast<const uint8_t*>(arg);
+    uint8_t len = packed[0];
+    return os_mbuf_append(ctxt->om, packed + 1, len) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+/**
  * ESP32 Bluetooth Controller Implementation using NimBLE
  */
 class BluetoothController : public IBluetoothController {
 public:
-    BluetoothController() = default;
+    BluetoothController() { instance_ = this; }
 
     /**
      * \name IService implementation
@@ -186,7 +229,7 @@ public:
     bool getMacAddress(uint8_t* mac) const override;
     void setDeviceName(const char* name) override;
     const char* getDeviceName() const override { return deviceName_; }
-    bool isConnected() const override { return connHandle_ != BLE_HS_CONN_HANDLE_NONE; }
+    bool isConnected() const override;
     void disconnect() override;
     int8_t getRssi() const override;
 
@@ -222,7 +265,8 @@ public:
     bool sendNotification(uint16_t connHandle, uint16_t attrHandle,
                           const uint8_t* data, uint16_t len) override;
     uint16_t getMtu() const override;
-    uint16_t getConnectionHandle() const override { return connHandle_; }
+    uint16_t getConnectionHandle() const override { return primaryConnHandle(); }
+    void clearAllBonds() override;
     /** \} */
 
     /**
@@ -237,6 +281,14 @@ public:
     bool readCharacteristic(uint16_t connHandle, uint16_t attrHandle) override;
     bool enableNotifications(uint16_t connHandle, uint16_t cccdHandle) override;
     void disconnectHandle(uint16_t connHandle) override;
+    ListenerToken addServiceDiscoveryCallback(ServiceDiscoveryCallback cb) override;
+    ListenerToken addCharacteristicReadCallback(CharacteristicReadCallback cb) override;
+    ListenerToken addNotificationCallback(NotificationCallback cb) override;
+    ListenerToken addWriteCompleteCallback(WriteCompleteCallback cb) override;
+    void removeServiceDiscoveryCallback(ListenerToken token) override;
+    void removeCharacteristicReadCallback(ListenerToken token) override;
+    void removeNotificationCallback(ListenerToken token) override;
+    void removeWriteCompleteCallback(ListenerToken token) override;
     void setServiceDiscoveryCallback(ServiceDiscoveryCallback cb) override;
     void setCharacteristicReadCallback(CharacteristicReadCallback cb) override;
     void setNotificationCallback(NotificationCallback cb) override;
@@ -247,14 +299,18 @@ public:
      * \name Connection callbacks
      * \{
      */
-    void addConnectionCallback(ConnectionCallback cb) override;
-    void addDisconnectionCallback(DisconnectionCallback cb) override;
+    ListenerToken addConnectionCallback(ConnectionCallback cb) override;
+    ListenerToken addDisconnectionCallback(DisconnectionCallback cb) override;
+    void removeConnectionCallback(ListenerToken token) override;
+    void removeDisconnectionCallback(ListenerToken token) override;
     /** \} */
 
     /**
      * \name Pairing
      * \{
      */
+    ListenerToken addNumericComparisonCallback(NumericComparisonCallback cb) override;
+    void removeNumericComparisonCallback(ListenerToken token) override;
     void setNumericComparisonCallback(NumericComparisonCallback cb) override;
     void respondToNumericComparison(uint16_t connHandle, bool accept) override;
     void setPasskeyCallback(PasskeyCallback cb) override;
@@ -265,14 +321,50 @@ public:
      * \name Connection event handlers (called from NimBLE callbacks)
      * \{
      */
-    void onConnect(uint16_t connHandle);
+    void onConnect(uint16_t connHandle, bool isPeripheral);
     void onDisconnect(uint16_t connHandle, int reason);
     void onSync();
     void onScanResult(const ble_gap_disc_desc* disc);
     void onScanComplete();
     void onAdvComplete();
     void onPasskeyAction(uint16_t connHandle, const ble_gap_passkey_params* params);
+    void onEncChange(uint16_t connHandle, int status);
+    void onSubscribe(const struct ble_gap_event* event);
+    void onMtuExchange(uint16_t connHandle, uint16_t mtu);
     /** \} */
+
+    /**
+     * \brief Generic listener slot (public so template helpers can access).
+     */
+    template <typename CB>
+    struct ListenerSlot {
+        bool active = false;
+        CB callback;
+    };
+
+    /**
+     * \brief Tracks per-connection metadata.
+     */
+    struct ConnectionState {
+        bool active = false;
+        uint16_t handle = BLE_HS_CONN_HANDLE_NONE;
+        bool isPeripheral = false;   // true = we are peripheral, false = central
+        uint16_t mtu = 23;            // ATT MTU including 3-byte header
+    };
+
+    /**
+     * \brief Tracks per-connection CCCD subscription state for notifications.
+     */
+    struct SubscribeEntry {
+        bool active = false;
+        uint16_t connHandle;
+        uint16_t attrHandle;
+        bool notify;
+        bool indicate;
+    };
+
+    uint16_t primaryConnHandle() const;
+    int8_t findConnectionSlot(uint16_t handle) const;
 
 private:
     core::ServiceState state_ = core::ServiceState::UNINITIALIZED;
@@ -281,9 +373,14 @@ private:
     bool advertising_ = false;
     bool scanning_ = false;
     bool scanWasAdvertising_ = false;
-    uint16_t connHandle_ = BLE_HS_CONN_HANDLE_NONE;
     char deviceName_[32] = "CDC Badge";
     uint8_t ownAddrType_ = BLE_OWN_ADDR_PUBLIC;
+
+    /** \brief Active connection slots. */
+    ConnectionState connections_[MAX_CONNECTIONS] = {};
+
+    /** \brief Per-connection CCCD subscription table. */
+    SubscribeEntry subscribes_[MAX_SUBSCRIBE_ENTRIES] = {};
 
     /** \brief Scan result cache. */
     static constexpr uint8_t MAX_SCAN_RESULTS = 16;
@@ -294,22 +391,17 @@ private:
     BleUuid advUuids_[MAX_ADV_UUIDS] = {};
     uint8_t advUuidCount_ = 0;
 
-    /** \brief Registered connection lifecycle callbacks. */
-    ConnectionCallback connCallbacks_[MAX_CONN_CALLBACKS] = {};
-    DisconnectionCallback disconnCallbacks_[MAX_CONN_CALLBACKS] = {};
-    uint8_t numConnCbs_ = 0;
-    uint8_t numDisconnCbs_ = 0;
+    ListenerSlot<ConnectionCallback> connCallbacks_[MAX_CONN_CALLBACKS] = {};
+    ListenerSlot<DisconnectionCallback> disconnCallbacks_[MAX_CONN_CALLBACKS] = {};
+    ListenerSlot<NumericComparisonCallback> numCmpCallbacks_[MAX_CONN_CALLBACKS] = {};
+    ListenerSlot<ServiceDiscoveryCallback> svcDiscoveryCallbacks_[MAX_CONN_CALLBACKS] = {};
+    ListenerSlot<CharacteristicReadCallback> charReadCallbacks_[MAX_CONN_CALLBACKS] = {};
+    ListenerSlot<NotificationCallback> notifyCallbacks_[MAX_CONN_CALLBACKS] = {};
+    ListenerSlot<WriteCompleteCallback> writeCompleteCallbacks_[MAX_CONN_CALLBACKS] = {};
 
     /** \brief Pairing callback handlers. */
-    NumericComparisonCallback numericCompCb_;
     PasskeyCallback passkeyCb_;
     AuthCompleteCallback authCompleteCb_;
-
-    /** \brief GATT client callback handlers. */
-    ServiceDiscoveryCallback svcDiscoveryCb_;
-    CharacteristicReadCallback charReadCb_;
-    NotificationCallback notifyCb_;
-    WriteCompleteCallback writeCompleteCb_;
 
     /** \brief Last discovered service state. */
     DiscoveredService discoveredSvc_ = {};
@@ -357,7 +449,12 @@ int bleGapEventCallback(struct ble_gap_event* event, void* arg) {
     switch (event->type) {
         case BLE_GAP_EVENT_CONNECT:
             if (event->connect.status == 0) {
-                ctrl->onConnect(event->connect.conn_handle);
+                struct ble_gap_conn_desc desc;
+                bool isPeripheral = true;
+                if (ble_gap_conn_find(event->connect.conn_handle, &desc) == 0) {
+                    isPeripheral = (desc.role == BLE_GAP_ROLE_SLAVE);
+                }
+                ctrl->onConnect(event->connect.conn_handle, isPeripheral);
             } else {
                 LOG_W(TAG, "Connection failed, status=%d", event->connect.status);
             }
@@ -378,7 +475,9 @@ int bleGapEventCallback(struct ble_gap_event* event, void* arg) {
             break;
 
         case BLE_GAP_EVENT_MTU:
-            LOG_I(TAG, "MTU updated: %d", event->mtu.value);
+            LOG_I(TAG, "MTU updated: handle=%d value=%d",
+                  event->mtu.conn_handle, event->mtu.value);
+            ctrl->onMtuExchange(event->mtu.conn_handle, event->mtu.value);
             break;
 
         case BLE_GAP_EVENT_DISC:
@@ -395,19 +494,38 @@ int bleGapEventCallback(struct ble_gap_event* event, void* arg) {
                                   &event->passkey.params);
             break;
 
+        case BLE_GAP_EVENT_ENC_CHANGE:
+            ctrl->onEncChange(event->enc_change.conn_handle,
+                              event->enc_change.status);
+            break;
+
+        case BLE_GAP_EVENT_REPEAT_PAIRING: {
+            // Peer is re-pairing: delete the old bond so the new one can replace it.
+            struct ble_gap_conn_desc desc;
+            if (ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc) == 0) {
+                ble_store_util_delete_peer(&desc.peer_id_addr);
+            }
+            return BLE_GAP_REPEAT_PAIRING_RETRY;
+        }
+
         case BLE_GAP_EVENT_SUBSCRIBE:
-            LOG_I(TAG, "Subscribe: attr_handle=%d, cur_notify=%d",
-                  event->subscribe.attr_handle, event->subscribe.cur_notify);
+            ctrl->onSubscribe(event);
             break;
 
         case BLE_GAP_EVENT_NOTIFY_RX:
-            if (ctrl->notifyCb_ && event->notify_rx.om) {
+            if (event->notify_rx.om) {
                 uint16_t len = OS_MBUF_PKTLEN(event->notify_rx.om);
-                uint8_t buf[512];
-                if (len > sizeof(buf)) len = sizeof(buf);
-                ble_hs_mbuf_to_flat(event->notify_rx.om, buf, len, nullptr);
-                ctrl->notifyCb_(event->notify_rx.conn_handle,
-                                event->notify_rx.attr_handle, buf, len);
+                if (len > sizeof(s_gattAccessBuf)) len = sizeof(s_gattAccessBuf);
+                ble_hs_mbuf_to_flat(event->notify_rx.om, s_gattAccessBuf, len, nullptr);
+                for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) {
+                    if (ctrl->notifyCallbacks_[i].active &&
+                        ctrl->notifyCallbacks_[i].callback) {
+                        ctrl->notifyCallbacks_[i].callback(
+                            event->notify_rx.conn_handle,
+                            event->notify_rx.attr_handle,
+                            s_gattAccessBuf, len);
+                    }
+                }
             }
             break;
 
@@ -459,6 +577,8 @@ bool BluetoothController::init() {
                state_ == core::ServiceState::STARTED;
     }
 
+    // instance_ is set in the constructor, but reaffirm here in case multiple
+    // instances are ever created (only the most recently initialized wins).
     instance_ = this;
 
     // Release classic BT memory (we only use BLE)
@@ -533,6 +653,9 @@ bool BluetoothController::enable() {
     ble_svc_gap_init();
     ble_svc_gatt_init();
 
+    // Wire up the NVS-backed bond store
+    ble_store_config_init();
+
     // Set device name
     ble_svc_gap_device_name_set(deviceName_);
 
@@ -553,23 +676,28 @@ void BluetoothController::disable() {
     }
 
     // Disconnect any active connection
-    if (connHandle_ != BLE_HS_CONN_HANDLE_NONE) {
-        ble_gap_terminate(connHandle_, BLE_ERR_REM_USER_CONN_TERM);
-        vTaskDelay(pdMS_TO_TICKS(100));
+    for (uint8_t i = 0; i < MAX_CONNECTIONS; i++) {
+        if (connections_[i].active) {
+            ble_gap_terminate(connections_[i].handle, BLE_ERR_REM_USER_CONN_TERM);
+        }
     }
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     // Stop advertising if active
     ble_gap_adv_stop();
 
-    // Shutdown NimBLE
+    // Shutdown NimBLE and wait for the host task to actually exit before deinit
     int rc = nimble_port_stop();
     if (rc == 0) {
+        // nimble_port_stop signals the host task; give it time to drain
+        vTaskDelay(pdMS_TO_TICKS(50));
         nimble_port_deinit();
     }
 
     enabled_ = false;
     synced_ = false;
-    connHandle_ = BLE_HS_CONN_HANDLE_NONE;
+    for (uint8_t i = 0; i < MAX_CONNECTIONS; i++) connections_[i].active = false;
+    for (uint8_t i = 0; i < MAX_SUBSCRIBE_ENTRIES; i++) subscribes_[i].active = false;
 
     LOG_I(TAG, "Bluetooth disabled");
 }
@@ -612,8 +740,90 @@ void BluetoothController::setDeviceName(const char* name) {
  * \brief Terminates the current connection if one exists.
  */
 void BluetoothController::disconnect() {
-    if (connHandle_ != BLE_HS_CONN_HANDLE_NONE) {
-        ble_gap_terminate(connHandle_, BLE_ERR_REM_USER_CONN_TERM);
+    for (uint8_t i = 0; i < MAX_CONNECTIONS; i++) {
+        if (connections_[i].active) {
+            ble_gap_terminate(connections_[i].handle, BLE_ERR_REM_USER_CONN_TERM);
+        }
+    }
+}
+
+bool BluetoothController::isConnected() const {
+    for (uint8_t i = 0; i < MAX_CONNECTIONS; i++) {
+        if (connections_[i].active) return true;
+    }
+    return false;
+}
+
+uint16_t BluetoothController::primaryConnHandle() const {
+    for (uint8_t i = 0; i < MAX_CONNECTIONS; i++) {
+        if (connections_[i].active) return connections_[i].handle;
+    }
+    return BLE_HS_CONN_HANDLE_NONE;
+}
+
+int8_t BluetoothController::findConnectionSlot(uint16_t handle) const {
+    for (int8_t i = 0; i < (int8_t)MAX_CONNECTIONS; i++) {
+        if (connections_[i].active && connections_[i].handle == handle) return i;
+    }
+    return -1;
+}
+
+void BluetoothController::clearAllBonds() {
+    int rc = ble_store_clear();
+    if (rc != 0) {
+        LOG_E(TAG, "ble_store_clear failed: %d", rc);
+    } else {
+        LOG_I(TAG, "All bonds cleared");
+    }
+}
+
+void BluetoothController::onEncChange(uint16_t connHandle, int status) {
+    LOG_I(TAG, "Encryption %s on handle %d (status=%d)",
+          status == 0 ? "established" : "failed", connHandle, status);
+    if (authCompleteCb_) {
+        authCompleteCb_(status == 0);
+    }
+}
+
+void BluetoothController::onMtuExchange(uint16_t connHandle, uint16_t mtu) {
+    int8_t slot = findConnectionSlot(connHandle);
+    if (slot >= 0) {
+        connections_[slot].mtu = mtu;
+    }
+}
+
+void BluetoothController::onSubscribe(const struct ble_gap_event* event) {
+    if (!event) return;
+    LOG_I(TAG, "Subscribe: handle=%d attr=%d notify=%d indicate=%d",
+          event->subscribe.conn_handle, event->subscribe.attr_handle,
+          event->subscribe.cur_notify, event->subscribe.cur_indicate);
+
+    // Find or allocate a subscribe entry
+    int slot = -1;
+    for (int i = 0; i < MAX_SUBSCRIBE_ENTRIES; i++) {
+        if (subscribes_[i].active &&
+            subscribes_[i].connHandle == event->subscribe.conn_handle &&
+            subscribes_[i].attrHandle == event->subscribe.attr_handle) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        for (int i = 0; i < MAX_SUBSCRIBE_ENTRIES; i++) {
+            if (!subscribes_[i].active) { slot = i; break; }
+        }
+    }
+    if (slot < 0) {
+        LOG_W(TAG, "Subscribe table full");
+        return;
+    }
+    subscribes_[slot].active = true;
+    subscribes_[slot].connHandle = event->subscribe.conn_handle;
+    subscribes_[slot].attrHandle = event->subscribe.attr_handle;
+    subscribes_[slot].notify = event->subscribe.cur_notify != 0;
+    subscribes_[slot].indicate = event->subscribe.cur_indicate != 0;
+    if (!subscribes_[slot].notify && !subscribes_[slot].indicate) {
+        subscribes_[slot].active = false;
     }
 }
 
@@ -622,12 +832,13 @@ void BluetoothController::disconnect() {
  * \return Current RSSI in dBm, or `0` if unavailable.
  */
 int8_t BluetoothController::getRssi() const {
-    if (connHandle_ == BLE_HS_CONN_HANDLE_NONE) {
+    uint16_t handle = primaryConnHandle();
+    if (handle == BLE_HS_CONN_HANDLE_NONE) {
         return 0;
     }
 
     int8_t rssi = 0;
-    int rc = ble_gap_conn_rssi(connHandle_, &rssi);
+    int rc = ble_gap_conn_rssi(handle, &rssi);
     return (rc == 0) ? rssi : 0;
 }
 
@@ -635,14 +846,30 @@ int8_t BluetoothController::getRssi() const {
  * \brief Handles successful connection establishment.
  * \param connHandle Established connection handle.
  */
-void BluetoothController::onConnect(uint16_t connHandle) {
-    connHandle_ = connHandle;
+void BluetoothController::onConnect(uint16_t connHandle, bool isPeripheral) {
     advertising_ = false;
-    LOG_I(TAG, "Device connected (handle=%d)", connHandle);
+    LOG_I(TAG, "Device connected (handle=%d, role=%s)",
+          connHandle, isPeripheral ? "peripheral" : "central");
+
+    // Track in connection table
+    int slot = -1;
+    for (int i = 0; i < MAX_CONNECTIONS; i++) {
+        if (!connections_[i].active) { slot = i; break; }
+    }
+    if (slot >= 0) {
+        connections_[slot].active = true;
+        connections_[slot].handle = connHandle;
+        connections_[slot].isPeripheral = isPeripheral;
+        connections_[slot].mtu = 23;
+    } else {
+        LOG_W(TAG, "Connection table full, dropping handle %d", connHandle);
+    }
 
     // Dispatch to registered listeners
-    for (uint8_t i = 0; i < numConnCbs_; i++) {
-        if (connCallbacks_[i]) connCallbacks_[i](connHandle);
+    for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) {
+        if (connCallbacks_[i].active && connCallbacks_[i].callback) {
+            connCallbacks_[i].callback(connHandle);
+        }
     }
 }
 
@@ -652,18 +879,34 @@ void BluetoothController::onConnect(uint16_t connHandle) {
  * \param reason NimBLE disconnect reason code.
  */
 void BluetoothController::onDisconnect(uint16_t connHandle, int reason) {
-    (void)connHandle;
-    connHandle_ = BLE_HS_CONN_HANDLE_NONE;
-    LOG_I(TAG, "Device disconnected (reason=%d)", reason);
+    LOG_I(TAG, "Device disconnected (handle=%d reason=%d)", connHandle, reason);
 
-    // Dispatch to registered listeners
-    for (uint8_t i = 0; i < numDisconnCbs_; i++) {
-        if (disconnCallbacks_[i]) disconnCallbacks_[i](connHandle, reason);
+    bool wasPeripheral = true;
+    int8_t slot = findConnectionSlot(connHandle);
+    if (slot >= 0) {
+        wasPeripheral = connections_[slot].isPeripheral;
+        connections_[slot].active = false;
     }
 
-    // Auto-restart advertising after disconnect
+    // Drop subscriptions associated with this connection
+    for (uint8_t i = 0; i < MAX_SUBSCRIBE_ENTRIES; i++) {
+        if (subscribes_[i].active && subscribes_[i].connHandle == connHandle) {
+            subscribes_[i].active = false;
+        }
+    }
+
+    // Dispatch to registered listeners
+    for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) {
+        if (disconnCallbacks_[i].active && disconnCallbacks_[i].callback) {
+            disconnCallbacks_[i].callback(connHandle, reason);
+        }
+    }
+
+    // Role-aware advertising restart: only if we were the peripheral.
     advertising_ = false;
-    startAdvertising();
+    if (wasPeripheral) {
+        startAdvertising();
+    }
 }
 
 /**
@@ -885,7 +1128,7 @@ static bool parseAdvName(const uint8_t* data, uint8_t dataLen,
     uint8_t pos = 0;
     while (pos < dataLen) {
         uint8_t len = data[pos];
-        if (len == 0 || pos + len >= dataLen) break;
+        if (len == 0 || pos + len > dataLen) break;
         uint8_t type = data[pos + 1];
         // 0x09 = Complete Local Name, 0x08 = Shortened Local Name
         if (type == 0x09 || type == 0x08) {
@@ -1028,6 +1271,39 @@ bool BluetoothController::registerGattService(const GattServiceDef& service) {
         dst.min_key_size = 0;
         dst.val_handle = src.valueHandle;
 
+        // Build per-characteristic descriptor list (e.g. HID Report Reference).
+        uint8_t numDsc = src.numDescriptors;
+        if (numDsc > MAX_DESCRIPTORS_PER_CHAR) numDsc = MAX_DESCRIPTORS_PER_CHAR;
+        for (uint8_t d = 0; d < numDsc; d++) {
+            const GattDescriptor& gd = src.descriptors[d];
+            uint16_t uuid16 = 0;
+            switch (gd.kind) {
+                case GattDescriptorKind::REPORT_REFERENCE: uuid16 = 0x2908; break;
+                default: uuid16 = 0; break;
+            }
+            if (uuid16 == 0) continue;
+
+            s.dscUuids[i][d].u.type = BLE_UUID_TYPE_16;
+            s.dscUuids[i][d].u16.u.type = BLE_UUID_TYPE_16;
+            s.dscUuids[i][d].u16.value = uuid16;
+
+            // Pack as [len][bytes]
+            uint8_t copyLen = (gd.dataLen <= 4) ? gd.dataLen : 4;
+            s.dscPacked[i][d][0] = copyLen;
+            memcpy(&s.dscPacked[i][d][1], gd.data, copyLen);
+
+            s.dscDefs[i][d].uuid = &s.dscUuids[i][d].u;
+            s.dscDefs[i][d].att_flags = BLE_ATT_F_READ;
+            s.dscDefs[i][d].min_key_size = 0;
+            s.dscDefs[i][d].access_cb = gattStaticDescriptorAccessCb;
+            s.dscDefs[i][d].arg = s.dscPacked[i][d];
+        }
+        if (numDsc > 0) {
+            // Terminator descriptor
+            memset(&s.dscDefs[i][numDsc], 0, sizeof(ble_gatt_dsc_def));
+            dst.descriptors = s.dscDefs[i];
+        }
+
         s.writeCallbacks[i] = src.onWrite;
         s.readCallbacks[i] = src.onRead;
     }
@@ -1050,20 +1326,43 @@ bool BluetoothController::registerGattService(const GattServiceDef& service) {
     }
 
     rc = ble_gatts_add_svcs(s.nimbleSvcs);
+    if (rc == BLE_HS_EBUSY) {
+        // GATT DB is already started; rebuild it to include the new service.
+        // Safe at registration time (no client connected yet).
+        if (advertising_) {
+            ble_gap_adv_stop();
+            advertising_ = false;
+        }
+        ble_gatts_reset();
+        ble_svc_gap_init();
+        ble_svc_gatt_init();
+
+        s.active = true;
+        for (int i = 0; i < MAX_REGISTERED_SERVICES; i++) {
+            if (!s_services[i].active) continue;
+            int rrc = ble_gatts_count_cfg(s_services[i].nimbleSvcs);
+            if (rrc == 0) rrc = ble_gatts_add_svcs(s_services[i].nimbleSvcs);
+            if (rrc != 0) {
+                LOG_E(TAG, "GATT rebuild failed for slot %d: %d", i, rrc);
+                s.active = false;
+                return false;
+            }
+        }
+        int srv_rc = ble_gatts_start();
+        if (srv_rc != 0) {
+            LOG_E(TAG, "ble_gatts_start after rebuild: %d", srv_rc);
+            s.active = false;
+            return false;
+        }
+        if (synced_) {
+            startAdvertising();
+        }
+        LOG_I(TAG, "GATT service registered via rebuild (slot %d, %d chars)", slot, numChars);
+        return true;
+    }
     if (rc != 0) {
         LOG_E(TAG, "ble_gatts_add_svcs failed: %d", rc);
         return false;
-    }
-
-    // Activate services if host is already synced (post-startup registration)
-    if (synced_) {
-        bool wasAdvertising = advertising_;
-        ble_gatts_start();
-        // ble_gatts_start() may reset GAP state - restore advertising
-        if (wasAdvertising) {
-            advertising_ = false;
-            startAdvertising();
-        }
     }
 
     s.active = true;
@@ -1081,23 +1380,49 @@ bool BluetoothController::registerGattService(const GattServiceDef& service) {
  */
 bool BluetoothController::sendNotification(uint16_t connHandle, uint16_t attrHandle,
                                             const uint8_t* data, uint16_t len) {
-    if (!enabled_ || connHandle == BLE_HS_CONN_HANDLE_NONE || !data || len == 0) {
+    if (!enabled_ || !data || len == 0) {
         return false;
     }
 
-    struct os_mbuf* om = ble_hs_mbuf_from_flat(data, len);
-    if (!om) {
-        LOG_E(TAG, "Failed to allocate mbuf for notification");
-        return false;
-    }
+    auto notifyOne = [&](uint16_t handle) -> bool {
+        // Check the per-connection CCCD table - skip peers that are not subscribed.
+        bool subscribed = false;
+        for (uint8_t i = 0; i < MAX_SUBSCRIBE_ENTRIES; i++) {
+            if (subscribes_[i].active &&
+                subscribes_[i].connHandle == handle &&
+                subscribes_[i].attrHandle == attrHandle &&
+                subscribes_[i].notify) {
+                subscribed = true;
+                break;
+            }
+        }
+        if (!subscribed) return false;
 
-    int rc = ble_gatts_notify_custom(connHandle, attrHandle, om);
-    if (rc != 0) {
-        // om is freed by ble_gatts_notify_custom on failure
-        return false;
-    }
+        struct os_mbuf* om = ble_hs_mbuf_from_flat(data, len);
+        if (!om) {
+            LOG_E(TAG, "Failed to allocate mbuf for notification");
+            return false;
+        }
+        int rc = ble_gatts_notify_custom(handle, attrHandle, om);
+        if (rc != 0) {
+            // NimBLE may or may not free the mbuf chain on failure; free
+            // unconditionally to avoid a leak when rc != 0.
+            os_mbuf_free_chain(om);
+            return false;
+        }
+        return true;
+    };
 
-    return true;
+    if (connHandle == 0xFFFF || connHandle == BLE_HS_CONN_HANDLE_NONE) {
+        bool any = false;
+        for (uint8_t i = 0; i < MAX_CONNECTIONS; i++) {
+            if (connections_[i].active) {
+                if (notifyOne(connections_[i].handle)) any = true;
+            }
+        }
+        return any;
+    }
+    return notifyOne(connHandle);
 }
 
 /**
@@ -1105,10 +1430,11 @@ bool BluetoothController::sendNotification(uint16_t connHandle, uint16_t attrHan
  * \return Effective application payload size in bytes.
  */
 uint16_t BluetoothController::getMtu() const {
-    if (connHandle_ == BLE_HS_CONN_HANDLE_NONE) {
-        return 20; // Default minimum BLE payload
+    uint16_t handle = primaryConnHandle();
+    if (handle == BLE_HS_CONN_HANDLE_NONE) {
+        return 20; // Default minimum BLE payload (ATT MTU 23 - 3 header bytes)
     }
-    uint16_t mtu = ble_att_mtu(connHandle_);
+    uint16_t mtu = ble_att_mtu(handle);
     return (mtu > 3) ? (mtu - 3) : 20;
 }
 
@@ -1175,23 +1501,51 @@ void BluetoothController::removeAdvertisingUuid(const BleUuid& uuid) {
  */
 
 /**
- * \brief Registers a connection callback.
- * \param cb Callback invoked on successful connections.
+ * \brief Allocates a free listener slot and stores the callback.
+ * \return Slot index encoded as a `ListenerToken`, or `INVALID_LISTENER` if full.
  */
-void BluetoothController::addConnectionCallback(ConnectionCallback cb) {
-    if (numConnCbs_ < MAX_CONN_CALLBACKS && cb) {
-        connCallbacks_[numConnCbs_++] = cb;
+template <typename CB, size_t N>
+static IBluetoothController::ListenerToken addListener(
+    BluetoothController::ListenerSlot<CB> (&slots)[N], CB cb) {
+    if (!cb) return IBluetoothController::INVALID_LISTENER;
+    for (size_t i = 0; i < N; i++) {
+        if (!slots[i].active) {
+            slots[i].active = true;
+            slots[i].callback = cb;
+            return static_cast<IBluetoothController::ListenerToken>(i);
+        }
     }
+    return IBluetoothController::INVALID_LISTENER;
 }
 
 /**
- * \brief Registers a disconnection callback.
- * \param cb Callback invoked on disconnect events.
+ * \brief Releases a listener slot by token.
  */
-void BluetoothController::addDisconnectionCallback(DisconnectionCallback cb) {
-    if (numDisconnCbs_ < MAX_CONN_CALLBACKS && cb) {
-        disconnCallbacks_[numDisconnCbs_++] = cb;
-    }
+template <typename CB, size_t N>
+static void removeListener(
+    BluetoothController::ListenerSlot<CB> (&slots)[N],
+    IBluetoothController::ListenerToken token) {
+    if (token >= N) return;
+    slots[token].active = false;
+    slots[token].callback = nullptr;
+}
+
+IBluetoothController::ListenerToken
+BluetoothController::addConnectionCallback(ConnectionCallback cb) {
+    return addListener(connCallbacks_, cb);
+}
+
+IBluetoothController::ListenerToken
+BluetoothController::addDisconnectionCallback(DisconnectionCallback cb) {
+    return addListener(disconnCallbacks_, cb);
+}
+
+void BluetoothController::removeConnectionCallback(ListenerToken token) {
+    removeListener(connCallbacks_, token);
+}
+
+void BluetoothController::removeDisconnectionCallback(ListenerToken token) {
+    removeListener(disconnCallbacks_, token);
 }
 
 /**
@@ -1214,12 +1568,18 @@ void BluetoothController::setAuthCompleteCallback(AuthCompleteCallback cb) {
     authCompleteCb_ = cb;
 }
 
-/**
- * \brief Sets callback for numeric-comparison pairing prompts.
- * \param cb Numeric comparison callback.
- */
+IBluetoothController::ListenerToken
+BluetoothController::addNumericComparisonCallback(NumericComparisonCallback cb) {
+    return addListener(numCmpCallbacks_, cb);
+}
+
+void BluetoothController::removeNumericComparisonCallback(ListenerToken token) {
+    removeListener(numCmpCallbacks_, token);
+}
+
 void BluetoothController::setNumericComparisonCallback(NumericComparisonCallback cb) {
-    numericCompCb_ = cb;
+    for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) numCmpCallbacks_[i].active = false;
+    if (cb) addListener(numCmpCallbacks_, cb);
 }
 
 /**
@@ -1248,15 +1608,22 @@ void BluetoothController::onPasskeyAction(uint16_t connHandle,
     if (!params) return;
 
     switch (params->action) {
-        case BLE_SM_IOACT_NUMCMP:
+        case BLE_SM_IOACT_NUMCMP: {
             LOG_I(TAG, "Numeric comparison: %06lu", (unsigned long)params->numcmp);
-            if (numericCompCb_) {
-                numericCompCb_(connHandle, params->numcmp);
-            } else {
-                // No callback registered - auto-accept (fallback)
-                respondToNumericComparison(connHandle, true);
+            bool dispatched = false;
+            for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) {
+                if (numCmpCallbacks_[i].active && numCmpCallbacks_[i].callback) {
+                    numCmpCallbacks_[i].callback(connHandle, params->numcmp);
+                    dispatched = true;
+                }
+            }
+            if (!dispatched) {
+                // No callback registered: reject by default for safety.
+                LOG_W(TAG, "No numeric comparison callback registered, rejecting");
+                respondToNumericComparison(connHandle, false);
             }
             break;
+        }
 
         case BLE_SM_IOACT_DISP:
             LOG_I(TAG, "Display passkey: %06lu", (unsigned long)params->numcmp);
@@ -1333,10 +1700,24 @@ int gattcChrDiscCb(uint16_t connHandle, const struct ble_gatt_error* error,
         auto& svc = ctrl->discoveredSvc_;
         if (svc.numCharacteristics < IBluetoothController::DiscoveredService::MAX_DISCOVERED_CHARS) {
             auto& dc = svc.characteristics[svc.numCharacteristics];
+            // Use NimBLE's typed helper to safely extract 16-bit UUIDs from
+            // either BLE_UUID_TYPE_16 or BLE_UUID_TYPE_32 variants. Anything
+            // larger falls back to 128-bit.
             if (chr->uuid.u.type == BLE_UUID_TYPE_16) {
-                dc.uuid = BleUuid::from16(((const ble_uuid16_t*)&chr->uuid)->value);
+                dc.uuid = BleUuid::from16(ble_uuid_u16(&chr->uuid.u));
+            } else if (chr->uuid.u.type == BLE_UUID_TYPE_32) {
+                // No native 32-bit support in our generic UUID; convert to 128-bit per BT spec.
+                uint8_t u128[16] = { 0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00,
+                                      0x00, 0x80, 0x00, 0x10, 0x00, 0x00,
+                                      0, 0, 0, 0 };
+                uint32_t v = chr->uuid.u32.value;
+                u128[12] = v & 0xFF;
+                u128[13] = (v >> 8) & 0xFF;
+                u128[14] = (v >> 16) & 0xFF;
+                u128[15] = (v >> 24) & 0xFF;
+                dc.uuid = BleUuid::from128(u128);
             } else {
-                dc.uuid = BleUuid::from128(((const ble_uuid128_t*)&chr->uuid)->value);
+                dc.uuid = BleUuid::from128(chr->uuid.u128.value);
             }
             dc.valueHandle = chr->val_handle;
             dc.properties = chr->properties;
@@ -1344,13 +1725,20 @@ int gattcChrDiscCb(uint16_t connHandle, const struct ble_gatt_error* error,
         }
     } else if (error->status == BLE_HS_EDONE) {
         LOG_I(TAG, "Char discovery done (%d chars)", ctrl->discoveredSvc_.numCharacteristics);
-        if (ctrl->svcDiscoveryCb_) {
-            ctrl->svcDiscoveryCb_(connHandle, &ctrl->discoveredSvc_, true);
+        for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) {
+            if (ctrl->svcDiscoveryCallbacks_[i].active &&
+                ctrl->svcDiscoveryCallbacks_[i].callback) {
+                ctrl->svcDiscoveryCallbacks_[i].callback(
+                    connHandle, &ctrl->discoveredSvc_, true);
+            }
         }
     } else {
         LOG_E(TAG, "Char discovery error: %d", error->status);
-        if (ctrl->svcDiscoveryCb_) {
-            ctrl->svcDiscoveryCb_(connHandle, nullptr, true);
+        for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) {
+            if (ctrl->svcDiscoveryCallbacks_[i].active &&
+                ctrl->svcDiscoveryCallbacks_[i].callback) {
+                ctrl->svcDiscoveryCallbacks_[i].callback(connHandle, nullptr, true);
+            }
         }
     }
 
@@ -1371,6 +1759,15 @@ int gattcSvcDiscCb(uint16_t connHandle, const struct ble_gatt_error* error,
     auto* ctrl = BluetoothController::instance_;
     if (!ctrl) return 0;
 
+    auto dispatchFailure = [&]() {
+        for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) {
+            if (ctrl->svcDiscoveryCallbacks_[i].active &&
+                ctrl->svcDiscoveryCallbacks_[i].callback) {
+                ctrl->svcDiscoveryCallbacks_[i].callback(connHandle, nullptr, true);
+            }
+        }
+    };
+
     if (error->status == 0 && service) {
         ctrl->discoverSvcStart_ = service->start_handle;
         ctrl->discoverSvcEnd_ = service->end_handle;
@@ -1384,21 +1781,15 @@ int gattcSvcDiscCb(uint16_t connHandle, const struct ble_gatt_error* error,
                                               gattcChrDiscCb, nullptr);
             if (rc != 0) {
                 LOG_E(TAG, "ble_gattc_disc_all_chrs failed: %d", rc);
-                if (ctrl->svcDiscoveryCb_) {
-                    ctrl->svcDiscoveryCb_(connHandle, nullptr, true);
-                }
+                dispatchFailure();
             }
         } else {
             LOG_W(TAG, "Service not found on remote device");
-            if (ctrl->svcDiscoveryCb_) {
-                ctrl->svcDiscoveryCb_(connHandle, nullptr, true);
-            }
+            dispatchFailure();
         }
     } else {
         LOG_E(TAG, "Service discovery error: %d", error->status);
-        if (ctrl->svcDiscoveryCb_) {
-            ctrl->svcDiscoveryCb_(connHandle, nullptr, true);
-        }
+        dispatchFailure();
     }
 
     return 0;
@@ -1420,16 +1811,22 @@ int gattcReadCb(uint16_t connHandle, const struct ble_gatt_error* error,
 
     if (error->status == 0 && attr && attr->om) {
         uint16_t len = OS_MBUF_PKTLEN(attr->om);
-        uint8_t buf[512];
-        if (len > sizeof(buf)) len = sizeof(buf);
-        ble_hs_mbuf_to_flat(attr->om, buf, len, nullptr);
-        if (ctrl->charReadCb_) {
-            ctrl->charReadCb_(connHandle, attr->handle, buf, len);
+        if (len > sizeof(s_gattAccessBuf)) len = sizeof(s_gattAccessBuf);
+        ble_hs_mbuf_to_flat(attr->om, s_gattAccessBuf, len, nullptr);
+        for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) {
+            if (ctrl->charReadCallbacks_[i].active &&
+                ctrl->charReadCallbacks_[i].callback) {
+                ctrl->charReadCallbacks_[i].callback(
+                    connHandle, attr->handle, s_gattAccessBuf, len);
+            }
         }
     } else {
         LOG_E(TAG, "GATT read failed: %d", error->status);
-        if (ctrl->charReadCb_) {
-            ctrl->charReadCb_(connHandle, 0, nullptr, 0);
+        for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) {
+            if (ctrl->charReadCallbacks_[i].active &&
+                ctrl->charReadCallbacks_[i].callback) {
+                ctrl->charReadCallbacks_[i].callback(connHandle, 0, nullptr, 0);
+            }
         }
     }
 
@@ -1448,10 +1845,15 @@ int gattcWriteCb(uint16_t connHandle, const struct ble_gatt_error* error,
                    struct ble_gatt_attr* attr, void* arg) {
     (void)arg;
     auto* ctrl = BluetoothController::instance_;
-    if (!ctrl || !ctrl->writeCompleteCb_) return 0;
+    if (!ctrl) return 0;
 
     uint16_t handle = attr ? attr->handle : 0;
-    ctrl->writeCompleteCb_(connHandle, handle, error->status);
+    for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) {
+        if (ctrl->writeCompleteCallbacks_[i].active &&
+            ctrl->writeCompleteCallbacks_[i].callback) {
+            ctrl->writeCompleteCallbacks_[i].callback(connHandle, handle, error->status);
+        }
+    }
 
     return 0;
 }
@@ -1541,10 +1943,10 @@ bool BluetoothController::writeCharacteristic(uint16_t connHandle, uint16_t attr
         rc = ble_gattc_write_flat(connHandle, attrHandle, data, len,
                                    gattcWriteCb, nullptr);
     } else {
+        // Write-without-response has no confirmation event. Do not invoke
+        // writeCompleteCallback synchronously - modules treating that as a
+        // TX confirmation would misreport delivery.
         rc = ble_gattc_write_no_rsp_flat(connHandle, attrHandle, data, len);
-        if (rc == 0 && writeCompleteCb_) {
-            writeCompleteCb_(connHandle, attrHandle, 0);
-        }
     }
 
     if (rc != 0) {
@@ -1602,36 +2004,51 @@ void BluetoothController::disconnectHandle(uint16_t connHandle) {
     ble_gap_terminate(connHandle, BLE_ERR_REM_USER_CONN_TERM);
 }
 
-/**
- * \brief Sets service-discovery completion callback.
- * \param cb Callback receiving discovered service metadata.
- */
+IBluetoothController::ListenerToken
+BluetoothController::addServiceDiscoveryCallback(ServiceDiscoveryCallback cb) {
+    return addListener(svcDiscoveryCallbacks_, cb);
+}
+IBluetoothController::ListenerToken
+BluetoothController::addCharacteristicReadCallback(CharacteristicReadCallback cb) {
+    return addListener(charReadCallbacks_, cb);
+}
+IBluetoothController::ListenerToken
+BluetoothController::addNotificationCallback(NotificationCallback cb) {
+    return addListener(notifyCallbacks_, cb);
+}
+IBluetoothController::ListenerToken
+BluetoothController::addWriteCompleteCallback(WriteCompleteCallback cb) {
+    return addListener(writeCompleteCallbacks_, cb);
+}
+
+void BluetoothController::removeServiceDiscoveryCallback(ListenerToken t) {
+    removeListener(svcDiscoveryCallbacks_, t);
+}
+void BluetoothController::removeCharacteristicReadCallback(ListenerToken t) {
+    removeListener(charReadCallbacks_, t);
+}
+void BluetoothController::removeNotificationCallback(ListenerToken t) {
+    removeListener(notifyCallbacks_, t);
+}
+void BluetoothController::removeWriteCompleteCallback(ListenerToken t) {
+    removeListener(writeCompleteCallbacks_, t);
+}
+
 void BluetoothController::setServiceDiscoveryCallback(ServiceDiscoveryCallback cb) {
-    svcDiscoveryCb_ = cb;
+    for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) svcDiscoveryCallbacks_[i].active = false;
+    if (cb) addListener(svcDiscoveryCallbacks_, cb);
 }
-
-/**
- * \brief Sets characteristic-read callback.
- * \param cb Callback invoked on read completion.
- */
 void BluetoothController::setCharacteristicReadCallback(CharacteristicReadCallback cb) {
-    charReadCb_ = cb;
+    for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) charReadCallbacks_[i].active = false;
+    if (cb) addListener(charReadCallbacks_, cb);
 }
-
-/**
- * \brief Sets notification callback for inbound notifications.
- * \param cb Notification callback.
- */
 void BluetoothController::setNotificationCallback(NotificationCallback cb) {
-    notifyCb_ = cb;
+    for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) notifyCallbacks_[i].active = false;
+    if (cb) addListener(notifyCallbacks_, cb);
 }
-
-/**
- * \brief Sets callback for write completion events.
- * \param cb Write completion callback.
- */
 void BluetoothController::setWriteCompleteCallback(WriteCompleteCallback cb) {
-    writeCompleteCb_ = cb;
+    for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) writeCompleteCallbacks_[i].active = false;
+    if (cb) addListener(writeCompleteCallbacks_, cb);
 }
 
 /**

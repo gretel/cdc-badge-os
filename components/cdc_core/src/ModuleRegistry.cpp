@@ -7,6 +7,7 @@
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
+#include <memory>
 
 static const char* TAG = "ModuleReg";
 
@@ -561,13 +562,11 @@ static void removeNameFromList(const char* list, const char* name,
                                char* dest, size_t capacity) {
     if (capacity == 0) return;
 
-    // Scratch buffer sized to fit the largest expected list. Using a
-    // local stack buffer allows the destination to alias the source.
-    constexpr size_t SCRATCH_SIZE = 128;
-    char tmp[SCRATCH_SIZE] = {0};
+    auto tmp = std::make_unique<char[]>(capacity);
+    tmp[0] = '\0';
     size_t newOffset = 0;
     const size_t nameLen = strlen(name);
-    const size_t maxOffset = (capacity < sizeof(tmp)) ? capacity : sizeof(tmp);
+    const size_t maxOffset = capacity;
 
     const char* ptr = list;
     while (*ptr) {
@@ -581,11 +580,11 @@ static void removeNameFromList(const char* list, const char* name,
         const bool matches = (tokenLen == nameLen &&
                               strncmp(ptr, name, nameLen) == 0);
         if (!matches) {
-            if (newOffset > 0 && newOffset < maxOffset - 1) {
+            if (newOffset > 0 && newOffset + 1 < maxOffset) {
                 tmp[newOffset++] = ',';
             }
             if (newOffset + tokenLen < maxOffset) {
-                memcpy(tmp + newOffset, ptr, tokenLen);
+                memcpy(tmp.get() + newOffset, ptr, tokenLen);
                 newOffset += tokenLen;
             }
         }
@@ -593,7 +592,7 @@ static void removeNameFromList(const char* list, const char* name,
         ptr = end;
     }
     tmp[newOffset] = '\0';
-    memcpy(dest, tmp, (newOffset + 1 < capacity) ? newOffset + 1 : capacity);
+    memcpy(dest, tmp.get(), newOffset + 1);
     dest[capacity - 1] = '\0';
 }
 

@@ -92,16 +92,16 @@ bool BleUartService::init() {
     ble->addAdvertisingUuid(BleUuid::from128(NUS_SVC_UUID));
 
     // Register connection callbacks
-    ble->addConnectionCallback([](uint16_t /*connHandle*/) {
+    connToken_ = ble->addConnectionCallback([](uint16_t /*connHandle*/) {
         BleUartService::instance().onConnectionChange(true);
     });
-    ble->addDisconnectionCallback([](uint16_t /*connHandle*/, int /*reason*/) {
+    disconnToken_ = ble->addDisconnectionCallback([](uint16_t /*connHandle*/, int /*reason*/) {
         BleUartService::instance().onConnectionChange(false);
     });
 
     // Reset RX buffer
-    rxHead_ = 0;
-    rxTail_ = 0;
+    rxHead_.store(0, std::memory_order_relaxed);
+    rxTail_.store(0, std::memory_order_relaxed);
 
     initialized_ = true;
     LOG_I(TAG, "NUS service registered (txHandle=%d)", txCharHandle_);
@@ -119,6 +119,10 @@ void BleUartService::deinit() {
     auto* ble = cdc::hal::getBluetoothControllerInstance();
     if (ble) {
         ble->removeAdvertisingUuid(cdc::hal::BleUuid::from128(NUS_SVC_UUID));
+        ble->removeConnectionCallback(connToken_);
+        ble->removeDisconnectionCallback(disconnToken_);
+        connToken_ = cdc::hal::IBluetoothController::INVALID_LISTENER;
+        disconnToken_ = cdc::hal::IBluetoothController::INVALID_LISTENER;
     }
 
     initialized_ = false;
@@ -150,12 +154,18 @@ size_t BleUartService::send(const uint8_t* data, size_t len) {
 
     uint16_t connHandle = ble->getConnectionHandle();
     uint16_t mtu = ble->getMtu();
-    if (mtu == 0) mtu = 20;
+    // getMtu() already subtracts the 3-byte ATT header, but defend against
+    // implementations that return the raw ATT MTU instead.
+    if (mtu < 4) {
+        txInProgress_ = false;
+        return 0;
+    }
 
     size_t sent = 0;
     while (sent < len) {
+        size_t remaining = len - sent;
         uint16_t chunkLen = static_cast<uint16_t>(
-            (len - sent > mtu) ? mtu : (len - sent));
+            (remaining > mtu) ? mtu : remaining);
 
         if (!ble->sendNotification(connHandle, txCharHandle_, data + sent, chunkLen)) {
             break;
@@ -192,8 +202,8 @@ bool BleUartService::txReady() const {
 size_t BleUartService::available() const {
     if (!initialized_) return 0;
 
-    size_t head = rxHead_;
-    size_t tail = rxTail_;
+    size_t head = rxHead_.load(std::memory_order_acquire);
+    size_t tail = rxTail_.load(std::memory_order_acquire);
 
     if (head >= tail) {
         return head - tail;
@@ -211,8 +221,9 @@ int BleUartService::getchar() {
         return -1;
     }
 
-    uint8_t c = rxBuffer_[rxTail_];
-    rxTail_ = (rxTail_ + 1) % RX_BUFFER_SIZE;
+    size_t tail = rxTail_.load(std::memory_order_relaxed);
+    uint8_t c = rxBuffer_[tail];
+    rxTail_.store((tail + 1) % RX_BUFFER_SIZE, std::memory_order_release);
     return c;
 }
 
@@ -251,15 +262,18 @@ bool BleUartService::isConnected() const {
 void BleUartService::onRxData(const uint8_t* data, size_t len) {
     if (!data || len == 0) return;
 
+    size_t head = rxHead_.load(std::memory_order_relaxed);
     for (size_t i = 0; i < len; i++) {
-        size_t nextHead = (rxHead_ + 1) % RX_BUFFER_SIZE;
-        if (nextHead == rxTail_) {
+        size_t nextHead = (head + 1) % RX_BUFFER_SIZE;
+        size_t tail = rxTail_.load(std::memory_order_acquire);
+        if (nextHead == tail) {
             // Buffer full - drop oldest
-            rxTail_ = (rxTail_ + 1) % RX_BUFFER_SIZE;
+            rxTail_.store((tail + 1) % RX_BUFFER_SIZE, std::memory_order_release);
         }
-        rxBuffer_[rxHead_] = data[i];
-        rxHead_ = nextHead;
+        rxBuffer_[head] = data[i];
+        head = nextHead;
     }
+    rxHead_.store(head, std::memory_order_release);
 }
 
 /**
@@ -272,8 +286,8 @@ void BleUartService::onConnectionChange(bool connected) {
         if (onConnect_) onConnect_();
     } else {
         LOG_I(TAG, "Device disconnected");
-        rxHead_ = 0;
-        rxTail_ = 0;
+        rxHead_.store(0, std::memory_order_relaxed);
+        rxTail_.store(0, std::memory_order_relaxed);
         if (onDisconnect_) onDisconnect_();
     }
 }

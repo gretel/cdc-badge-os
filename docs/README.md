@@ -28,7 +28,7 @@ CDC Badge OS is modular firmware for a hardware security key based on:
 | **FIDO2/WebAuthn** | Passwordless authentication | Working |
 | **TOTP** | Time-based one-time passwords | Working |
 | **Passwords** | Encrypted password vault | Working |
-| **GPG** | OpenPGP smartcard (CCID) | WIP |
+| **GPG** | OpenPGP smartcard (CCID): sign / verify / encrypt / decrypt / SSH-auth end-to-end with GnuPG | Working (UI WIP) |
 | **BLE vCard** | Contact exchange between badges | Working |
 | **BLE HID** | Bluetooth keyboard for auto-type | Working |
 

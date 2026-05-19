@@ -115,7 +115,10 @@ static void renderTask(void* arg) {
             if (doFull) {
                 s_epd_display->update();
             } else {
-                s_epd_display->updateWindow(0, 0, HEIGHT, WIDTH, false);  // Physical dimensions: 128x296
+                // updateWindow takes physical coordinates (128 x 296). HAL
+                // WIDTH/HEIGHT are logical post-rotation values; swap them
+                // and pass using_rotation=false.
+                s_epd_display->updateWindow(0, 0, HEIGHT, WIDTH, false);
             }
         }
     }
@@ -228,7 +231,7 @@ bool EpaperDisplay::init() {
         return false;
     }
 
-    BaseType_t ret = xTaskCreate(renderTask, "epd_render", 8192, nullptr, 5, &s_renderTask);
+    BaseType_t ret = xTaskCreate(renderTask, "epd_render", 4096, nullptr, 5, &s_renderTask);
     if (ret != pdPASS) {
         LOG_E(TAG, "Failed to create render task");
         state_ = core::ServiceState::ERROR;
@@ -308,7 +311,9 @@ void EpaperDisplay::flushSync(RefreshMode mode) {
     if (mode == RefreshMode::FULL) {
         s_epd_display->update();
     } else {
-        s_epd_display->updateWindow(0, 0, HEIGHT, WIDTH, false);  // Physical dimensions: 128x296
+        // updateWindow takes physical coordinates (128 x 296). HAL WIDTH/HEIGHT
+        // are logical post-rotation values; swap them and pass using_rotation=false.
+        s_epd_display->updateWindow(0, 0, HEIGHT, WIDTH, false);
     }
 }
 

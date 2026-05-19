@@ -784,9 +784,7 @@ static void onWizardIssuer(const char* text) {
         {"7", 0, false, nullptr},
         {"8", 0, false, nullptr}
     };
-    if (!s_viewsInitialized) {
-        s_digitsMenu.setOnSelect(onWizardDigits);
-    }
+    s_digitsMenu.setOnSelect(onWizardDigits);
     s_digitsMenu.init(mstr(STR_DIGITS), digitsItems, 3);
     ui::ViewStack::instance().push(&s_digitsMenu);
 }
@@ -806,9 +804,7 @@ static void onWizardDigits(uint16_t index, void* userData) {
         {"SHA256", 0, false, nullptr},
         {"SHA512", 0, false, nullptr}
     };
-    if (!s_viewsInitialized) {
-        s_algoMenu.setOnSelect(onWizardAlgo);
-    }
+    s_algoMenu.setOnSelect(onWizardAlgo);
     s_algoMenu.init(mstr(STR_ALGORITHM), algoItems, 3);
     ui::ViewStack::instance().push(&s_algoMenu);
 }
@@ -826,9 +822,7 @@ static void onWizardAlgo(uint16_t index, void* userData) {
         {"30s", 0, false, nullptr},
         {"60s", 0, false, nullptr}
     };
-    if (!s_viewsInitialized) {
-        s_periodMenu.setOnSelect(onWizardPeriod);
-    }
+    s_periodMenu.setOnSelect(onWizardPeriod);
     s_periodMenu.init(mstr(STR_PERIOD), periodItems, 2);
     ui::ViewStack::instance().push(&s_periodMenu);
 }

@@ -87,6 +87,24 @@ using GattReadCallback = std::function<int(uint16_t connHandle, uint16_t attrHan
                                             uint8_t* buf, uint16_t* len)>;
 
 /**
+ * GATT descriptor type identifiers used by GattDescriptor.kind
+ */
+enum class GattDescriptorKind : uint8_t {
+    NONE = 0,
+    REPORT_REFERENCE = 1,   // 0x2908 - HID Report Reference (2 bytes: reportId, reportType)
+};
+
+/**
+ * GATT descriptor definition attached to a characteristic.
+ * Only well-known descriptors are modeled; arbitrary descriptors are not supported.
+ */
+struct GattDescriptor {
+    GattDescriptorKind kind;
+    uint8_t data[4];           // Descriptor value bytes
+    uint8_t dataLen;           // Number of valid bytes in data
+};
+
+/**
  * GATT characteristic definition for service registration
  */
 struct GattCharacteristic {
@@ -96,6 +114,8 @@ struct GattCharacteristic {
     uint16_t* valueHandle;     // Output: handle assigned by stack
     GattWriteCallback onWrite;
     GattReadCallback onRead;
+    const GattDescriptor* descriptors = nullptr;  // Optional descriptor list
+    uint8_t numDescriptors = 0;
 };
 
 /**
@@ -114,6 +134,13 @@ struct GattServiceDef {
 class IBluetoothController : public core::IService {
 public:
     virtual ~IBluetoothController() = default;
+
+    /**
+     * Opaque listener token returned by add*Callback() methods.
+     * Pass to the matching remove*Callback() to unregister.
+     */
+    using ListenerToken = uint16_t;
+    static constexpr ListenerToken INVALID_LISTENER = 0xFFFF;
 
     // === Power Control ===
 
@@ -284,7 +311,24 @@ public:
     using NumericComparisonCallback = std::function<void(uint16_t connHandle, uint32_t passkey)>;
 
     /**
-     * Set callback for numeric comparison during pairing
+     * Register a numeric-comparison pairing callback.
+     * Multiple listeners are supported. Only the first listener that calls
+     * respondToNumericComparison() will succeed; later responses are no-ops.
+     * \return Token usable with removeNumericComparisonCallback(), or INVALID_LISTENER on overflow.
+     */
+    virtual ListenerToken addNumericComparisonCallback(NumericComparisonCallback cb) {
+        (void)cb;
+        return INVALID_LISTENER;
+    }
+
+    /**
+     * Unregister a numeric-comparison callback previously added via add*().
+     */
+    virtual void removeNumericComparisonCallback(ListenerToken token) { (void)token; }
+
+    /**
+     * Legacy single-listener setter retained for source compatibility.
+     * Equivalent to calling addNumericComparisonCallback() on a freshly cleared list.
      */
     virtual void setNumericComparisonCallback(NumericComparisonCallback cb) { (void)cb; }
 
@@ -305,14 +349,33 @@ public:
     /**
      * Register a callback for device connection events.
      * Multiple callbacks are supported (up to 4).
+     * \return Token usable with removeConnectionCallback(), or INVALID_LISTENER on overflow.
      */
-    virtual void addConnectionCallback(ConnectionCallback cb) { (void)cb; }
+    virtual ListenerToken addConnectionCallback(ConnectionCallback cb) { (void)cb; return INVALID_LISTENER; }
 
     /**
      * Register a callback for device disconnection events.
      * Multiple callbacks are supported (up to 4).
+     * \return Token usable with removeDisconnectionCallback(), or INVALID_LISTENER on overflow.
      */
-    virtual void addDisconnectionCallback(DisconnectionCallback cb) { (void)cb; }
+    virtual ListenerToken addDisconnectionCallback(DisconnectionCallback cb) { (void)cb; return INVALID_LISTENER; }
+
+    /**
+     * Unregister a previously added connection callback.
+     */
+    virtual void removeConnectionCallback(ListenerToken token) { (void)token; }
+
+    /**
+     * Unregister a previously added disconnection callback.
+     */
+    virtual void removeDisconnectionCallback(ListenerToken token) { (void)token; }
+
+    // === Bond Management ===
+
+    /**
+     * Erase all bonded peer information from the bond store.
+     */
+    virtual void clearAllBonds() {}
 
     // === GATT Server ===
 
@@ -483,6 +546,33 @@ public:
                                                        uint16_t attrHandle,
                                                        int status)>;
 
+    /**
+     * Multi-listener registration for GATT client events.
+     * Each module should call removeXxx() in its deinit to avoid stale callbacks.
+     * \return Token for removeXxx(), or INVALID_LISTENER on overflow.
+     */
+    virtual ListenerToken addServiceDiscoveryCallback(ServiceDiscoveryCallback cb) {
+        (void)cb; return INVALID_LISTENER;
+    }
+    virtual ListenerToken addCharacteristicReadCallback(CharacteristicReadCallback cb) {
+        (void)cb; return INVALID_LISTENER;
+    }
+    virtual ListenerToken addNotificationCallback(NotificationCallback cb) {
+        (void)cb; return INVALID_LISTENER;
+    }
+    virtual ListenerToken addWriteCompleteCallback(WriteCompleteCallback cb) {
+        (void)cb; return INVALID_LISTENER;
+    }
+
+    virtual void removeServiceDiscoveryCallback(ListenerToken token) { (void)token; }
+    virtual void removeCharacteristicReadCallback(ListenerToken token) { (void)token; }
+    virtual void removeNotificationCallback(ListenerToken token) { (void)token; }
+    virtual void removeWriteCompleteCallback(ListenerToken token) { (void)token; }
+
+    /**
+     * Legacy single-listener setters retained for source compatibility.
+     * Equivalent to clearing all listeners and then add*Callback(cb).
+     */
     virtual void setServiceDiscoveryCallback(ServiceDiscoveryCallback cb) { (void)cb; }
     virtual void setCharacteristicReadCallback(CharacteristicReadCallback cb) { (void)cb; }
     virtual void setNotificationCallback(NotificationCallback cb) { (void)cb; }

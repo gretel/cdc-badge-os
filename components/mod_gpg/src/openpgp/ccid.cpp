@@ -52,7 +52,7 @@ const size_t CCID_DESCRIPTOR_LEN = sizeof(CCID_DESCRIPTOR);
 /**
  * \brief ATR (Answer To Reset) for CDC Badge OpenPGP card.
  *
- * Based on pico-openpgp ATR layout (T=1 protocol, OpenPGP 3.x compatible).
+ * T=1 protocol layout, OpenPGP 3.x compatible.
  */
 static const uint8_t ATR[] = {
     0x3B,                   // TS: Direct convention
@@ -67,7 +67,7 @@ static const uint8_t ATR[] = {
     0x03,                   // TA4: Class indicator
     // 10 Historical bytes (OpenPGP format)
     0x00, 0x31, 0xF5, 0x73, 0xC0, 0x01, 0x60, 0x00, 0x90, 0x00,
-    0x1C                    // TCK: checksum from pico-openpgp
+    0x1C                    // TCK: checksum
 };
 
 static bool initialized = false;
@@ -78,7 +78,11 @@ static uint8_t current_seq = 0;
  * \brief Initializes CCID transport and backing OpenPGP applet.
  * \return `true` if initialization succeeded.
  */
+extern "C" void ccid_driver_link_anchor(void);
+
 bool ccid_init(void) {
+    ccid_driver_link_anchor();
+
     if (!openpgp_init()) {
         LOG_E(TAG, "Failed to initialize OpenPGP");
         return false;
@@ -164,12 +168,8 @@ static void ccid_log_hex_data(const char* prefix, const uint8_t* data, size_t le
  */
 int ccid_process_message(const uint8_t *msg, size_t msg_len,
                          uint8_t *resp, size_t resp_max) {
-    LOG_I(TAG, "========================================");
-    LOG_I(TAG, "ccid_process_message: msg_len=%zu resp_max=%zu", msg_len, resp_max);
-
     if (!msg || msg_len < CCID_HEADER_SIZE || !resp || resp_max < CCID_HEADER_SIZE) {
-        LOG_E(TAG, "Invalid parameters: msg=%p msg_len=%zu resp=%p resp_max=%zu",
-                 msg, msg_len, resp, resp_max);
+        LOG_E(TAG, "Invalid parameters: msg_len=%zu resp_max=%zu", msg_len, resp_max);
         return -1;
     }
 
@@ -177,61 +177,46 @@ int ccid_process_message(const uint8_t *msg, size_t msg_len,
     current_slot = hdr->bSlot;
     current_seq = hdr->bSeq;
 
-    LOG_I(TAG, "CCID Header:");
-    LOG_I(TAG, "  bMessageType: 0x%02X", hdr->bMessageType);
-    LOG_I(TAG, "  dwLength:     %u", hdr->dwLength);
-    LOG_I(TAG, "  bSlot:        %d", hdr->bSlot);
-    LOG_I(TAG, "  bSeq:         %d", hdr->bSeq);
-    LOG_I(TAG, "  bSpecific:    %02X %02X %02X", hdr->bSpecific[0], hdr->bSpecific[1], hdr->bSpecific[2]);
-
     uint8_t status = CCID_ICC_PRESENT_ACTIVE;
     uint8_t error = 0;
     int result_len = 0;
 
     switch (hdr->bMessageType) {
         case CCID_PC_TO_RDR_ICC_POWER_ON: {
-            LOG_I(TAG, ">>> Processing: ICC_POWER_ON (0x62)");
             size_t atr_len;
             const uint8_t *atr = ccid_get_atr(&atr_len);
-
-            LOG_I(TAG, "  Returning ATR (%zu bytes)", atr_len);
-            ccid_log_hex_data("  ATR", atr, atr_len);
-
             ccid_build_header(resp, CCID_RDR_TO_PC_DATA_BLOCK, atr_len,
                              current_slot, current_seq, status, error);
             memcpy(resp + CCID_HEADER_SIZE, atr, atr_len);
             result_len = CCID_HEADER_SIZE + atr_len;
-            LOG_I(TAG, "  Response: DATA_BLOCK (0x80), len=%d", result_len);
             break;
         }
 
         case CCID_PC_TO_RDR_ICC_POWER_OFF: {
-            LOG_I(TAG, ">>> Processing: ICC_POWER_OFF (0x63)");
             status = CCID_ICC_PRESENT_INACTIVE;
             ccid_build_header(resp, CCID_RDR_TO_PC_SLOT_STATUS, 0,
                              current_slot, current_seq, status, error);
             result_len = CCID_HEADER_SIZE;
-            LOG_I(TAG, "  Response: SLOT_STATUS (0x81), status=INACTIVE, len=%d", result_len);
             break;
         }
 
         case CCID_PC_TO_RDR_GET_SLOT_STATUS: {
-            LOG_I(TAG, ">>> Processing: GET_SLOT_STATUS (0x65)");
             ccid_build_header(resp, CCID_RDR_TO_PC_SLOT_STATUS, 0,
                              current_slot, current_seq, status, error);
             result_len = CCID_HEADER_SIZE;
-            LOG_I(TAG, "  Response: SLOT_STATUS (0x81), status=ACTIVE, len=%d", result_len);
             break;
         }
 
         case CCID_PC_TO_RDR_XFR_BLOCK: {
-            LOG_I(TAG, ">>> Processing: XFR_BLOCK (0x6F) - APDU exchange");
             uint32_t apdu_len = hdr->dwLength;
-            LOG_I(TAG, "  APDU length: %u", apdu_len);
 
-            if (msg_len < CCID_HEADER_SIZE + apdu_len) {
-                LOG_E(TAG, "  ERROR: Message too short for APDU (need %zu, have %zu)",
-                         CCID_HEADER_SIZE + apdu_len, msg_len);
+            // Subtractive comparison prevents integer overflow when dwLength is
+            // attacker-controlled.
+            if (msg_len < CCID_HEADER_SIZE ||
+                apdu_len > (uint32_t)(msg_len - CCID_HEADER_SIZE) ||
+                apdu_len > (uint32_t)(resp_max - CCID_HEADER_SIZE)) {
+                LOG_E(TAG, "XFR length invalid (apdu=%u msg=%zu rmax=%zu)",
+                      apdu_len, msg_len, resp_max);
                 error = CCID_ERROR_XFR_OVERRUN;
                 status = CCID_CMD_STATUS_FAILED;
                 ccid_build_header(resp, CCID_RDR_TO_PC_DATA_BLOCK, 0,
@@ -241,36 +226,35 @@ int ccid_process_message(const uint8_t *msg, size_t msg_len,
             }
 
             const uint8_t *apdu_data = msg + CCID_HEADER_SIZE;
-            ccid_log_hex_data("  APDU C-", apdu_data, apdu_len);
-
-            // Process APDU through OpenPGP application
             uint8_t *resp_data = resp + CCID_HEADER_SIZE;
             size_t resp_data_max = resp_max - CCID_HEADER_SIZE;
 
-            LOG_I(TAG, "  Calling openpgp_process_apdu...");
             int resp_len = openpgp_process_apdu(apdu_data, apdu_len,
                                                 resp_data, resp_data_max);
-            LOG_I(TAG, "  openpgp_process_apdu returned: %d", resp_len);
 
             if (resp_len < 0) {
-                LOG_E(TAG, "  ERROR: APDU processing failed");
                 error = CCID_ERROR_HW_ERROR;
                 status = CCID_CMD_STATUS_FAILED;
                 ccid_build_header(resp, CCID_RDR_TO_PC_DATA_BLOCK, 0,
                                  current_slot, current_seq, status, error);
                 result_len = CCID_HEADER_SIZE;
             } else {
-                ccid_log_hex_data("  APDU R-", resp_data, resp_len);
                 ccid_build_header(resp, CCID_RDR_TO_PC_DATA_BLOCK, resp_len,
                                  current_slot, current_seq, status, error);
                 result_len = CCID_HEADER_SIZE + resp_len;
             }
-            LOG_I(TAG, "  Response: DATA_BLOCK (0x80), len=%d", result_len);
+
+            // One-line summary per APDU. INS = byte 1 of the APDU, SW = last two response bytes.
+            uint16_t sw = (resp_len >= 2)
+                ? ((uint16_t)resp_data[resp_len - 2] << 8) | resp_data[resp_len - 1]
+                : 0;
+            LOG_I(TAG, "XFR seq=%u INS=0x%02X in=%uB out=%dB sw=%04X",
+                  hdr->bSeq, apdu_len >= 2 ? apdu_data[1] : 0,
+                  apdu_len, resp_len, sw);
             break;
         }
 
         case CCID_PC_TO_RDR_GET_PARAMETERS: {
-            LOG_I(TAG, ">>> Processing: GET_PARAMETERS (0x6C)");
             uint8_t params[] = {
                 0x01,  // bmFindexDindex
                 0x00,  // bmTCCKST1
@@ -282,40 +266,33 @@ int ccid_process_message(const uint8_t *msg, size_t msg_len,
             };
             ccid_build_header(resp, CCID_RDR_TO_PC_PARAMETERS, sizeof(params),
                              current_slot, current_seq, status, error);
-            resp[9] = 0x01;  // Protocol T=1
+            resp[9] = 0x01;  // bProtocolNum: T=1
             memcpy(resp + CCID_HEADER_SIZE, params, sizeof(params));
             result_len = CCID_HEADER_SIZE + sizeof(params);
-            LOG_I(TAG, "  Response: PARAMETERS (0x82), T=1, len=%d", result_len);
             break;
         }
 
         case CCID_PC_TO_RDR_RESET_PARAMETERS: {
-            LOG_I(TAG, ">>> Processing: RESET_PARAMETERS (0x6D)");
             uint8_t params[] = {
                 0x01, 0x00, 0x00, 0xFE, 0x00, 0xFE, 0x00
             };
             ccid_build_header(resp, CCID_RDR_TO_PC_PARAMETERS, sizeof(params),
                              current_slot, current_seq, status, error);
-            resp[9] = 0x01;
+            resp[9] = 0x01;  // bProtocolNum: T=1
             memcpy(resp + CCID_HEADER_SIZE, params, sizeof(params));
             result_len = CCID_HEADER_SIZE + sizeof(params);
-            LOG_I(TAG, "  Response: PARAMETERS (0x82), T=1, len=%d", result_len);
             break;
         }
 
         default:
-            LOG_W(TAG, ">>> UNKNOWN message type: 0x%02X", hdr->bMessageType);
+            LOG_W(TAG, "Unknown CCID type 0x%02X seq=%u", hdr->bMessageType, hdr->bSeq);
             error = CCID_ERROR_CMD_NOT_SUPPORTED;
             status = CCID_CMD_STATUS_FAILED;
             ccid_build_header(resp, CCID_RDR_TO_PC_SLOT_STATUS, 0,
                              current_slot, current_seq, status, error);
             result_len = CCID_HEADER_SIZE;
-            LOG_I(TAG, "  Response: SLOT_STATUS (0x81), error=CMD_NOT_SUPPORTED, len=%d", result_len);
             break;
     }
 
-    ccid_log_hex_data("Response header", resp, 10);
-    LOG_I(TAG, "ccid_process_message returning: %d", result_len);
-    LOG_I(TAG, "========================================");
     return result_len;
 }

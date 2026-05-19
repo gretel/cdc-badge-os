@@ -70,8 +70,13 @@ void SystemLock::enforceIfLocked() {
         handler(reason, detail);
     }
 
+    // Give the UI handler time to drive a full e-paper refresh (~1 s) and the
+    // CDC / UART transports time to drain the lockdown log entries before
+    // power is cut. Other tasks see isLocked()==true and are expected to
+    // drop any new input events for the duration.
     console_flush();
-    vTaskDelay(pdMS_TO_TICKS(200));
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    console_flush();
 
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     esp_deep_sleep_start();

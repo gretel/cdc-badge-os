@@ -52,8 +52,33 @@ public:
     void disconnect();
     bool isConnected() const;
 
-    // NTP sync (connects if needed, disconnects if it connected)
-    bool syncNtp();
+    /**
+     * \brief Ensures the device is connected to WiFi and optionally syncs
+     *        time, leaving the connection up for the caller to use.
+     *
+     * Idempotent: if already connected, returns true after triggering an NTP
+     * sync only when the system clock has not been set yet.
+     *
+     * The caller owns the lifetime of the connection and must call
+     * \ref disconnect() when done. There is no auto-shutdown.
+     *
+     * \return `true` if WiFi is connected on return.
+     */
+    bool ensureConnected();
+
+    /**
+     * \brief Synchronizes system time via NTP.
+     *
+     * When `disconnectAfter` is `true` (default), the function reproduces the
+     * legacy "connect, sync, disconnect" pattern used for one-shot time
+     * fetches. When `false`, the caller is expected to manage the WiFi
+     * lifetime; the function will reuse an active connection or open one
+     * without tearing it down on return.
+     *
+     * If the RTC reports an already-valid time, the function returns `true`
+     * without contacting any NTP server.
+     */
+    bool syncNtp(bool disconnectAfter = true);
 
     // Helper: IP validation
     static bool isValidIpAddress(const char* ip);

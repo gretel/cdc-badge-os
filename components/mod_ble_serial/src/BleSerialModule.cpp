@@ -10,7 +10,6 @@
 #include "cdc_ui/I18n.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_views/ToastView.h"
-#include "cdc_views/ConfirmView.h"
 #include "cdc_log.h"
 #include "nvs.h"
 #include <cstring>
@@ -112,49 +111,12 @@ void BleSerialModule::unregisterConsoleHooks() {
     LOG_I(TAG, "Console hooks unregistered");
 }
 
-/** \brief Pairing-confirmation UI callbacks. */
-
 /**
- * \brief Registers numeric-comparison pairing prompt callback.
+ * \brief Pairing confirmation is now handled by AppUi via the shared
+ *        numeric-comparison callback. This module no longer registers its own
+ *        prompt so that callbacks do not clobber one another.
  */
 void BleSerialModule::registerPairingCallback() {
-    auto* ble = hal::getBluetoothControllerInstance();
-    if (!ble) return;
-
-    ble->setNumericComparisonCallback([](uint16_t connHandle, uint32_t passkey) {
-        auto& self = BleSerialModule::instance();
-        self.pairingConnHandle_ = connHandle;
-
-        char msg[48];
-        snprintf(msg, sizeof(msg), "BLE Pairing?\n%06lu", (unsigned long)passkey);
-
-        ui::showConfirm(msg, onPairingConfirm, onPairingReject,
-                        ui::ConfirmView::Icon::QUESTION, &self);
-    });
-}
-
-/**
- * \brief Confirms pending BLE pairing request.
- * \param userData Module instance pointer.
- */
-void BleSerialModule::onPairingConfirm(void* userData) {
-    auto* self = static_cast<BleSerialModule*>(userData);
-    auto* ble = hal::getBluetoothControllerInstance();
-    if (ble && self) {
-        ble->respondToNumericComparison(self->pairingConnHandle_, true);
-    }
-}
-
-/**
- * \brief Rejects pending BLE pairing request.
- * \param userData Module instance pointer.
- */
-void BleSerialModule::onPairingReject(void* userData) {
-    auto* self = static_cast<BleSerialModule*>(userData);
-    auto* ble = hal::getBluetoothControllerInstance();
-    if (ble && self) {
-        ble->respondToNumericComparison(self->pairingConnHandle_, false);
-    }
 }
 
 /** \brief Persistent settings helpers. */

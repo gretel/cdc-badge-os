@@ -357,11 +357,19 @@ void Esp32SleepController::invokeCallbacks(SleepCallbackEntry* callbacks, size_t
  * \brief Loads persisted light-sleep interval from NVS.
  */
 void Esp32SleepController::loadFromNvs() {
+    static constexpr uint32_t MIN_INTERVAL_S = 10;
+    static constexpr uint32_t MAX_INTERVAL_S = 86400;
+
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
     if (err == ESP_OK) {
         uint32_t interval = 0;
         if (nvs_get_u32(handle, NVS_KEY_INTERVAL, &interval) == ESP_OK) {
+            if (interval < MIN_INTERVAL_S) {
+                interval = MIN_INTERVAL_S;
+            } else if (interval > MAX_INTERVAL_S) {
+                interval = MAX_INTERVAL_S;
+            }
             lightSleepIntervalS_ = interval;
         }
         nvs_close(handle);

@@ -36,8 +36,10 @@ namespace cdc::ui {
  */
 void ContextMenuView::init(const char* title, const ContextMenuItem* items, uint8_t count) {
     title_ = title;
-    items_ = items;
     itemCount_ = count > MAX_ITEMS ? MAX_ITEMS : count;
+    for (uint8_t i = 0; i < itemCount_; i++) {
+        items_[i] = items[i];
+    }
     selection_ = 0;
     scrollPos_ = 0;
     dirty_ = true;
@@ -85,7 +87,7 @@ void ContextMenuView::navigate(bool down) {
  * \return void
  */
 void ContextMenuView::select() {
-    if (items_ && selection_ < itemCount_) {
+    if (selection_ < itemCount_) {
         const ContextMenuItem& item = items_[selection_];
         LOG_D(TAG, "select: item='%s'", item.label ? item.label : "(null)");
 

@@ -8,13 +8,13 @@
 #include "mod_fido2/fido2_storage.h"
 #include "mod_fido2/fido2_common.h"
 #include "cdc_hal/ISecureElement.h"
+#include "cdc_core/Bytes.h"
 #include "cdc_log.h"
 #include <mbedtls/sha256.h>
 #include <esp_attr.h>
 #include <string.h>
 #include <stdio.h>
 
-using cdc::mod_fido2::get_se;
 using cdc::mod_fido2::sha256;
 
 static const char* TAG = "U2F";
@@ -83,7 +83,7 @@ static uint8_t* encode_der_integer(uint8_t *p, const uint8_t *mpi, size_t len) {
  */
 static bool u2f_attest_sign(const uint8_t *data, size_t data_len,
                              uint8_t *signature, uint8_t *sig_len) {
-    auto* se = get_se();
+    auto* se = cdc::hal::getSecureElementInstance();
     if (!se) {
         return false;
     }
@@ -126,7 +126,7 @@ bool u2f_init_attestation(void) {
 
     LOG_I(TAG, "Initializing attestation...");
 
-    auto* se = get_se();
+    auto* se = cdc::hal::getSecureElementInstance();
     if (!se) {
         return false;
     }
@@ -458,7 +458,7 @@ static uint16_t u2f_register(const uint8_t *challenge, const uint8_t *applicatio
         LOG_I(TAG, "Dummy: user touched - generating response");
         uint8_t dummy_cred[U2F_KEY_HANDLE_SIZE];
         uint8_t dummy_pubkey[64];
-        auto* se = get_se();
+        auto* se = cdc::hal::getSecureElementInstance();
         if (!se || !se->getRandom(dummy_cred, U2F_KEY_HANDLE_SIZE) ||
             !se->getRandom(dummy_pubkey, 64)) {
             LOG_E(TAG, "Failed to get random for dummy response");
@@ -668,6 +668,9 @@ static uint16_t u2f_authenticate(uint8_t p1, const uint8_t *challenge,
 
     // Increment counter
     uint32_t counter = fido2_storage_increment_sign_count(slot);
+    if (counter == 0) {
+        return u2f_response_error(response, U2F_SW_CONDITIONS_NOT_SATISFIED);
+    }
     fido2_increment_auth_counter();
 
     // Build authentication response:
@@ -678,10 +681,8 @@ static uint16_t u2f_authenticate(uint8_t p1, const uint8_t *challenge,
     response[offset++] = 0x01;  // UP=1
 
     // Counter (big-endian)
-    response[offset++] = (counter >> 24) & 0xFF;
-    response[offset++] = (counter >> 16) & 0xFF;
-    response[offset++] = (counter >> 8) & 0xFF;
-    response[offset++] = counter & 0xFF;
+    cdc::core::writeBe32(&response[offset], counter);
+    offset += 4;
 
     // Build data to sign: appParam || userPresence || counter || challenge
     uint8_t to_sign[32 + 1 + 4 + 32];
@@ -690,10 +691,8 @@ static uint16_t u2f_authenticate(uint8_t p1, const uint8_t *challenge,
     memcpy(to_sign + to_sign_len, application, 32);
     to_sign_len += 32;
     to_sign[to_sign_len++] = 0x01;  // User presence
-    to_sign[to_sign_len++] = (counter >> 24) & 0xFF;
-    to_sign[to_sign_len++] = (counter >> 16) & 0xFF;
-    to_sign[to_sign_len++] = (counter >> 8) & 0xFF;
-    to_sign[to_sign_len++] = counter & 0xFF;
+    cdc::core::writeBe32(&to_sign[to_sign_len], counter);
+    to_sign_len += 4;
     memcpy(to_sign + to_sign_len, challenge, 32);
     to_sign_len += 32;
 

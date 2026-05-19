@@ -53,6 +53,15 @@ public:
     void onHostSuspend();
     void onHostResume();
 
+    /**
+     * Send a multi-key HID report (up to 6 simultaneous keycodes).
+     * \param modifier Modifier bitmask (GattHid Modifier flags).
+     * \param keycodes Array of up to 6 keycodes; unused slots must be 0.
+     * \param numKeys Number of valid entries in keycodes (1..6).
+     * \return true if notification was sent.
+     */
+    bool sendKeyReport(uint8_t modifier, const uint8_t* keycodes, uint8_t numKeys);
+
 private:
     BleHidKeyboard() = default;
 

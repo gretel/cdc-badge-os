@@ -286,6 +286,13 @@ uint32_t fido2_storage_counter_get(void);
  */
 bool fido2_storage_counter_increment(void);
 
+/**
+ * No-op flush kept for API stability; per-increment path commits.
+ *
+ * @return true.
+ */
+bool fido2_storage_counter_flush(void);
+
 #ifdef __cplusplus
 }
 #endif

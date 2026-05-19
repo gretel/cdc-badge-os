@@ -177,6 +177,8 @@ enum class StringId : uint16_t {
     HINT_FIELD_NAV,
     HINT_DATE_INPUT,
     HINT_TIME_INPUT,
+    HINT_PASSWORD_HIDDEN,
+    HINT_PASSWORD_REVEALED,
 
     // === QR ===
     QR_ERROR,

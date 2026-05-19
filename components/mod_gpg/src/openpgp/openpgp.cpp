@@ -8,16 +8,25 @@
 
 #include "mod_gpg/openpgp/openpgp.h"
 #include "mod_gpg/openpgp/apdu.h"
+#include "mod_gpg/openpgp/algo_attr.h"
 #include "mod_gpg/openpgp/constants.h"
+#include "cdc_log.h"
 #include "mod_gpg/gpg.h"
 #include "mod_gpg/GpgStorage.h"
 #include "ecdh.h"
-#include "mod_gpg/pin_storage.h"
+#include "cdc_core/pin_storage_c.h"
+#include "cdc_core/PinManager.h"
 #include "cdc_hal/ISecureElement.h"
 #include <mbedtls/platform_util.h>
+#include <mbedtls/sha256.h>
+#include <mbedtls/aes.h>
+#include <mbedtls/ecp.h>
+#include <mbedtls/ecdsa.h>
+#include <mbedtls/bignum.h>
+#include <esp_attr.h>
 #include <string.h>
 #include <time.h>
-#include <esp_log.h>
+#include "cdc_log.h"
 #include <esp_mac.h>       // For esp_efuse_mac_get_default()
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -64,10 +73,29 @@ static bool se_ecc_key_read(uint8_t slot, uint8_t* pubkey, size_t max_len, uint8
  */
 static bool se_ecc_key_generate(uint8_t slot, uint8_t curve) {
     auto* se = get_se();
-    if (!se) return false;
+    if (!se) {
+        LOG_E(TAG, "se_ecc_key_generate: SE not available (slot=%u)", slot);
+        return false;
+    }
     cdc::hal::EccCurve c = (curve == CDC_CURVE_ED25519) ? cdc::hal::EccCurve::ED25519
                                                         : cdc::hal::EccCurve::P256;
-    return se->eccGenerate(slot, c) == cdc::hal::SeResult::OK;
+    // Per TROPIC01: lt_ecc_key_generate fails with SLOT_OCCUPIED if the slot
+    // already holds material. A previous (incomplete) generation, or a
+    // GPG_RESET that did not propagate to the SE, leaves the slot used and
+    // the next attempt returns SW=6F00 to the host. Pre-wipe defensively.
+    cdc::hal::SeResult res = se->eccGenerate(slot, c);
+    if (res != cdc::hal::SeResult::OK) {
+        LOG_W(TAG, "se_ecc_key_generate: slot %u initial fail (SeResult=%d), deleting and retrying",
+              slot, static_cast<int>(res));
+        se->eccDelete(slot);
+        res = se->eccGenerate(slot, c);
+    }
+    if (res != cdc::hal::SeResult::OK) {
+        LOG_E(TAG, "se_ecc_key_generate(slot=%u curve=%u) failed: SeResult=%d",
+                 slot, curve, static_cast<int>(res));
+        return false;
+    }
+    return true;
 }
 
 /**
@@ -141,6 +169,123 @@ static bool pw3_verified = false;
 static uint32_t sig_count = 0;
 
 /**
+ * \brief Resetting Code (RC) — optional per OpenPGP 3.4.1 §4.3.2. When set,
+ * the host can unblock PW1 with the RC instead of PW3 (RESET RETRY COUNTER
+ * with P1=0x00). We persist the configured RC bytes plus a separate retry
+ * counter in NVS.
+ *
+ * Storage rationale: the existing PW1/PW3 path stores hashes inside the
+ * TROPIC01 R-Memory; allocating extra slots there for RC is deferred until
+ * the next slot-map revision. Plain NVS bytes are equivalent to plaintext
+ * Yubikey behaviour and unlock the same workflow.
+ */
+#define OPENPGP_RC_MIN_LEN 8
+static constexpr size_t RC_SALT_SIZE = 16;
+static constexpr size_t RC_HASH_SIZE = 32;
+static constexpr size_t RC_KDF_TOTAL_BYTES = 100000;
+static uint8_t s_rc_salt[RC_SALT_SIZE] = {0};
+static uint8_t s_rc_hash[RC_HASH_SIZE] = {0};
+static uint8_t s_rc_len = 0;
+static uint8_t s_rc_retries = 3;
+
+/**
+ * \brief Iterated-salted SHA-256 over salt||rc for resetting-code storage.
+ *        Same construction as PinManager::computeKdfHash (OpenPGP S2K).
+ */
+static bool compute_rc_hash(const uint8_t* rc, size_t rc_len,
+                            const uint8_t* salt, uint8_t* hash_out) {
+    if (!rc || !salt || !hash_out || rc_len == 0 || rc_len > OPENPGP_PIN_MAX_LEN) {
+        return false;
+    }
+    uint8_t buffer[RC_SALT_SIZE + OPENPGP_PIN_MAX_LEN];
+    memcpy(buffer, salt, RC_SALT_SIZE);
+    memcpy(buffer + RC_SALT_SIZE, rc, rc_len);
+    const size_t combined = RC_SALT_SIZE + rc_len;
+
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    if (mbedtls_sha256_starts(&ctx, 0) != 0) {
+        mbedtls_sha256_free(&ctx);
+        mbedtls_platform_zeroize(buffer, sizeof(buffer));
+        return false;
+    }
+    size_t processed = 0;
+    while (processed < RC_KDF_TOTAL_BYTES) {
+        const size_t chunk = (RC_KDF_TOTAL_BYTES - processed < combined)
+                                 ? (RC_KDF_TOTAL_BYTES - processed)
+                                 : combined;
+        if (mbedtls_sha256_update(&ctx, buffer, chunk) != 0) {
+            mbedtls_sha256_free(&ctx);
+            mbedtls_platform_zeroize(buffer, sizeof(buffer));
+            return false;
+        }
+        processed += chunk;
+    }
+    mbedtls_sha256_finish(&ctx, hash_out);
+    mbedtls_sha256_free(&ctx);
+    mbedtls_platform_zeroize(buffer, sizeof(buffer));
+    return true;
+}
+
+/**
+ * \brief Host-selected ECC curve per key role. DEC is fixed to P-256 because
+ * the TROPIC01 cannot perform ECDH natively and the firmware only carries a
+ * software P-256 ECDH path in `ecdh.cpp`. SIG and AUT default to Ed25519 (the
+ * project's preferred curve for signing) and can be flipped to P-256 via
+ * PUT DATA C1 / C3 per OpenPGP 3.4.1 §4.4.3.7-9.
+ */
+static uint8_t selected_curve_sig = CDC_CURVE_ED25519;
+static uint8_t selected_curve_aut = CDC_CURVE_ED25519;
+
+/**
+ * \brief Card lifecycle state per OpenPGP 3.4.1 §7.2.18.
+ *
+ * `false` = operational, `true` = terminated. While terminated the dispatcher
+ * accepts only SELECT and ACTIVATE FILE; everything else returns
+ * SW_FILE_TERMINATED (0x6285). ACTIVATE FILE wipes keys, DOs and PINs back to
+ * factory defaults.
+ */
+static bool card_terminated = false;
+
+/**
+ * \brief Buffered remainder of an APDU response that did not fit into the
+ * caller-supplied Le window. Drained one chunk at a time via GET RESPONSE
+ * (INS 0xC0) per ISO 7816-4 §5.3.4. Lifetime is bound to the next APDU on
+ * the same logical channel: the buffer is invalidated when any non-GET
+ * RESPONSE command arrives.
+ *
+ * 4 kB cap covers the largest OpenPGP DOs (Cardholder Certificate, Application
+ * Related Data with full key info) without claiming PSRAM.
+ */
+EXT_RAM_BSS_ATTR static uint8_t g_resp_buffer[4096];
+static size_t   g_resp_remaining = 0;
+static size_t   g_resp_pos = 0;
+
+/**
+ * \brief Command-chaining accumulator (ISO 7816-4 §5.1.1).
+ *
+ * The host sets the CLA chaining bit (0x10) on every intermediate APDU and
+ * clears it on the last one. We accumulate the command data here until the
+ * final chunk arrives, then dispatch a single synthetic APDU. Triggered by
+ * gpg key import (RSA / large ECC), large PUT DATA (e.g. cardholder cert),
+ * and PSO:DECIPHER with extended Cipher DOs.
+ */
+EXT_RAM_BSS_ATTR static uint8_t g_chain_buffer[4096];
+static size_t   g_chain_len = 0;
+static bool     g_chain_active = false;
+static uint8_t  g_chain_ins = 0;
+static uint8_t  g_chain_p1 = 0;
+static uint8_t  g_chain_p2 = 0;
+
+static void chain_reset(void) {
+    g_chain_len = 0;
+    g_chain_active = false;
+    g_chain_ins = 0;
+    g_chain_p1 = 0;
+    g_chain_p2 = 0;
+}
+
+/**
  * \brief Session PIN cache for DEC key decryption (temporary after VERIFY for PSO:DECIPHER).
  */
 static char s_session_pin[OPENPGP_PIN_MAX_LEN + 1] = {};
@@ -149,6 +294,42 @@ static char s_session_pin[OPENPGP_PIN_MAX_LEN + 1] = {};
  * \brief NVS namespace used for OpenPGP persistent data.
  */
 #define NVS_NAMESPACE "openpgp"
+#define NVS_STATE_KEY "state"
+
+/**
+ * \brief Single-blob persistent OpenPGP runtime state.
+ *
+ * One nvs_set_blob per save keeps NVS page fragmentation bounded: the
+ * default 20 KB NVS partition is shared with every other module and the
+ * old per-field layout (~21 entries) silently filled up under load.
+ */
+struct __attribute__((packed)) OpenpgpNvsState {
+    uint8_t  schema_version;
+    uint8_t  card_terminated;
+    uint8_t  selected_curve_sig;
+    uint8_t  selected_curve_aut;
+    uint8_t  rc_len;
+    uint8_t  rc_retries;
+    uint8_t  rc_salt[RC_SALT_SIZE];
+    uint8_t  rc_hash[RC_HASH_SIZE];
+    uint32_t sig_count;
+    uint8_t  fingerprint_sig[OPENPGP_FINGERPRINT_SIZE];
+    uint8_t  fingerprint_dec[OPENPGP_FINGERPRINT_SIZE];
+    uint8_t  fingerprint_aut[OPENPGP_FINGERPRINT_SIZE];
+    uint8_t  ca_fp_1[OPENPGP_FINGERPRINT_SIZE];
+    uint8_t  ca_fp_2[OPENPGP_FINGERPRINT_SIZE];
+    uint8_t  ca_fp_3[OPENPGP_FINGERPRINT_SIZE];
+    uint8_t  gen_time_sig[4];
+    uint8_t  gen_time_dec[4];
+    uint8_t  gen_time_aut[4];
+    uint8_t  cardholder_sex;
+    char     cardholder_name[40];
+    char     cardholder_lang[8];
+    char     cardholder_url[64];
+    char     cardholder_login[32];
+};
+
+static constexpr uint8_t OPENPGP_NVS_SCHEMA_V2 = 2;
 
 /**
  * \brief Data object storage buffers (fingerprints and related metadata).
@@ -177,8 +358,8 @@ static uint8_t ca_fp_3[OPENPGP_FINGERPRINT_SIZE] = {0};
 static char cardholder_name[40] = {0};    // "Surname<<Firstname"
 static char cardholder_lang[8] = "en";     // ISO 639-1 language
 static uint8_t cardholder_sex = 0x39;      // '9' = not specified
-static char cardholder_url[128] = {0};     // URL for public key retrieval
-static char cardholder_login[64] = {0};    // Login data
+static char cardholder_url[64] = {0};     // URL for public key retrieval
+static char cardholder_login[32] = {0};   // Login data
 
 /**
  * \brief Historical bytes used in OpenPGP ATR-related data objects.
@@ -226,12 +407,11 @@ static const uint8_t ALGO_ATTR_P256_ECDH[] = {
  * \brief Extended capabilities object per OpenPGP 3.4.1 section 4.2.1.
  */
 static const uint8_t EXT_CAPABILITIES[] = {
-    0x75,       // Flags: SM supported, GET CHALLENGE, Key Import, PW Status changeable,
-                // Private DOs, Algorithm attributes changeable, PSO:DEC with AES
+    0x7D,
     0x00,       // SM Algorithm: none
     0x00, 0x80, // Max GET CHALLENGE length: 128 bytes
     0x08, 0x00, // Max Cardholder Certificate length: 2048 bytes
-    0x00, 0xFF, // Max special DO length: 255 bytes
+    0x01, 0x00, // Max special DO length: 256 bytes
     0x00,       // PIN block 2 format not supported
     0x00,       // MSE for key selection not supported
 };
@@ -319,36 +499,18 @@ typedef enum {
  * \return Pointer to the selected algorithm-attribute byte array.
  */
 static const uint8_t* get_algo_attr(key_type_t key_type, size_t *len) {
-    uint8_t slot = gpg_storage_sig_slot();
-    switch (key_type) {
-        case KEY_TYPE_SIG: slot = gpg_storage_sig_slot(); break;
-        case KEY_TYPE_DEC: slot = gpg_storage_dec_slot(); break;
-        case KEY_TYPE_AUT: slot = gpg_storage_aut_slot(); break;
-        default:           slot = gpg_storage_sig_slot(); break;
+    // DEC is fixed to P-256 ECDH (software path); SIG / AUT follow the
+    // currently configured curve which PUT DATA C1 / C3 may override.
+    if (key_type == KEY_TYPE_DEC) {
+        *len = sizeof(ALGO_ATTR_P256_ECDH);
+        return ALGO_ATTR_P256_ECDH;
     }
-
-    // Try to read existing key to get curve
-    uint8_t pubkey[P256_PUBKEY_SIZE];
-    uint8_t curve = CDC_CURVE_P256;  // Default to P-256
-
-    // If key exists, use its curve; otherwise use default
-    if (se_ecc_key_read(slot, pubkey, sizeof(pubkey), &curve)) {
-        // Key exists, curve is now set
-    }
-
-    // Return appropriate algorithm attributes
+    const uint8_t curve = (key_type == KEY_TYPE_AUT) ? selected_curve_aut
+                                                     : selected_curve_sig;
     if (curve == CDC_CURVE_P256) {
-        // P-256: use ECDSA for SIG/AUT, ECDH for DEC
-        if (key_type == KEY_TYPE_DEC) {
-            *len = sizeof(ALGO_ATTR_P256_ECDH);
-            return ALGO_ATTR_P256_ECDH;
-        } else {
-            *len = sizeof(ALGO_ATTR_P256_ECDSA);
-            return ALGO_ATTR_P256_ECDSA;
-        }
+        *len = sizeof(ALGO_ATTR_P256_ECDSA);
+        return ALGO_ATTR_P256_ECDSA;
     }
-
-    // Ed25519 (EdDSA for all - note: DEC should use X25519 but not implemented yet)
     *len = sizeof(ALGO_ATTR_ED25519);
     return ALGO_ATTR_ED25519;
 }
@@ -398,12 +560,12 @@ static int build_do_app_related(uint8_t *buf, size_t buf_max) {
     // C4: PW Status Bytes (retries from TROPIC01 storage)
     // Note: Max lengths limited for practical use on hardware keypad
     uint8_t pw_status[7] = {
-        0x01,       // PW1 valid for multiple signatures
-        32,         // Max length PW1 (practical limit)
-        32,         // Max length RC (Resetting Code)
-        32,         // Max length PW3 (practical limit)
+        0x01,                       // PW1 valid for multiple signatures
+        OPENPGP_PIN_MAX_LEN,        // Max length PW1 (practical limit)
+        OPENPGP_PIN_MAX_LEN,        // Max length RC
+        OPENPGP_PIN_MAX_LEN,        // Max length PW3
         pin_storage_openpgp_pw1_retries(),
-        0,          // RC retries (not implemented)
+        s_rc_len > 0 ? s_rc_retries : static_cast<uint8_t>(0),
         pin_storage_openpgp_pw3_retries()
     };
     discret_len += tlv_build(discret + discret_len, sizeof(discret) - discret_len,
@@ -481,67 +643,119 @@ static int build_do_cardholder(uint8_t *buf, size_t buf_max) {
     return total;
 }
 
+static constexpr uint8_t ATTESTATION_ECC_SLOT = 0;
+static constexpr size_t OPENPGP_STATE_SIG_SIZE = 64;
+
+/**
+ * \brief Verifies the P-256 ECDSA attestation signature over an OpenPGP state
+ *        payload. Same construction as PinManager.
+ */
+static bool verify_state_signature(cdc::hal::ISecureElement* se,
+                                   const uint8_t* payload, size_t payload_len,
+                                   const uint8_t* sig, size_t sig_len) {
+    if (!se || sig_len != OPENPGP_STATE_SIG_SIZE) return false;
+    uint8_t pub_raw[64];
+    cdc::hal::EccCurve curve = cdc::hal::EccCurve::P256;
+    if (se->eccGetPublicKey(ATTESTATION_ECC_SLOT, pub_raw, &curve) != cdc::hal::SeResult::OK) {
+        return false;
+    }
+    if (curve != cdc::hal::EccCurve::P256) return false;
+
+    uint8_t pub_sec1[65];
+    pub_sec1[0] = 0x04;
+    memcpy(pub_sec1 + 1, pub_raw, 64);
+
+    uint8_t hash[32];
+    mbedtls_sha256(payload, payload_len, hash, 0);
+
+    mbedtls_ecp_group grp;
+    mbedtls_ecp_point Q;
+    mbedtls_mpi r, s;
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_ecp_point_init(&Q);
+    mbedtls_mpi_init(&r);
+    mbedtls_mpi_init(&s);
+
+    bool ok = false;
+    do {
+        if (mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1) != 0) break;
+        if (mbedtls_ecp_point_read_binary(&grp, &Q, pub_sec1, sizeof(pub_sec1)) != 0) break;
+        if (mbedtls_mpi_read_binary(&r, sig + 0, 32) != 0) break;
+        if (mbedtls_mpi_read_binary(&s, sig + 32, 32) != 0) break;
+        ok = (mbedtls_ecdsa_verify(&grp, hash, sizeof(hash), &Q, &r, &s) == 0);
+    } while (0);
+
+    mbedtls_mpi_free(&r);
+    mbedtls_mpi_free(&s);
+    mbedtls_ecp_point_free(&Q);
+    mbedtls_ecp_group_free(&grp);
+    return ok;
+}
+
 /**
  * \brief Loads persistent OpenPGP runtime state from NVS.
- * \return void
  */
 static void load_state_from_nvs(void) {
     nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
-        size_t len;
-
-        // Load signature count
-        if (nvs_get_u32(nvs, "sig_count", &sig_count) != ESP_OK) {
-            sig_count = 0;
-        }
-
-        // Load fingerprints
-        len = sizeof(fingerprint_sig);
-        nvs_get_blob(nvs, "fp_sig", fingerprint_sig, &len);
-
-        len = sizeof(fingerprint_dec);
-        nvs_get_blob(nvs, "fp_dec", fingerprint_dec, &len);
-
-        len = sizeof(fingerprint_aut);
-        nvs_get_blob(nvs, "fp_aut", fingerprint_aut, &len);
-
-        // Load CA fingerprints
-        len = sizeof(ca_fp_1);
-        nvs_get_blob(nvs, "ca_fp_1", ca_fp_1, &len);
-
-        len = sizeof(ca_fp_2);
-        nvs_get_blob(nvs, "ca_fp_2", ca_fp_2, &len);
-
-        len = sizeof(ca_fp_3);
-        nvs_get_blob(nvs, "ca_fp_3", ca_fp_3, &len);
-
-        // Load generation times
-        len = sizeof(gen_time_sig);
-        nvs_get_blob(nvs, "gt_sig", gen_time_sig, &len);
-
-        len = sizeof(gen_time_dec);
-        nvs_get_blob(nvs, "gt_dec", gen_time_dec, &len);
-
-        len = sizeof(gen_time_aut);
-        nvs_get_blob(nvs, "gt_aut", gen_time_aut, &len);
-
-        // Load cardholder data
-        len = sizeof(cardholder_name);
-        nvs_get_str(nvs, "ch_name", cardholder_name, &len);
-
-        len = sizeof(cardholder_lang);
-        nvs_get_str(nvs, "ch_lang", cardholder_lang, &len);
-
-        nvs_get_u8(nvs, "ch_sex", &cardholder_sex);
-
-        len = sizeof(cardholder_url);
-        nvs_get_str(nvs, "ch_url", cardholder_url, &len);
-
-        len = sizeof(cardholder_login);
-        nvs_get_str(nvs, "ch_login", cardholder_login, &len);
-
-        nvs_close(nvs);
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) {
+        return;
     }
+
+    constexpr size_t BLOB_SIZE = sizeof(OpenpgpNvsState) + OPENPGP_STATE_SIG_SIZE;
+    uint8_t blob[BLOB_SIZE];
+    size_t len = BLOB_SIZE;
+    esp_err_t err = nvs_get_blob(nvs, NVS_STATE_KEY, blob, &len);
+    nvs_close(nvs);
+
+    if (err != ESP_OK || len != BLOB_SIZE) {
+        return;
+    }
+
+    OpenpgpNvsState state = {};
+    memcpy(&state, blob, sizeof(state));
+    if (state.schema_version != OPENPGP_NVS_SCHEMA_V2) {
+        return;
+    }
+    if (!verify_state_signature(get_se(), blob, sizeof(state),
+                                blob + sizeof(state), OPENPGP_STATE_SIG_SIZE)) {
+        LOG_W(TAG, "OpenPGP state signature invalid - re-initialising");
+        return;
+    }
+
+    card_terminated = state.card_terminated != 0;
+    if (state.selected_curve_sig == CDC_CURVE_P256 ||
+        state.selected_curve_sig == CDC_CURVE_ED25519) {
+        selected_curve_sig = state.selected_curve_sig;
+    }
+    if (state.selected_curve_aut == CDC_CURVE_P256 ||
+        state.selected_curve_aut == CDC_CURVE_ED25519) {
+        selected_curve_aut = state.selected_curve_aut;
+    }
+    if (state.rc_len > 0 && state.rc_len <= OPENPGP_PIN_MAX_LEN) {
+        memcpy(s_rc_salt, state.rc_salt, RC_SALT_SIZE);
+        memcpy(s_rc_hash, state.rc_hash, RC_HASH_SIZE);
+        s_rc_len = state.rc_len;
+    }
+    s_rc_retries = state.rc_retries;
+    sig_count = state.sig_count;
+    memcpy(fingerprint_sig, state.fingerprint_sig, OPENPGP_FINGERPRINT_SIZE);
+    memcpy(fingerprint_dec, state.fingerprint_dec, OPENPGP_FINGERPRINT_SIZE);
+    memcpy(fingerprint_aut, state.fingerprint_aut, OPENPGP_FINGERPRINT_SIZE);
+    memcpy(ca_fp_1, state.ca_fp_1, OPENPGP_FINGERPRINT_SIZE);
+    memcpy(ca_fp_2, state.ca_fp_2, OPENPGP_FINGERPRINT_SIZE);
+    memcpy(ca_fp_3, state.ca_fp_3, OPENPGP_FINGERPRINT_SIZE);
+    memcpy(gen_time_sig, state.gen_time_sig, 4);
+    memcpy(gen_time_dec, state.gen_time_dec, 4);
+    memcpy(gen_time_aut, state.gen_time_aut, 4);
+    cardholder_sex = state.cardholder_sex;
+    memcpy(cardholder_name,  state.cardholder_name,  sizeof(cardholder_name));
+    memcpy(cardholder_lang,  state.cardholder_lang,  sizeof(cardholder_lang));
+    memcpy(cardholder_url,   state.cardholder_url,   sizeof(cardholder_url));
+    memcpy(cardholder_login, state.cardholder_login, sizeof(cardholder_login));
+    cardholder_name[sizeof(cardholder_name) - 1]   = '\0';
+    cardholder_lang[sizeof(cardholder_lang) - 1]   = '\0';
+    cardholder_url[sizeof(cardholder_url) - 1]     = '\0';
+    cardholder_login[sizeof(cardholder_login) - 1] = '\0';
 }
 
 /**
@@ -549,35 +763,66 @@ static void load_state_from_nvs(void) {
  * \return void
  */
 static void save_state_to_nvs(void) {
+    OpenpgpNvsState state = {};
+    state.schema_version     = OPENPGP_NVS_SCHEMA_V2;
+    state.card_terminated    = card_terminated ? 1 : 0;
+    state.selected_curve_sig = selected_curve_sig;
+    state.selected_curve_aut = selected_curve_aut;
+    state.rc_len             = s_rc_len;
+    state.rc_retries         = s_rc_retries;
+    if (s_rc_len > 0) {
+        memcpy(state.rc_salt, s_rc_salt, RC_SALT_SIZE);
+        memcpy(state.rc_hash, s_rc_hash, RC_HASH_SIZE);
+    }
+    state.sig_count = sig_count;
+    memcpy(state.fingerprint_sig, fingerprint_sig, OPENPGP_FINGERPRINT_SIZE);
+    memcpy(state.fingerprint_dec, fingerprint_dec, OPENPGP_FINGERPRINT_SIZE);
+    memcpy(state.fingerprint_aut, fingerprint_aut, OPENPGP_FINGERPRINT_SIZE);
+    memcpy(state.ca_fp_1, ca_fp_1, OPENPGP_FINGERPRINT_SIZE);
+    memcpy(state.ca_fp_2, ca_fp_2, OPENPGP_FINGERPRINT_SIZE);
+    memcpy(state.ca_fp_3, ca_fp_3, OPENPGP_FINGERPRINT_SIZE);
+    memcpy(state.gen_time_sig, gen_time_sig, 4);
+    memcpy(state.gen_time_dec, gen_time_dec, 4);
+    memcpy(state.gen_time_aut, gen_time_aut, 4);
+    state.cardholder_sex = cardholder_sex;
+    memcpy(state.cardholder_name,  cardholder_name,  sizeof(state.cardholder_name));
+    memcpy(state.cardholder_lang,  cardholder_lang,  sizeof(state.cardholder_lang));
+    memcpy(state.cardholder_url,   cardholder_url,   sizeof(state.cardholder_url));
+    memcpy(state.cardholder_login, cardholder_login, sizeof(state.cardholder_login));
+
+    constexpr size_t BLOB_SIZE = sizeof(OpenpgpNvsState) + OPENPGP_STATE_SIG_SIZE;
+    uint8_t blob[BLOB_SIZE];
+    memcpy(blob, &state, sizeof(state));
+
+    auto* se = get_se();
+    if (!se) {
+        LOG_E(TAG, "save_state: no SE");
+        return;
+    }
+    size_t sig_len = OPENPGP_STATE_SIG_SIZE;
+    cdc::hal::SeResult sign_res = se->ecdsaSign(ATTESTATION_ECC_SLOT,
+                                                blob, sizeof(state),
+                                                blob + sizeof(state), &sig_len);
+    if (sign_res != cdc::hal::SeResult::OK || sig_len != OPENPGP_STATE_SIG_SIZE) {
+        LOG_E(TAG, "save_state: attestation sign failed (%d)",
+              static_cast<int>(sign_res));
+        return;
+    }
+
     nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
-        // Signature count
-        nvs_set_u32(nvs, "sig_count", sig_count);
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        LOG_E(TAG, "save_state: nvs_open %s", esp_err_to_name(err));
+        return;
+    }
 
-        // Fingerprints
-        nvs_set_blob(nvs, "fp_sig", fingerprint_sig, sizeof(fingerprint_sig));
-        nvs_set_blob(nvs, "fp_dec", fingerprint_dec, sizeof(fingerprint_dec));
-        nvs_set_blob(nvs, "fp_aut", fingerprint_aut, sizeof(fingerprint_aut));
-
-        // CA fingerprints
-        nvs_set_blob(nvs, "ca_fp_1", ca_fp_1, sizeof(ca_fp_1));
-        nvs_set_blob(nvs, "ca_fp_2", ca_fp_2, sizeof(ca_fp_2));
-        nvs_set_blob(nvs, "ca_fp_3", ca_fp_3, sizeof(ca_fp_3));
-
-        // Generation times
-        nvs_set_blob(nvs, "gt_sig", gen_time_sig, sizeof(gen_time_sig));
-        nvs_set_blob(nvs, "gt_dec", gen_time_dec, sizeof(gen_time_dec));
-        nvs_set_blob(nvs, "gt_aut", gen_time_aut, sizeof(gen_time_aut));
-
-        // Cardholder data
-        nvs_set_str(nvs, "ch_name", cardholder_name);
-        nvs_set_str(nvs, "ch_lang", cardholder_lang);
-        nvs_set_u8(nvs, "ch_sex", cardholder_sex);
-        nvs_set_str(nvs, "ch_url", cardholder_url);
-        nvs_set_str(nvs, "ch_login", cardholder_login);
-
-        nvs_commit(nvs);
-        nvs_close(nvs);
+    err = nvs_set_blob(nvs, NVS_STATE_KEY, blob, BLOB_SIZE);
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+    if (err != ESP_OK) {
+        LOG_E(TAG, "save_state: %s", esp_err_to_name(err));
     }
 }
 
@@ -599,12 +844,12 @@ static void init_aid_from_mac(void) {
         s_openpgp_aid[8] = 0x43;   // 'C'
         s_openpgp_aid[9] = 0x44;   // 'D'
 
-        ESP_LOGI(TAG, "AID initialized: Manufacturer=0x%02X%02X Serial=%02X%02X%02X%02X",
+        LOG_I(TAG, "AID initialized: Manufacturer=0x%02X%02X Serial=%02X%02X%02X%02X",
                  s_openpgp_aid[8], s_openpgp_aid[9],
                  s_openpgp_aid[10], s_openpgp_aid[11],
                  s_openpgp_aid[12], s_openpgp_aid[13]);
     } else {
-        ESP_LOGW(TAG, "Failed to read MAC, using default AID");
+        LOG_W(TAG, "Failed to read MAC, using default AID");
         // Keep defaults: FFFE / 00000001
         s_openpgp_aid[8] = 0xFF;
         s_openpgp_aid[9] = 0xFE;
@@ -621,7 +866,7 @@ bool openpgp_init(void) {
 
     // Initialize GPG component (TROPIC01 backend)
     if (!gpg_init()) {
-        ESP_LOGE(TAG, "Failed to initialize GPG/TROPIC01");
+        LOG_E(TAG, "Failed to initialize GPG/TROPIC01");
         return false;
     }
 
@@ -630,7 +875,7 @@ bool openpgp_init(void) {
 
     load_state_from_nvs();
 
-    ESP_LOGI(TAG, "OpenPGP application initialized, sig_count=%lu", sig_count);
+    LOG_I(TAG, "OpenPGP application initialized, sig_count=%lu", sig_count);
     return true;
 }
 
@@ -640,6 +885,52 @@ bool openpgp_is_selected(void) {
 
 uint32_t openpgp_get_sig_count(void) {
     return sig_count;
+}
+
+bool openpgp_get_fingerprint(uint8_t key_type, uint8_t *fp_out) {
+    if (!fp_out) return false;
+    switch (key_type) {
+        case KEY_SIG: memcpy(fp_out, fingerprint_sig, OPENPGP_FINGERPRINT_SIZE); return true;
+        case KEY_DEC: memcpy(fp_out, fingerprint_dec, OPENPGP_FINGERPRINT_SIZE); return true;
+        case KEY_AUT: memcpy(fp_out, fingerprint_aut, OPENPGP_FINGERPRINT_SIZE); return true;
+        default: return false;
+    }
+}
+
+static bool fp_is_set(const uint8_t fp[OPENPGP_FINGERPRINT_SIZE]) {
+    for (size_t i = 0; i < OPENPGP_FINGERPRINT_SIZE; i++) {
+        if (fp[i] != 0) return true;
+    }
+    return false;
+}
+
+bool openpgp_has_any_key(void) {
+    return fp_is_set(fingerprint_sig) ||
+           fp_is_set(fingerprint_dec) ||
+           fp_is_set(fingerprint_aut);
+}
+
+size_t openpgp_get_cardholder_name(char *out, size_t out_size) {
+    if (!out || out_size == 0) return 0;
+    size_t len = strlen(cardholder_name);
+    if (len >= out_size) len = out_size - 1;
+    memcpy(out, cardholder_name, len);
+    out[len] = '\0';
+    return len;
+}
+
+uint32_t openpgp_get_gen_time(uint8_t key_type) {
+    const uint8_t *src = nullptr;
+    switch (key_type) {
+        case KEY_SIG: src = gen_time_sig; break;
+        case KEY_DEC: src = gen_time_dec; break;
+        case KEY_AUT: src = gen_time_aut; break;
+        default: return 0;
+    }
+    return (static_cast<uint32_t>(src[0]) << 24) |
+           (static_cast<uint32_t>(src[1]) << 16) |
+           (static_cast<uint32_t>(src[2]) << 8)  |
+            static_cast<uint32_t>(src[3]);
 }
 
 bool openpgp_set_key_fingerprint(uint8_t key_type, const uint8_t *fingerprint,
@@ -668,12 +959,12 @@ bool openpgp_set_key_fingerprint(uint8_t key_type, const uint8_t *fingerprint,
             memcpy(gen_time_aut, ts, 4);
             break;
         default:
-            ESP_LOGE(TAG, "Invalid key type: 0x%02X", key_type);
+            LOG_E(TAG, "Invalid key type: 0x%02X", key_type);
             return false;
     }
 
     save_state_to_nvs();
-    ESP_LOGI(TAG, "Fingerprint set for key type 0x%02X", key_type);
+    LOG_I(TAG, "Fingerprint set for key type 0x%02X", key_type);
     return true;
 }
 
@@ -685,22 +976,20 @@ bool openpgp_set_key_fingerprint(uint8_t key_type, const uint8_t *fingerprint,
  * \return APDU status/response length result.
  */
 static int cmd_select(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
-    // Check for OpenPGP AID
     if (apdu->lc >= 6 && memcmp(apdu->data, OPENPGP_AID, 6) == 0) {
         app_selected = true;
         pw1_verified = false;
         pw3_verified = false;
-        // Clear session PIN on new select (security)
         mbedtls_platform_zeroize(s_session_pin, sizeof(s_session_pin));
-        ESP_LOGI(TAG, "OpenPGP application selected");
+        gpg_storage_clear_session();
+        LOG_I(TAG, "OpenPGP application selected");
         return apdu_sw(resp, SW_OK);
     }
 
-    // Deselect: clear session state
     if (app_selected) {
         mbedtls_platform_zeroize(s_session_pin, sizeof(s_session_pin));
+        gpg_storage_clear_session();
     }
-
     return apdu_sw(resp, SW_FILE_NOT_FOUND);
 }
 
@@ -762,12 +1051,12 @@ static int cmd_get_data(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
 
         case DO_PW_STATUS: {  // 0xC4: PW Status Bytes
             uint8_t status[7] = {
-                0x01,       // PW1 valid for multiple signatures
-                32,         // Max length PW1
-                32,         // Max length RC
-                32,         // Max length PW3
+                0x01,                           // PW1 valid for multiple signatures
+                OPENPGP_PIN_MAX_LEN,            // Max length PW1
+                OPENPGP_PIN_MAX_LEN,            // Max length RC
+                OPENPGP_PIN_MAX_LEN,            // Max length PW3
                 pin_storage_openpgp_pw1_retries(),
-                0,          // RC retries
+                s_rc_len > 0 ? s_rc_retries : static_cast<uint8_t>(0),
                 pin_storage_openpgp_pw3_retries()
             };
             return apdu_build_response(resp, resp_max, status, 7, SW_OK);
@@ -791,13 +1080,13 @@ static int cmd_get_data(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
         case DO_CA_FP_3:  // 0xCC: CA Fingerprint 3
             return apdu_build_response(resp, resp_max, ca_fp_3, OPENPGP_FINGERPRINT_SIZE, SW_OK);
 
-        case DO_GEN_TIME_SIG:  // 0xCD: Generation time - Signature
+        case DO_GEN_TIME_SIG:  // 0xCE: Generation time - Signature
             return apdu_build_response(resp, resp_max, gen_time_sig, 4, SW_OK);
 
-        case DO_GEN_TIME_DEC:  // 0xCE: Generation time - Decryption
+        case DO_GEN_TIME_DEC:  // 0xCF: Generation time - Decryption
             return apdu_build_response(resp, resp_max, gen_time_dec, 4, SW_OK);
 
-        case DO_GEN_TIME_AUT:  // 0xCF: Generation time - Authentication
+        case DO_GEN_TIME_AUT:  // 0xD0: Generation time - Authentication
             return apdu_build_response(resp, resp_max, gen_time_aut, 4, SW_OK);
 
         case DO_SIG_COUNT: {  // 0x93: Signature counter
@@ -882,9 +1171,12 @@ static int cmd_get_data(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
         case DO_KDF:
             return apdu_sw(resp, SW_OK);  // Empty = no KDF configured
 
+        case DO_CARDHOLDER_CERT:
+            return apdu_sw(resp, SW_REFERENCED_DATA_NOT_FOUND);
+
         default:
-            ESP_LOGW(TAG, "GET DATA: Unknown tag 0x%04X", tag);
-            return apdu_sw(resp, SW_FILE_NOT_FOUND);
+            LOG_W(TAG, "GET DATA: Unknown tag 0x%04X", tag);
+            return apdu_sw(resp, SW_REFERENCED_DATA_NOT_FOUND);
     }
 }
 
@@ -966,7 +1258,7 @@ static int apply_put_data_desc(const put_data_desc_t *desc, const apdu_t *apdu, 
         str[apdu->lc] = '\0';
         save_state_to_nvs();
         if (desc->log_label) {
-            ESP_LOGI(TAG, "%s set: %s", desc->log_label, str);
+            LOG_I(TAG, "%s set: %s", desc->log_label, str);
         }
         return apdu_sw(resp, SW_OK);
     }
@@ -978,7 +1270,7 @@ static int apply_put_data_desc(const put_data_desc_t *desc, const apdu_t *apdu, 
     memcpy(desc->buffer, apdu->data, desc->max_size);
     save_state_to_nvs();
     if (desc->log_label) {
-        ESP_LOGI(TAG, "%s stored", desc->log_label);
+        LOG_I(TAG, "%s stored", desc->log_label);
     }
     return apdu_sw(resp, SW_OK);
 }
@@ -990,6 +1282,67 @@ static int apply_put_data_desc(const put_data_desc_t *desc, const apdu_t *apdu, 
  * \param resp_max Maximum size of `resp`.
  * \return APDU status/response length result.
  */
+/**
+ * \brief Parses and applies a PUT DATA payload addressed to one of the
+ * algorithm-attribute Data Objects (C1, C2, C3).
+ *
+ * For SIG (C1) and AUT (C3) the selected curve is updated and the existing
+ * key in the corresponding slot is wiped to force the host to regenerate it.
+ * DEC (C2) is constrained to P-256 ECDH (software path), so we accept the
+ * documented attribute and reject everything else.
+ */
+static int put_data_algo_attr(uint16_t tag, const apdu_t *apdu, uint8_t *resp) {
+    algo_attr_t attr;
+    if (algo_attr_parse(apdu->data, apdu->lc, &attr) != ALGO_ATTR_OK) {
+        return apdu_sw(resp, SW_WRONG_DATA);
+    }
+    algo_attr_role_t role;
+    uint8_t *target = nullptr;
+    uint8_t slot = 0;
+    switch (tag) {
+        case DO_ALGO_SIG: role = ALGO_ATTR_ROLE_SIG; target = &selected_curve_sig; slot = gpg_storage_sig_slot(); break;
+        case DO_ALGO_AUT: role = ALGO_ATTR_ROLE_AUT; target = &selected_curve_aut; slot = gpg_storage_aut_slot(); break;
+        case DO_ALGO_DEC: role = ALGO_ATTR_ROLE_DEC; break;
+        default:          return apdu_sw(resp, SW_FILE_NOT_FOUND);
+    }
+    if (algo_attr_validate_role(&attr, role) != ALGO_ATTR_OK) {
+        return apdu_sw(resp, SW_WRONG_DATA);
+    }
+    if (algo_attr_validate_capability(&attr, /*rsa_supported=*/false) != ALGO_ATTR_OK) {
+        return apdu_sw(resp, SW_WRONG_DATA);
+    }
+    if (role == ALGO_ATTR_ROLE_DEC) {
+        // DEC role: we only support the existing P-256 ECDH configuration.
+        if (attr.curve != ALGO_ATTR_CURVE_P256 || attr.algo_id != ALGO_ATTR_ID_ECDH) {
+            return apdu_sw(resp, SW_WRONG_DATA);
+        }
+        return apdu_sw(resp, SW_OK);
+    }
+    const uint8_t new_curve = (attr.curve == ALGO_ATTR_CURVE_ED25519) ? CDC_CURVE_ED25519
+                                                                       : CDC_CURVE_P256;
+    if (*target == new_curve) {
+        return apdu_sw(resp, SW_OK);
+    }
+    // Curve actually changed — invalidate the existing key in the SE so the
+    // next GENERATE KEY PAIR yields material consistent with the new attrs.
+    auto* se = get_se();
+    if (se) {
+        se->eccDelete(slot);
+    }
+    if (tag == DO_ALGO_SIG) {
+        memset(fingerprint_sig, 0, sizeof(fingerprint_sig));
+        memset(gen_time_sig, 0, sizeof(gen_time_sig));
+    } else {
+        memset(fingerprint_aut, 0, sizeof(fingerprint_aut));
+        memset(gen_time_aut, 0, sizeof(gen_time_aut));
+    }
+    *target = new_curve;
+    save_state_to_nvs();
+    LOG_I(TAG, "Algorithm attributes for %s updated to curve %u",
+             (tag == DO_ALGO_SIG) ? "SIG" : "AUT", new_curve);
+    return apdu_sw(resp, SW_OK);
+}
+
 static int cmd_put_data(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
     (void)resp_max;
     if (!pw3_verified) {
@@ -1007,6 +1360,51 @@ static int cmd_put_data(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
                 return apdu_sw(resp, SW_OK);
             }
             return apdu_sw(resp, SW_WRONG_LENGTH);
+        case DO_ALGO_SIG:
+        case DO_ALGO_DEC:
+        case DO_ALGO_AUT:
+            return put_data_algo_attr(tag, apdu, resp);
+        case DO_RC:
+            // Set or clear the Resetting Code. Lc==0 clears the RC entirely.
+            if (apdu->lc == 0) {
+                mbedtls_platform_zeroize(s_rc_salt, sizeof(s_rc_salt));
+                mbedtls_platform_zeroize(s_rc_hash, sizeof(s_rc_hash));
+                s_rc_len = 0;
+                s_rc_retries = 3;
+                save_state_to_nvs();
+                LOG_I(TAG, "Resetting Code cleared");
+                return apdu_sw(resp, SW_OK);
+            }
+            if (apdu->lc < OPENPGP_RC_MIN_LEN || apdu->lc > OPENPGP_PIN_MAX_LEN) {
+                return apdu_sw(resp, SW_WRONG_LENGTH);
+            }
+            {
+                uint8_t new_salt[RC_SALT_SIZE];
+                uint8_t new_hash[RC_HASH_SIZE];
+                se_random_fill(new_salt, RC_SALT_SIZE);
+                if (!compute_rc_hash(apdu->data, apdu->lc, new_salt, new_hash)) {
+                    mbedtls_platform_zeroize(new_salt, sizeof(new_salt));
+                    mbedtls_platform_zeroize(new_hash, sizeof(new_hash));
+                    return apdu_sw(resp, SW_UNKNOWN);
+                }
+                memcpy(s_rc_salt, new_salt, RC_SALT_SIZE);
+                memcpy(s_rc_hash, new_hash, RC_HASH_SIZE);
+                mbedtls_platform_zeroize(new_salt, sizeof(new_salt));
+                mbedtls_platform_zeroize(new_hash, sizeof(new_hash));
+            }
+            s_rc_len = static_cast<uint8_t>(apdu->lc);
+            s_rc_retries = 3;
+            save_state_to_nvs();
+            LOG_I(TAG, "Resetting Code configured (length=%u)", s_rc_len);
+            return apdu_sw(resp, SW_OK);
+        case DO_AES_KEY: {
+            if (apdu->lc != 16 && apdu->lc != 32) {
+                return apdu_sw(resp, SW_WRONG_LENGTH);
+            }
+            const char* pin = s_session_pin[0] ? s_session_pin : nullptr;
+            bool ok = gpg_storage_save_aes_key(apdu->data, apdu->lc, pin);
+            return apdu_sw(resp, ok ? SW_OK : SW_UNKNOWN);
+        }
         default:
             break;
     }
@@ -1017,8 +1415,132 @@ static int cmd_put_data(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
         return apply_put_data_desc(desc, apdu, resp);
     }
 
-    ESP_LOGW(TAG, "PUT DATA: Unknown tag 0x%04X", tag);
+    LOG_W(TAG, "PUT DATA: Unknown tag 0x%04X", tag);
     return apdu_sw(resp, SW_FILE_NOT_FOUND);
+}
+
+static void update_generation_timestamp(uint8_t key_ref);
+
+/**
+ * \brief Parse one BER-TLV field at \p pos.
+ *
+ * Supports 1- or 2-byte tags and short-form / 0x81 / 0x82 length encodings,
+ * which covers everything the OpenPGP 3.4.1 PUT DATA odd payload uses.
+ *
+ * \return true on success; \p pos is advanced past the parsed value.
+ */
+static bool ehl_parse_one(const uint8_t *buf, size_t buf_len, size_t *pos,
+                          uint16_t *tag_out, const uint8_t **value_out,
+                          size_t *value_len_out) {
+    if (!buf || !pos || *pos >= buf_len) return false;
+    size_t p = *pos;
+
+    uint16_t tag = buf[p++];
+    if ((tag & 0x1F) == 0x1F) {
+        if (p >= buf_len) return false;
+        tag = (tag << 8) | buf[p++];
+    }
+    if (p >= buf_len) return false;
+
+    size_t len;
+    uint8_t lb = buf[p++];
+    if (lb < 0x80) {
+        len = lb;
+    } else if (lb == 0x81) {
+        if (p >= buf_len) return false;
+        len = buf[p++];
+    } else if (lb == 0x82) {
+        if (p + 1 >= buf_len) return false;
+        len = (static_cast<size_t>(buf[p]) << 8) | buf[p + 1];
+        p += 2;
+    } else {
+        return false;
+    }
+    if (p + len > buf_len) return false;
+
+    *tag_out = tag;
+    *value_out = buf + p;
+    *value_len_out = len;
+    *pos = p + len;
+    return true;
+}
+
+/**
+ * \brief Handles APDU `PUT DATA (odd INS, 0xDB)` for keypair import.
+ *
+ * Used by `gpg --card-edit` → `generate` when the user answers "Y" to
+ * "Make off-card backup of encryption key?": GnuPG generates the key on the
+ * host and ships it as an OpenPGP 3.4.1 §7.2.8 Extended Header List
+ *
+ *     4D LL
+ *        <CRT>          // B6 00 (SIG) / B8 00 (DEC) / A4 00 (AUT)
+ *        7F48 LL        // Cardholder Private Key Template (tag list)
+ *        5F48 LL        // Concatenation of values (priv [|| pub])
+ *
+ * Currently only DEC (CRT B8) is supported, mirroring the on-card path that
+ * also reserves software-ECDH for the decipher key (the only role TROPIC01
+ * does not handle natively). SIG/AUT keys live in the secure element with
+ * no key-import path exposed by our HAL.
+ */
+static int cmd_put_data_odd(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
+    (void)resp_max;
+    if (!pw3_verified) {
+        return apdu_sw(resp, SW_SECURITY_NOT_SATISFIED);
+    }
+    if (apdu->p1 != 0x3F || apdu->p2 != 0xFF) {
+        return apdu_sw(resp, SW_INCORRECT_P1P2);
+    }
+    if (apdu->lc == 0 || !apdu->data) {
+        return apdu_sw(resp, SW_WRONG_LENGTH);
+    }
+
+    size_t pos = 0;
+    uint16_t tag = 0;
+    const uint8_t *outer_val = nullptr;
+    size_t outer_len = 0;
+    if (!ehl_parse_one(apdu->data, apdu->lc, &pos, &tag, &outer_val, &outer_len) ||
+        tag != 0x4D) {
+        return apdu_sw(resp, SW_WRONG_DATA);
+    }
+
+    // Walk the inner template: first the CRT (B6/B8/A4), then 7F48 (skipped),
+    // then 5F48 with the concatenated key material.
+    size_t inner = 0;
+    const uint8_t *crt_val = nullptr;
+    size_t crt_len = 0;
+    if (!ehl_parse_one(outer_val, outer_len, &inner, &tag, &crt_val, &crt_len) ||
+        tag != KEY_DEC) {
+        return apdu_sw(resp, SW_WRONG_DATA);
+    }
+
+    const uint8_t *key_concat = nullptr;
+    size_t key_concat_len = 0;
+    while (inner < outer_len) {
+        const uint8_t *v = nullptr;
+        size_t vlen = 0;
+        if (!ehl_parse_one(outer_val, outer_len, &inner, &tag, &v, &vlen)) {
+            return apdu_sw(resp, SW_WRONG_DATA);
+        }
+        if (tag == 0x5F48) {
+            key_concat = v;
+            key_concat_len = vlen;
+            break;
+        }
+        // 7F48 (template) is informational; we know the format for our curve.
+    }
+    if (!key_concat || key_concat_len < P256_PRIVKEY_SIZE) {
+        return apdu_sw(resp, SW_WRONG_DATA);
+    }
+
+    uint8_t privkey[P256_PRIVKEY_SIZE];
+    memcpy(privkey, key_concat, P256_PRIVKEY_SIZE);
+    bool saved = gpg_storage_save_dec_privkey(privkey, nullptr);
+    mbedtls_platform_zeroize(privkey, sizeof(privkey));
+    if (!saved) {
+        return apdu_sw(resp, SW_UNKNOWN);
+    }
+    update_generation_timestamp(KEY_DEC);
+    return apdu_sw(resp, SW_OK);
 }
 
 /**
@@ -1063,22 +1585,20 @@ static int cmd_verify(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
     uint8_t retries;
 
     if (pw_ref == PW1_CODE_1 || pw_ref == PW1_CODE_2) {
-        // PW1 (User PIN) verification
         verified = pin_storage_openpgp_verify_pw1(pin_str);
         if (verified) {
             pw1_verified = true;
-            // Store session PIN for PSO:DECIPHER (ECDH decryption)
             strncpy(s_session_pin, pin_str, OPENPGP_PIN_MAX_LEN);
             s_session_pin[OPENPGP_PIN_MAX_LEN] = '\0';
-            ESP_LOGI(TAG, "PW1 verified successfully");
+            gpg_storage_set_session_pin(pin_str);
+            LOG_I(TAG, "PW1 verified successfully");
         }
         retries = pin_storage_openpgp_pw1_retries();
     } else if (pw_ref == PW3_CODE) {
-        // PW3 (Admin PIN) verification
         verified = pin_storage_openpgp_verify_pw3(pin_str);
         if (verified) {
             pw3_verified = true;
-            ESP_LOGI(TAG, "PW3 verified successfully");
+            LOG_I(TAG, "PW3 verified successfully");
         }
         retries = pin_storage_openpgp_pw3_retries();
     } else {
@@ -1091,55 +1611,152 @@ static int cmd_verify(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
 
     // Verification failed
     if (retries == 0) {
-        ESP_LOGW(TAG, "PIN blocked after too many failures");
+        LOG_W(TAG, "PIN blocked after too many failures");
         return apdu_sw(resp, SW_AUTH_METHOD_BLOCKED);
     }
-    ESP_LOGW(TAG, "PIN verification failed, %d retries left", retries);
+    LOG_W(TAG, "PIN verification failed, %d retries left", retries);
     return apdu_sw(resp, 0x63C0 | retries);
 }
 
 /**
- * \brief Type alias for PIN verification/change callbacks.
+ * \brief PIN slot identifier used by PIN helper routines.
  */
-typedef bool (*pin_op_fn_t)(const char *pin);
+typedef enum {
+    PIN_SLOT_PW1 = 0,
+    PIN_SLOT_PW3 = 1
+} pin_slot_t;
 
 /**
- * \brief Tries to verify and change a PIN by enumerating split points.
+ * \brief Computes the iterated-salted S2K hash (OpenPGP KDF) for a PIN candidate.
+ * \param pin PIN string.
+ * \param salt 8-byte salt.
+ * \param iterations Iteration count from PinManager.
+ * \param hash_out 32-byte output buffer.
+ * \return `true` on success.
+ */
+static bool compute_kdf_hash(const char* pin, const uint8_t* salt, uint32_t iterations,
+                             uint8_t hash_out[32]) {
+    if (!pin || !salt || !hash_out) return false;
+    size_t pin_len = strlen(pin);
+    if (pin_len > OPENPGP_PIN_MAX_LEN) return false;
+    size_t combined = 8 + pin_len;
+    if (combined == 0) return false;
+
+    uint8_t buffer[8 + OPENPGP_PIN_MAX_LEN];
+    memcpy(buffer, salt, 8);
+    memcpy(buffer + 8, pin, pin_len);
+
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    if (mbedtls_sha256_starts(&ctx, 0) != 0) {
+        mbedtls_sha256_free(&ctx);
+        mbedtls_platform_zeroize(buffer, sizeof(buffer));
+        return false;
+    }
+    size_t processed = 0;
+    size_t total_bytes = iterations;
+    while (processed < total_bytes) {
+        size_t chunk = (total_bytes - processed < combined) ? (total_bytes - processed) : combined;
+        if (mbedtls_sha256_update(&ctx, buffer, chunk) != 0) {
+            mbedtls_sha256_free(&ctx);
+            mbedtls_platform_zeroize(buffer, sizeof(buffer));
+            return false;
+        }
+        processed += chunk;
+    }
+    int rc = mbedtls_sha256_finish(&ctx, hash_out);
+    mbedtls_sha256_free(&ctx);
+    mbedtls_platform_zeroize(buffer, sizeof(buffer));
+    return rc == 0;
+}
+
+/**
+ * \brief Constant-time comparison of two equal-length byte buffers.
+ * \param a First buffer.
+ * \param b Second buffer.
+ * \param n Number of bytes to compare.
+ * \return `true` if identical.
+ */
+static bool const_time_equal(const uint8_t* a, const uint8_t* b, size_t n) {
+    uint8_t diff = 0;
+    for (size_t i = 0; i < n; ++i) diff |= a[i] ^ b[i];
+    return diff == 0;
+}
+
+/**
+ * \brief Compares a candidate PIN against the stored hash without touching retry counters.
+ * \param slot PIN slot to query.
+ * \param pin Candidate PIN string.
+ * \return `true` if PIN matches the stored hash.
+ */
+static bool peek_verify_pin(pin_slot_t slot, const char* pin) {
+    auto& mgr = cdc::core::PinManager::instance();
+    uint8_t salt[8] = {};
+    uint8_t stored[32] = {};
+    uint8_t candidate[32] = {};
+    bool ok = false;
+
+    if (slot == PIN_SLOT_PW1) {
+        if (!mgr.getPW1Salt(salt)) goto done;
+        if (!mgr.getPW1Hash(stored)) goto done;
+    } else {
+        if (!mgr.getPW3Salt(salt)) goto done;
+        if (!mgr.getPW3Hash(stored)) goto done;
+    }
+
+    if (!compute_kdf_hash(pin, salt, mgr.getIterationCount(), candidate)) goto done;
+    ok = const_time_equal(candidate, stored, sizeof(stored));
+
+done:
+    mbedtls_platform_zeroize(stored, sizeof(stored));
+    mbedtls_platform_zeroize(candidate, sizeof(candidate));
+    return ok;
+}
+
+/**
+ * \brief Type alias for PIN change callbacks.
+ */
+typedef bool (*pin_change_fn_t)(const char *pin);
+
+/**
+ * \brief Searches the split point for `CHANGE REFERENCE DATA` without consuming retries.
  *
- * The OpenPGP CHANGE REFERENCE DATA APDU concatenates old and new PIN
- * without an explicit length field. This helper iterates over all valid
- * lengths of the old PIN and applies `verify_fn`+`change_fn` for the
- * first split that succeeds.
+ * Iterates over candidate old-PIN lengths and uses a non-decrementing hash
+ * comparison. Only the matched split is applied through `change_fn`; the
+ * underlying retry counter is left untouched until the caller consumes one
+ * retry on overall failure.
  *
- * \param data Concatenated old||new PIN payload.
- * \param len Total payload length in bytes.
- * \param min_len Minimum valid PIN length for this slot.
- * \param verify_fn Callback that verifies the old PIN.
- * \param change_fn Callback that sets the new PIN.
- * \return `true` if a valid split was found and the change succeeded.
+ * \param data Concatenated old||new PIN bytes.
+ * \param len Total length of `data`.
+ * \param min_len Minimum PIN length for the target slot.
+ * \param slot PIN slot identifier.
+ * \param change_fn Callback that applies the new PIN.
+ * \return `true` if a split was found and the change succeeded.
  */
 static bool try_change_pin(const uint8_t *data, size_t len, size_t min_len,
-                           pin_op_fn_t verify_fn, pin_op_fn_t change_fn) {
+                           pin_slot_t slot, pin_change_fn_t change_fn) {
     if (len < min_len * 2) {
         return false;
     }
     for (size_t old_len = min_len; old_len <= len - min_len; ++old_len) {
-        char old_pin[OPENPGP_PIN_MAX_LEN + 1];
-        char new_pin[OPENPGP_PIN_MAX_LEN + 1];
-
         size_t new_len = len - old_len;
         if (old_len > OPENPGP_PIN_MAX_LEN || new_len > OPENPGP_PIN_MAX_LEN) {
             continue;
         }
-
+        char old_pin[OPENPGP_PIN_MAX_LEN + 1];
+        char new_pin[OPENPGP_PIN_MAX_LEN + 1];
         memcpy(old_pin, data, old_len);
         old_pin[old_len] = '\0';
         memcpy(new_pin, data + old_len, new_len);
         new_pin[new_len] = '\0';
 
-        if (verify_fn(old_pin) && change_fn(new_pin)) {
+        if (peek_verify_pin(slot, old_pin) && change_fn(new_pin)) {
+            mbedtls_platform_zeroize(old_pin, sizeof(old_pin));
+            mbedtls_platform_zeroize(new_pin, sizeof(new_pin));
             return true;
         }
+        mbedtls_platform_zeroize(old_pin, sizeof(old_pin));
+        mbedtls_platform_zeroize(new_pin, sizeof(new_pin));
     }
     return false;
 }
@@ -1159,20 +1776,20 @@ static int cmd_change_reference_data(const apdu_t *apdu, uint8_t *resp, size_t r
         return apdu_sw(resp, SW_WRONG_LENGTH);
     }
 
-    pin_op_fn_t verify_fn = NULL;
-    pin_op_fn_t change_fn = NULL;
+    pin_change_fn_t change_fn = NULL;
     size_t min_len = 0;
     uint8_t (*retries_fn)(void) = NULL;
+    pin_slot_t slot;
     const char *log_label = NULL;
 
     if (pw_ref == PW1_CODE_1) {
-        verify_fn = pin_storage_openpgp_verify_pw1;
+        slot = PIN_SLOT_PW1;
         change_fn = pin_storage_openpgp_change_pw1;
         retries_fn = pin_storage_openpgp_pw1_retries;
         min_len = OPENPGP_PW1_MIN_LEN;
         log_label = "PW1";
     } else if (pw_ref == PW3_CODE) {
-        verify_fn = pin_storage_openpgp_verify_pw3;
+        slot = PIN_SLOT_PW3;
         change_fn = pin_storage_openpgp_change_pw3;
         retries_fn = pin_storage_openpgp_pw3_retries;
         min_len = OPENPGP_PW3_MIN_LEN;
@@ -1185,9 +1802,19 @@ static int cmd_change_reference_data(const apdu_t *apdu, uint8_t *resp, size_t r
         return apdu_sw(resp, SW_WRONG_LENGTH);
     }
 
-    if (try_change_pin(apdu->data, apdu->lc, min_len, verify_fn, change_fn)) {
-        ESP_LOGI(TAG, "%s changed successfully", log_label);
+    if (try_change_pin(apdu->data, apdu->lc, min_len, slot, change_fn)) {
+        LOG_I(TAG, "%s changed successfully", log_label);
         return apdu_sw(resp, SW_OK);
+    }
+
+    pin_slot_t slot_for_decrement = slot;
+    char dummy_pin[OPENPGP_PIN_MAX_LEN + 1] = {};
+    // Trigger a single retry decrement via the regular path to keep the
+    // remote counter in sync with the failed CHANGE attempt.
+    if (slot_for_decrement == PIN_SLOT_PW1) {
+        pin_storage_openpgp_verify_pw1(dummy_pin);
+    } else {
+        pin_storage_openpgp_verify_pw3(dummy_pin);
     }
 
     uint8_t retries = retries_fn();
@@ -1213,7 +1840,7 @@ static int cmd_pso_cds(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
     uint8_t pubkey[P256_PUBKEY_SIZE];
     uint8_t curve;
     if (!se_ecc_key_read(gpg_storage_sig_slot(), pubkey, sizeof(pubkey), &curve)) {
-        ESP_LOGE(TAG, "No signature key configured");
+        LOG_E(TAG, "No signature key configured");
         return apdu_sw(resp, SW_CONDITIONS_NOT_SATISFIED);
     }
 
@@ -1223,18 +1850,16 @@ static int cmd_pso_cds(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
 
     bool success;
     if (curve == CDC_CURVE_P256) {
-        // ECDSA: sign the hash (expected to be SHA-256, 32 bytes)
         if (apdu->lc != SHA256_DIGEST_SIZE) {
-            ESP_LOGW(TAG, "ECDSA expects %d-byte hash, got %d", SHA256_DIGEST_SIZE, apdu->lc);
+            return apdu_sw(resp, SW_WRONG_DATA);
         }
         success = se_ecdsa_sign(gpg_storage_sig_slot(), apdu->data, apdu->lc, signature);
     } else {
-        // EdDSA: sign the message (hash passed as message)
         success = se_eddsa_sign(gpg_storage_sig_slot(), apdu->data, apdu->lc, signature);
     }
 
     if (!success) {
-        ESP_LOGE(TAG, "Signature failed");
+        LOG_E(TAG, "Signature failed");
         return apdu_sw(resp, SW_UNKNOWN);
     }
 
@@ -1242,7 +1867,7 @@ static int cmd_pso_cds(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
     sig_count++;
     save_state_to_nvs();
 
-    ESP_LOGI(TAG, "Signature created, count=%lu", sig_count);
+    LOG_I(TAG, "Signature created, count=%lu", sig_count);
     return apdu_build_response(resp, resp_max, signature, 64, SW_OK);
 }
 
@@ -1278,73 +1903,131 @@ static int cmd_pso_cds(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
  *            <65 bytes ephemeral pubkey>
  * Response: Shared Secret (32 bytes for P-256)
  */
-static int cmd_pso_decipher(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
-    // PW1 must be verified for decryption operations
-    if (!pw1_verified) {
+/**
+ * \brief Decrypts an AES-CFB128 payload using the stored symmetric key (DO 0xD5).
+ * \param apdu Parsed APDU request, payload[0] = 0x02 padding indicator.
+ * \param resp Output response buffer.
+ * \param resp_max Maximum size of `resp`.
+ * \return APDU status/response length result.
+ *
+ * Payload format: 0x02 || IV(16) || ciphertext.
+ */
+static int cmd_pso_decipher_aes(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
+    if (!gpg_storage_has_aes_key()) {
+        return apdu_sw(resp, SW_CONDITIONS_NOT_SATISFIED);
+    }
+    if (apdu->lc < 1 + 16 + 1) {
+        return apdu_sw(resp, SW_WRONG_DATA);
+    }
+    const uint8_t* iv_in = apdu->data + 1;
+    const uint8_t* ct = apdu->data + 1 + 16;
+    size_t ct_len = apdu->lc - 1 - 16;
+    if (ct_len > resp_max - 2) {
+        return apdu_sw(resp, SW_WRONG_LENGTH);
+    }
+
+    uint8_t aes_key[32] = {};
+    size_t aes_key_len = 0;
+    if (!gpg_storage_load_aes_key(aes_key, &aes_key_len, s_session_pin[0] ? s_session_pin : nullptr)) {
+        mbedtls_platform_zeroize(aes_key, sizeof(aes_key));
         return apdu_sw(resp, SW_SECURITY_NOT_SATISFIED);
     }
 
-    // Check if DEC private key exists
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    int rc = mbedtls_aes_setkey_enc(&aes, aes_key, static_cast<unsigned int>(aes_key_len * 8));
+    if (rc != 0) {
+        mbedtls_aes_free(&aes);
+        mbedtls_platform_zeroize(aes_key, sizeof(aes_key));
+        return apdu_sw(resp, SW_UNKNOWN);
+    }
+
+    uint8_t iv[16];
+    memcpy(iv, iv_in, sizeof(iv));
+    size_t iv_off = 0;
+    uint8_t plain[256];
+    if (ct_len > sizeof(plain)) {
+        mbedtls_aes_free(&aes);
+        mbedtls_platform_zeroize(aes_key, sizeof(aes_key));
+        return apdu_sw(resp, SW_WRONG_LENGTH);
+    }
+    rc = mbedtls_aes_crypt_cfb128(&aes, MBEDTLS_AES_DECRYPT, ct_len, &iv_off, iv, ct, plain);
+    mbedtls_aes_free(&aes);
+    mbedtls_platform_zeroize(aes_key, sizeof(aes_key));
+    mbedtls_platform_zeroize(iv, sizeof(iv));
+    if (rc != 0) {
+        mbedtls_platform_zeroize(plain, sizeof(plain));
+        return apdu_sw(resp, SW_UNKNOWN);
+    }
+    size_t n = apdu_build_response(resp, resp_max, plain, ct_len, SW_OK);
+    mbedtls_platform_zeroize(plain, sizeof(plain));
+    return n;
+}
+
+static int cmd_pso_decipher(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
+    if (!pw1_verified) {
+        return apdu_sw(resp, SW_SECURITY_NOT_SATISFIED);
+    }
+    if (apdu->lc < 1) {
+        return apdu_sw(resp, SW_WRONG_DATA);
+    }
+
+    // OpenPGP 3.4.1 §7.2.11: padding indicator 0x02 = AES decryption.
+    if (apdu->data[0] == 0x02) {
+        return cmd_pso_decipher_aes(apdu, resp, resp_max);
+    }
+
     if (!gpg_storage_has_dec_privkey()) {
-        ESP_LOGE(TAG, "No decryption key configured");
         return apdu_sw(resp, SW_CONDITIONS_NOT_SATISFIED);
     }
 
-    // Parse Cipher DO (7F49 -> A6 -> 86)
-    // Minimum: 7F49 <len1> A6 <len2> 86 <len3> <65 bytes pubkey>
-    // With single-byte lengths: 7F49 44 A6 42 86 41 <65 bytes> = 73 bytes
+    // Parse Cipher DO (A6 -> 7F49 -> 86), per OpenPGP 3.4.1 §7.2.11.
+    // Minimum: A6 <len1> 7F49 <len2> 86 <len3> <65 bytes pubkey>
+    // With single-byte lengths: A6 46 7F49 43 86 41 <65 bytes> = 72 bytes
     if (apdu->lc < 70) {
-        ESP_LOGW(TAG, "PSO:DECIPHER data too short: %d", apdu->lc);
         return apdu_sw(resp, SW_WRONG_DATA);
     }
 
     const uint8_t* p = apdu->data;
     const uint8_t* end = apdu->data + apdu->lc;
 
-    // Parse 7F49 (Cipher DO)
-    if (p + 2 > end || p[0] != 0x7F || p[1] != 0x49) {
-        ESP_LOGW(TAG, "Expected 7F49 tag");
+    if (p >= end || *p != 0xA6) {
         return apdu_sw(resp, SW_WRONG_DATA);
     }
-    p += 2;
+    p++;
 
-    // Skip length (1-3 bytes)
     if (p >= end) return apdu_sw(resp, SW_WRONG_DATA);
     if (*p < 0x80) {
         p += 1;
-    } else if (*p == 0x81) {
+    } else if (*p == 0x81 && p + 1 < end) {
         p += 2;
-    } else if (*p == 0x82) {
+    } else if (*p == 0x82 && p + 2 < end) {
         p += 3;
     } else {
         return apdu_sw(resp, SW_WRONG_DATA);
     }
 
-    // Parse A6 (External Public Key template)
-    if (p >= end || *p != 0xA6) {
-        ESP_LOGW(TAG, "Expected A6 tag");
+    if (p + 2 > end || p[0] != 0x7F || p[1] != 0x49) {
         return apdu_sw(resp, SW_WRONG_DATA);
     }
-    p++;
+    p += 2;
 
-    // Skip length
     if (p >= end) return apdu_sw(resp, SW_WRONG_DATA);
     if (*p < 0x80) {
         p += 1;
-    } else if (*p == 0x81) {
+    } else if (*p == 0x81 && p + 1 < end) {
         p += 2;
+    } else if (*p == 0x82 && p + 2 < end) {
+        p += 3;
     } else {
         return apdu_sw(resp, SW_WRONG_DATA);
     }
 
-    // Parse 86 (Public Key)
     if (p >= end || *p != 0x86) {
-        ESP_LOGW(TAG, "Expected 86 tag");
         return apdu_sw(resp, SW_WRONG_DATA);
     }
     p++;
 
-    // Get public key length
     if (p >= end) return apdu_sw(resp, SW_WRONG_DATA);
     size_t pubkey_len;
     if (*p < 0x80) {
@@ -1352,50 +2035,292 @@ static int cmd_pso_decipher(const apdu_t *apdu, uint8_t *resp, size_t resp_max) 
     } else if (*p == 0x81 && p + 1 < end) {
         pubkey_len = p[1];
         p += 2;
+    } else if (*p == 0x82 && p + 2 < end) {
+        pubkey_len = (static_cast<size_t>(p[1]) << 8) | p[2];
+        p += 3;
     } else {
         return apdu_sw(resp, SW_WRONG_DATA);
     }
 
-    // Verify public key length (65 bytes for uncompressed P-256)
     if (pubkey_len != P256_PUBKEY_SIZE || p + pubkey_len > end) {
-        ESP_LOGW(TAG, "Invalid public key length: %zu", pubkey_len);
         return apdu_sw(resp, SW_WRONG_DATA);
     }
-
-    // Verify uncompressed format
     if (p[0] != 0x04) {
-        ESP_LOGW(TAG, "Expected uncompressed public key (0x04 prefix)");
         return apdu_sw(resp, SW_WRONG_DATA);
     }
-
     const uint8_t* peer_pubkey = p;
 
-    // Load DEC private key from encrypted R-Memory storage
-    // Note: Key is encrypted with device key (ChipID-based), not PIN.
-    // PW1 verification above provides access control.
     uint8_t dec_privkey[P256_PRIVKEY_SIZE];
     if (!gpg_storage_load_dec_privkey(dec_privkey, nullptr)) {
-        ESP_LOGE(TAG, "Failed to load DEC private key");
         return apdu_sw(resp, SW_SECURITY_NOT_SATISFIED);
     }
 
-    // Compute ECDH shared secret
-    // SECURITY: ecdh_p256_compute_shared_secret() clears dec_privkey after use
     uint8_t shared_secret[P256_ECDH_SECRET_SIZE];
     bool ok = ecdh_p256_compute_shared_secret(dec_privkey, peer_pubkey, shared_secret);
-
-    // dec_privkey is already cleared by ecdh_p256_compute_shared_secret
-    // but clear again for defense-in-depth
     mbedtls_platform_zeroize(dec_privkey, sizeof(dec_privkey));
-
     if (!ok) {
-        ESP_LOGE(TAG, "ECDH computation failed");
         mbedtls_platform_zeroize(shared_secret, sizeof(shared_secret));
         return apdu_sw(resp, SW_UNKNOWN);
     }
-
-    ESP_LOGI(TAG, "PSO:DECIPHER successful (ECDH shared secret computed)");
     return apdu_build_response(resp, resp_max, shared_secret, P256_ECDH_SECRET_SIZE, SW_OK);
+}
+
+/**
+ * \brief Handles APDU MANAGE SECURITY ENVIRONMENT (INS 0x22).
+ *
+ * Per OpenPGP 3.4.1 §7.2.10: gpg / scd issue MSE before PSO to point the
+ * key reference into a different slot. Two combinations matter in
+ * practice:
+ *   P1=0x41 P2=0xB6 + tag 83 01 01 → use SIG key for DSI (signature)
+ *   P1=0x41 P2=0xA4 + tag 83 01 03 → use AUT key for INTERNAL AUTHENTICATE
+ *
+ * Our key-slot mapping is fixed by role (SIG=B6, DEC=B8, AUT=A4) so MSE is
+ * effectively a no-op as long as the requested reference matches the role
+ * encoded in P2. We accept the documented combinations and return SW_OK,
+ * which is enough for gpg-card / ssh workflows that issue MSE defensively.
+ */
+static int cmd_manage_security_env(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
+    (void)resp_max;
+    if (apdu->p1 != 0x41) {
+        return apdu_sw(resp, SW_INCORRECT_P1P2);
+    }
+    if (apdu->p2 != KEY_SIG && apdu->p2 != KEY_DEC && apdu->p2 != KEY_AUT) {
+        return apdu_sw(resp, SW_INCORRECT_P1P2);
+    }
+    if (apdu->lc == 0 || apdu->data == nullptr) {
+        return apdu_sw(resp, SW_WRONG_LENGTH);
+    }
+    // Parse the Cryptographic Reference Template: expect 83 01 <ref>.
+    if (apdu->lc < 3 || apdu->data[0] != 0x83 || apdu->data[1] != 0x01) {
+        return apdu_sw(resp, SW_WRONG_DATA);
+    }
+    const uint8_t ref = apdu->data[2];
+    if (ref != 0x01 && ref != 0x02 && ref != 0x03) {
+        return apdu_sw(resp, SW_WRONG_DATA);
+    }
+    // Cross-check: tag-83 reference must agree with P2 role.
+    if ((apdu->p2 == KEY_SIG && ref != 0x01) ||
+        (apdu->p2 == KEY_DEC && ref != 0x02) ||
+        (apdu->p2 == KEY_AUT && ref != 0x03)) {
+        return apdu_sw(resp, SW_CONDITIONS_NOT_SATISFIED);
+    }
+    return apdu_sw(resp, SW_OK);
+}
+
+/**
+ * \brief Handles APDU INTERNAL AUTHENTICATE (INS 0x88).
+ *
+ * Signs the supplied authentication challenge with the AUT key
+ * (ECC slot 3). Used by gpg-agent / ssh for client authentication.
+ *
+ * Per OpenPGP 3.4.1 §7.2.13:
+ *   P1=0x00 P2=0x00, Lc = challenge length, Le = signature length.
+ *   PW1 (reference 0x82) must be verified; we reuse the PW1 session flag.
+ *
+ * Signature format matches PSO:CDS: raw R||S for ECDSA, 64-byte EdDSA sig.
+ */
+static int cmd_internal_authenticate(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
+    if (apdu->p1 != 0x00 || apdu->p2 != 0x00) {
+        return apdu_sw(resp, SW_INCORRECT_P1P2);
+    }
+    if (!pw1_verified) {
+        return apdu_sw(resp, SW_SECURITY_NOT_SATISFIED);
+    }
+    if (apdu->lc == 0 || apdu->data == nullptr) {
+        return apdu_sw(resp, SW_WRONG_LENGTH);
+    }
+
+    uint8_t pubkey[P256_PUBKEY_SIZE];
+    uint8_t curve = 0;
+    if (!se_ecc_key_read(gpg_storage_aut_slot(), pubkey, sizeof(pubkey), &curve)) {
+        LOG_E(TAG, "No AUT key configured");
+        return apdu_sw(resp, SW_CONDITIONS_NOT_SATISFIED);
+    }
+
+    uint8_t signature[64];
+    bool ok = false;
+    if (curve == CDC_CURVE_P256) {
+        ok = se_ecdsa_sign(gpg_storage_aut_slot(), apdu->data, apdu->lc, signature);
+    } else {
+        ok = se_eddsa_sign(gpg_storage_aut_slot(), apdu->data, apdu->lc, signature);
+    }
+    if (!ok) {
+        LOG_E(TAG, "INTERNAL AUTHENTICATE: signing failed");
+        return apdu_sw(resp, SW_UNKNOWN);
+    }
+    return apdu_build_response(resp, resp_max, signature, sizeof(signature), SW_OK);
+}
+
+/**
+ * \brief Handles APDU TERMINATE DF (INS 0xE6).
+ *
+ * Per OpenPGP 3.4.1 §7.2.18: takes the card into the *terminated* lifecycle
+ * state. Allowed under PW3 verification, or unconditionally when both PW1
+ * and PW3 retry counters have reached zero (last-resort recovery).
+ *
+ * After TERMINATE only SELECT and ACTIVATE FILE are accepted; every other
+ * command returns SW_FILE_TERMINATED (0x6285).
+ */
+static int cmd_terminate_df(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
+    (void)resp_max;
+    if (apdu->p1 != 0x00 || apdu->p2 != 0x00) {
+        return apdu_sw(resp, SW_INCORRECT_P1P2);
+    }
+    const bool both_blocked = pin_storage_openpgp_pw1_blocked() &&
+                              pin_storage_openpgp_pw3_blocked();
+    if (!pw3_verified && !both_blocked) {
+        return apdu_sw(resp, SW_SECURITY_NOT_SATISFIED);
+    }
+    card_terminated = true;
+    pw1_verified = false;
+    pw3_verified = false;
+    save_state_to_nvs();
+    LOG_W(TAG, "Card moved to TERMINATED state");
+    return apdu_sw(resp, SW_OK);
+}
+
+/**
+ * \brief Handles APDU ACTIVATE FILE (INS 0x44).
+ *
+ * Per OpenPGP 3.4.1 §7.2.18: in operational state ACTIVATE FILE is a no-op
+ * (SW_OK). In terminated state it wipes every persistent OpenPGP artefact
+ * (keys, fingerprints, generation times, cardholder data, PINs) and returns
+ * the card to operational state.
+ */
+static int cmd_activate_file(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
+    (void)resp_max;
+    if (apdu->p1 != 0x00 || apdu->p2 != 0x00) {
+        return apdu_sw(resp, SW_INCORRECT_P1P2);
+    }
+    if (!card_terminated) {
+        return apdu_sw(resp, SW_OK);
+    }
+    openpgp_factory_reset();
+    LOG_W(TAG, "ACTIVATE FILE: card reset to factory defaults");
+    return apdu_sw(resp, SW_OK);
+}
+
+void openpgp_factory_reset(void) {
+    auto* se = get_se();
+    if (se) {
+        se->eccDelete(gpg_storage_sig_slot());
+        se->eccDelete(gpg_storage_aut_slot());
+    }
+    gpg_storage_delete_dec_privkey();
+    gpg_storage_clear_session();
+    pin_storage_openpgp_reset();
+
+    memset(fingerprint_sig, 0, sizeof(fingerprint_sig));
+    memset(fingerprint_dec, 0, sizeof(fingerprint_dec));
+    memset(fingerprint_aut, 0, sizeof(fingerprint_aut));
+    memset(gen_time_sig, 0, sizeof(gen_time_sig));
+    memset(gen_time_dec, 0, sizeof(gen_time_dec));
+    memset(gen_time_aut, 0, sizeof(gen_time_aut));
+    memset(ca_fp_1, 0, sizeof(ca_fp_1));
+    memset(ca_fp_2, 0, sizeof(ca_fp_2));
+    memset(ca_fp_3, 0, sizeof(ca_fp_3));
+    memset(cardholder_name, 0, sizeof(cardholder_name));
+    memset(cardholder_url, 0, sizeof(cardholder_url));
+    memset(cardholder_login, 0, sizeof(cardholder_login));
+    snprintf(cardholder_lang, sizeof(cardholder_lang), "en");
+    cardholder_sex = 0x39;
+    sig_count = 0;
+    selected_curve_sig = CDC_CURVE_ED25519;
+    selected_curve_aut = CDC_CURVE_ED25519;
+    mbedtls_platform_zeroize(s_rc_salt, sizeof(s_rc_salt));
+    mbedtls_platform_zeroize(s_rc_hash, sizeof(s_rc_hash));
+    s_rc_len = 0;
+    s_rc_retries = 3;
+    pw1_verified = false;
+    pw3_verified = false;
+    card_terminated = false;
+    save_state_to_nvs();
+}
+
+/**
+ * \brief Handles APDU RESET RETRY COUNTER (INS 0x2C).
+ *
+ * Per OpenPGP 3.4.1 §7.2.7:
+ *   P1=0x02, P2=0x81: reset PW1 with admin authorisation. Lc = new PW1 length.
+ *     Requires PW3 verified.
+ *   P1=0x00, P2=0x81: reset PW1 using the Resetting Code. Lc = RC || new PW1.
+ *     Not yet implemented — returns SW_INS_NOT_SUPPORTED until the RC store
+ *     lands (planned in Phase D.3, full path).
+ */
+static int cmd_reset_retry_counter(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
+    (void)resp_max;
+    if (apdu->p2 != PW1_CODE_1) {
+        return apdu_sw(resp, SW_INCORRECT_P1P2);
+    }
+    if (apdu->p1 != 0x00 && apdu->p1 != 0x02) {
+        return apdu_sw(resp, SW_INCORRECT_P1P2);
+    }
+    if (apdu->p1 == 0x00) {
+        // RC path. Lc = RC || new PW1 (concatenated, no length prefix).
+        if (s_rc_len == 0) {
+            return apdu_sw(resp, SW_CONDITIONS_NOT_SATISFIED);
+        }
+        if (s_rc_retries == 0) {
+            return apdu_sw(resp, SW_AUTH_METHOD_BLOCKED);
+        }
+        if (apdu->lc < s_rc_len + OPENPGP_PW1_MIN_LEN ||
+            apdu->lc - s_rc_len > OPENPGP_PIN_MAX_LEN) {
+            return apdu_sw(resp, SW_WRONG_LENGTH);
+        }
+        uint8_t input_hash[RC_HASH_SIZE];
+        if (!compute_rc_hash(apdu->data, s_rc_len, s_rc_salt, input_hash)) {
+            return apdu_sw(resp, SW_UNKNOWN);
+        }
+        uint8_t diff = 0;
+        for (size_t i = 0; i < RC_HASH_SIZE; ++i) {
+            diff |= static_cast<uint8_t>(s_rc_hash[i] ^ input_hash[i]);
+        }
+        mbedtls_platform_zeroize(input_hash, sizeof(input_hash));
+        if (diff != 0) {
+            if (s_rc_retries > 0) s_rc_retries -= 1;
+            save_state_to_nvs();
+            const uint8_t retries = s_rc_retries;
+            if (retries == 0) {
+                return apdu_sw(resp, SW_AUTH_METHOD_BLOCKED);
+            }
+            return apdu_sw(resp, static_cast<uint16_t>(0x63C0 | retries));
+        }
+
+        const size_t new_pw1_len = apdu->lc - s_rc_len;
+        char new_pin[OPENPGP_PIN_MAX_LEN + 1] = {};
+        memcpy(new_pin, apdu->data + s_rc_len, new_pw1_len);
+        new_pin[new_pw1_len] = '\0';
+        if (!pin_storage_openpgp_change_pw1(new_pin)) {
+            mbedtls_platform_zeroize(new_pin, sizeof(new_pin));
+            return apdu_sw(resp, SW_UNKNOWN);
+        }
+        mbedtls_platform_zeroize(new_pin, sizeof(new_pin));
+        pin_storage_openpgp_reset_pw1_retries();
+        s_rc_retries = 3;
+        pw1_verified = false;
+        save_state_to_nvs();
+        LOG_I(TAG, "RESET RETRY COUNTER: PW1 reset via RC");
+        return apdu_sw(resp, SW_OK);
+    }
+    // P1 == 0x02 — admin-driven reset.
+    if (!pw3_verified) {
+        return apdu_sw(resp, SW_SECURITY_NOT_SATISFIED);
+    }
+    if (apdu->lc < OPENPGP_PW1_MIN_LEN || apdu->lc > OPENPGP_PIN_MAX_LEN) {
+        return apdu_sw(resp, SW_WRONG_LENGTH);
+    }
+    char new_pin[OPENPGP_PIN_MAX_LEN + 1] = {};
+    memcpy(new_pin, apdu->data, apdu->lc);
+    new_pin[apdu->lc] = '\0';
+    if (!pin_storage_openpgp_change_pw1(new_pin)) {
+        mbedtls_platform_zeroize(new_pin, sizeof(new_pin));
+        return apdu_sw(resp, SW_UNKNOWN);
+    }
+    mbedtls_platform_zeroize(new_pin, sizeof(new_pin));
+    pin_storage_openpgp_reset_pw1_retries();
+    pw1_verified = false;  // force re-verification with new PW1
+    LOG_I(TAG, "RESET RETRY COUNTER: PW1 reset by admin");
+    return apdu_sw(resp, SW_OK);
 }
 
 /**
@@ -1439,25 +2364,16 @@ static key_type_t get_key_type_for_ref(uint8_t key_ref) {
  *
  * \return `SW_OK` on success or an OpenPGP status word on failure.
  */
-static uint16_t generate_dec_key(void) {
+static uint16_t generate_dec_key(uint8_t *pubkey_out) {
     uint8_t privkey[P256_PRIVKEY_SIZE];
-    uint8_t pubkey_gen[P256_PUBKEY_SIZE];
-
-    if (!ecdh_p256_generate_keypair(privkey, pubkey_gen)) {
-        ESP_LOGE(TAG, "Software key generation failed for DEC");
+    if (!ecdh_p256_generate_keypair(privkey, pubkey_out)) {
         return SW_UNKNOWN;
     }
-
-    // Store private key encrypted in R-Memory (using device key, no PIN).
-    // Security: Key is protected by device-specific encryption.
     if (!gpg_storage_save_dec_privkey(privkey, nullptr)) {
-        ESP_LOGE(TAG, "Failed to store DEC private key");
         mbedtls_platform_zeroize(privkey, sizeof(privkey));
         return SW_UNKNOWN;
     }
-
     mbedtls_platform_zeroize(privkey, sizeof(privkey));
-    ESP_LOGI(TAG, "DEC key pair generated (software ECDH)");
     return SW_OK;
 }
 
@@ -1469,10 +2385,10 @@ static uint16_t generate_dec_key(void) {
  */
 static uint16_t generate_hardware_key(uint8_t ecc_slot, uint8_t curve) {
     if (!se_ecc_key_generate(ecc_slot, curve)) {
-        ESP_LOGE(TAG, "Key generation failed for slot %d", ecc_slot);
+        LOG_E(TAG, "Key generation failed for slot %d", ecc_slot);
         return SW_UNKNOWN;
     }
-    ESP_LOGI(TAG, "Key pair generated in slot %d (hardware)", ecc_slot);
+    LOG_I(TAG, "Key pair generated in slot %d (hardware)", ecc_slot);
     return SW_OK;
 }
 
@@ -1514,18 +2430,24 @@ static void update_generation_timestamp(uint8_t key_ref) {
 static bool read_public_key(key_type_t key_type, uint8_t ecc_slot,
                             uint8_t *pubkey, uint8_t *curve_out) {
     if (key_type == KEY_TYPE_DEC) {
+        LOG_I(TAG, "read_public_key DEC: checking has_dec_privkey");
         if (!gpg_storage_has_dec_privkey()) {
+            LOG_W(TAG, "read_public_key DEC: no privkey");
             return false;
         }
+        LOG_I(TAG, "read_public_key DEC: loading privkey");
         uint8_t privkey[P256_PRIVKEY_SIZE];
         if (!gpg_storage_load_dec_privkey(privkey, nullptr)) {
+            LOG_W(TAG, "read_public_key DEC: load_dec_privkey failed");
             return false;
         }
+        LOG_I(TAG, "read_public_key DEC: deriving pubkey");
         bool ok = ecdh_p256_derive_pubkey(privkey, pubkey);
         mbedtls_platform_zeroize(privkey, sizeof(privkey));
         if (curve_out) {
             *curve_out = CDC_CURVE_P256;
         }
+        LOG_I(TAG, "read_public_key DEC: derive ok=%d", ok);
         return ok;
     }
 
@@ -1574,13 +2496,13 @@ static int cmd_generate_keypair(const apdu_t *apdu, uint8_t *resp, size_t resp_m
 
     if (apdu->lc >= 2) {
         key_ref = apdu->data[0];
-        ESP_LOGI(TAG, "Key ref from CRT: 0x%02X", key_ref);
+        LOG_I(TAG, "Key ref from CRT: 0x%02X", key_ref);
     }
 
     const uint8_t ecc_slot = get_ecc_slot_for_key_ref(key_ref);
     const key_type_t key_type = get_key_type_for_ref(key_ref);
 
-    ESP_LOGI(TAG, "GENERATE_KEYPAIR: P1=0x%02X, key_ref=0x%02X, slot=%d, type=%d",
+    LOG_I(TAG, "GENERATE_KEYPAIR: P1=0x%02X, key_ref=0x%02X, slot=%d, type=%d",
              apdu->p1, key_ref, ecc_slot, key_type);
 
     if (apdu->p1 == 0x80) {
@@ -1589,29 +2511,63 @@ static int cmd_generate_keypair(const apdu_t *apdu, uint8_t *resp, size_t resp_m
             return apdu_sw(resp, SW_SECURITY_NOT_SATISFIED);
         }
 
-        // P-256 is the project default for all key roles.
-        const uint8_t curve = CDC_CURVE_P256;
-        ESP_LOGI(TAG, "Generating key in slot %d (curve=%d, type=%s)",
+        // Curve choice follows the configured algorithm attributes:
+        // SIG / AUT honour PUT DATA C1 / C3; DEC is fixed to P-256 (the only
+        // curve the software-ECDH path supports).
+        uint8_t curve = CDC_CURVE_P256;
+        if (key_type == KEY_TYPE_SIG) curve = selected_curve_sig;
+        else if (key_type == KEY_TYPE_AUT) curve = selected_curve_aut;
+
+        LOG_I(TAG, "Generating key in slot %d (curve=%d, type=%s)",
                  ecc_slot, curve,
                  key_type == KEY_TYPE_SIG ? "SIG" :
                  key_type == KEY_TYPE_DEC ? "DEC" : "AUT");
 
-        const uint16_t gen_sw = (key_type == KEY_TYPE_DEC)
-            ? generate_dec_key()
-            : generate_hardware_key(ecc_slot, curve);
+        uint8_t fresh_pubkey[P256_PUBKEY_SIZE] = {};
+        uint16_t gen_sw;
+        if (key_type == KEY_TYPE_DEC) {
+            gen_sw = generate_dec_key(fresh_pubkey);
+        } else {
+            gen_sw = generate_hardware_key(ecc_slot, curve);
+        }
         if (gen_sw != SW_OK) {
             return apdu_sw(resp, gen_sw);
         }
 
         update_generation_timestamp(key_ref);
+
+        if (key_type == KEY_TYPE_DEC) {
+            uint8_t pubkey_with_prefix[P256_PUBKEY_SIZE];
+            size_t pubkey_len = 0;
+            encode_pubkey_with_prefix(fresh_pubkey, CDC_CURVE_P256,
+                                      pubkey_with_prefix, &pubkey_len);
+
+            uint8_t tlv_data[128];
+            size_t pos = tlv_build(tlv_data, sizeof(tlv_data), 0x86,
+                                   pubkey_with_prefix, pubkey_len);
+
+            uint8_t final_resp[140];
+            size_t final_len = 0;
+            final_resp[final_len++] = 0x7F;
+            final_resp[final_len++] = 0x49;
+            final_len += tlv_write_len(final_resp + final_len, pos);
+            memcpy(final_resp + final_len, tlv_data, pos);
+            final_len += pos;
+            return apdu_build_response(resp, resp_max, final_resp, final_len, SW_OK);
+        }
     }
 
     // Read public key (P1=0x81 read, or after key generation above).
     uint8_t pubkey[P256_PUBKEY_SIZE];
     uint8_t read_curve = CDC_CURVE_P256;
     if (!read_public_key(key_type, ecc_slot, pubkey, &read_curve)) {
-        ESP_LOGE(TAG, "Failed to read public key (slot=%d, type=%d)", ecc_slot, key_type);
-        return apdu_sw(resp, SW_CONDITIONS_NOT_SATISFIED);
+        LOG_W(TAG, "Public key read failed: empty slot=%d type=%d", ecc_slot, key_type);
+        // Per OpenPGP 3.4.1 §7.2.14 GET DATA / GENERATE ASYMMETRIC KEY PAIR
+        // with P1=0x81 on an unpopulated slot must signal "referenced data
+        // not found" (SW=6A88). gpg / scdaemon treats 6A88 as "no key yet",
+        // which is the natural state for a freshly-activated card and the
+        // only way `gpg --card-status` completes without aborting.
+        return apdu_sw(resp, SW_REFERENCED_DATA_NOT_FOUND);
     }
 
     // Build TLV response according to OpenPGP 3.4.1: 7F49 <len> { 86 <len> <pubkey> }.
@@ -1633,9 +2589,74 @@ static int cmd_generate_keypair(const apdu_t *apdu, uint8_t *resp, size_t resp_m
     memcpy(final_resp + final_len, tlv_data, pos);
     final_len += pos;
 
-    ESP_LOGI(TAG, "Public key exported (%zu bytes, curve=%d, slot=%d)",
+    LOG_I(TAG, "Public key exported (%zu bytes, curve=%d, slot=%d)",
              pubkey_len, read_curve, ecc_slot);
     return apdu_build_response(resp, resp_max, final_resp, final_len, SW_OK);
+}
+
+/**
+ * \brief Trim an APDU response to the host-requested Le window.
+ *
+ * If the dispatcher produced more payload than the host asked for, we keep
+ * the head (Le bytes) in \p resp and stash the rest in g_resp_buffer so the
+ * host can retrieve it via GET RESPONSE (INS 0xC0). The status word becomes
+ * 61xx where xx = remaining payload size (capped at 0xFF, 0x00 means "more
+ * than 255 still pending"). Responses that already fit pass through.
+ */
+static int apply_response_chaining(uint32_t le, uint8_t *resp, size_t resp_max,
+                                   int result_len) {
+    if (result_len < 2) return result_len;
+    const size_t payload_len = static_cast<size_t>(result_len - 2);
+    const uint16_t sw = static_cast<uint16_t>((resp[result_len - 2] << 8) |
+                                              resp[result_len - 1]);
+    // Only chain on successful payloads; error SWs must surface verbatim.
+    if (sw != SW_OK) return result_len;
+    if (le == 0 || payload_len <= le) {
+        return result_len;
+    }
+    const size_t remainder = payload_len - le;
+    if (remainder > sizeof(g_resp_buffer)) {
+        LOG_W(TAG, "Response remainder %zu > %zu, truncating", remainder, sizeof(g_resp_buffer));
+        return result_len;  // Best-effort: caller gets the truncated head.
+    }
+    memcpy(g_resp_buffer, resp + le, remainder);
+    g_resp_remaining = remainder;
+    g_resp_pos = 0;
+
+    if (resp_max < le + 2) return result_len;  // Defensive: caller's buf too small.
+    const uint8_t sw2 = (remainder > 0xFF) ? 0x00 : static_cast<uint8_t>(remainder);
+    resp[le]     = 0x61;
+    resp[le + 1] = sw2;
+    return static_cast<int>(le + 2);
+}
+
+/**
+ * \brief Handles INS GET RESPONSE (0xC0) — drains the chained response buffer.
+ */
+static int cmd_get_response(const apdu_t *apdu, uint8_t *resp, size_t resp_max) {
+    if (apdu->p1 != 0x00 || apdu->p2 != 0x00) {
+        return apdu_sw(resp, SW_INCORRECT_P1P2);
+    }
+    if (g_resp_remaining == 0) {
+        return apdu_sw(resp, SW_CONDITIONS_NOT_SATISFIED);
+    }
+    size_t want = (apdu->le > 0) ? apdu->le : 256;
+    if (want > g_resp_remaining) want = g_resp_remaining;
+    if (want + 2 > resp_max) want = resp_max - 2;
+
+    memcpy(resp, g_resp_buffer + g_resp_pos, want);
+    g_resp_pos       += want;
+    g_resp_remaining -= want;
+
+    uint16_t sw = SW_OK;
+    if (g_resp_remaining > 0) {
+        const uint8_t sw2 = (g_resp_remaining > 0xFF) ? 0x00
+                                                      : static_cast<uint8_t>(g_resp_remaining);
+        sw = static_cast<uint16_t>((0x61 << 8) | sw2);
+    }
+    resp[want]     = static_cast<uint8_t>((sw >> 8) & 0xFF);
+    resp[want + 1] = static_cast<uint8_t>(sw & 0xFF);
+    return static_cast<int>(want + 2);
 }
 
 int openpgp_process_apdu(const uint8_t *cmd, size_t cmd_len,
@@ -1643,19 +2664,63 @@ int openpgp_process_apdu(const uint8_t *cmd, size_t cmd_len,
     apdu_t apdu;
 
     if (!apdu_parse(cmd, cmd_len, &apdu)) {
-        ESP_LOGE(TAG, "Invalid APDU");
+        LOG_E(TAG, "Invalid APDU");
         return apdu_sw(resp, SW_WRONG_LENGTH);
     }
 
-    ESP_LOGD(TAG, "APDU: CLA=%02X INS=%02X P1=%02X P2=%02X Lc=%d",
+    LOG_D(TAG, "APDU: CLA=%02X INS=%02X P1=%02X P2=%02X Lc=%d",
              apdu.cla, apdu.ins, apdu.p1, apdu.p2, apdu.lc);
 
-    // Check CLA
-    if (apdu.cla != CLA_ISO7816 && apdu.cla != CLA_CHAIN) {
+    // Any command other than GET RESPONSE invalidates a pending chained payload.
+    if (apdu.ins != INS_GET_RESPONSE) {
+        g_resp_remaining = 0;
+        g_resp_pos = 0;
+    }
+
+    // ISO 7816 CLA: bit 4 = chaining. Reject secure messaging and channels >0.
+    if ((apdu.cla & ~0x10) != 0x00) {
+        chain_reset();
         return apdu_sw(resp, SW_CLA_NOT_SUPPORTED);
     }
 
-    // SELECT is always allowed
+    // Command chaining (ISO 7816-4 §5.1.1): accumulate data while the CLA
+    // chaining bit is set; dispatch once it clears. Any deviation in
+    // INS/P1/P2 mid-chain is a protocol error and the chain is dropped.
+    const bool is_chain_block = (apdu.cla & 0x10) != 0;
+    if (is_chain_block || g_chain_active) {
+        if (!g_chain_active) {
+            g_chain_active = true;
+            g_chain_ins = apdu.ins;
+            g_chain_p1  = apdu.p1;
+            g_chain_p2  = apdu.p2;
+            g_chain_len = 0;
+        } else if (apdu.ins != g_chain_ins ||
+                   apdu.p1  != g_chain_p1  ||
+                   apdu.p2  != g_chain_p2) {
+            chain_reset();
+            return apdu_sw(resp, SW_WRONG_DATA);
+        }
+        if (g_chain_len + apdu.lc > sizeof(g_chain_buffer)) {
+            chain_reset();
+            return apdu_sw(resp, SW_WRONG_LENGTH);
+        }
+        if (apdu.lc > 0 && apdu.data != nullptr) {
+            memcpy(g_chain_buffer + g_chain_len, apdu.data, apdu.lc);
+            g_chain_len += apdu.lc;
+        }
+        if (is_chain_block) {
+            // Intermediate block: ACK and wait for more.
+            return apdu_sw(resp, SW_OK);
+        }
+        // Final block — replace the parsed apdu's payload with the
+        // accumulator so the per-command handlers see the full data.
+        apdu.data = g_chain_buffer;
+        apdu.lc   = static_cast<uint16_t>(g_chain_len);
+        chain_reset();
+    }
+
+    // SELECT is always allowed, even in TERMINATED state — otherwise the host
+    // could not target the application to issue ACTIVATE FILE.
     if (apdu.ins == INS_SELECT) {
         return cmd_select(&apdu, resp, resp_max);
     }
@@ -1665,46 +2730,86 @@ int openpgp_process_apdu(const uint8_t *cmd, size_t cmd_len,
         return apdu_sw(resp, SW_CONDITIONS_NOT_SATISFIED);
     }
 
+    // While terminated, only ACTIVATE FILE is honoured. Per OpenPGP 3.4.1
+    // §7.2.18 every other INS must return SW_FILE_TERMINATED (0x6285).
+    if (card_terminated && apdu.ins != INS_ACTIVATE) {
+        return apdu_sw(resp, SW_FILE_TERMINATED);
+    }
+
+    int result_len = 0;
     switch (apdu.ins) {
         case INS_GET_DATA:
-            return cmd_get_data(&apdu, resp, resp_max);
+            result_len = cmd_get_data(&apdu, resp, resp_max);
+            break;
 
         case INS_PUT_DATA:
-            return cmd_put_data(&apdu, resp, resp_max);
+            result_len = cmd_put_data(&apdu, resp, resp_max);
+            break;
+
+        case INS_PUT_DATA_ODD:
+            result_len = cmd_put_data_odd(&apdu, resp, resp_max);
+            break;
 
         case INS_VERIFY:
-            return cmd_verify(&apdu, resp, resp_max);
+            result_len = cmd_verify(&apdu, resp, resp_max);
+            break;
 
         case INS_CHANGE_PIN:
-            return cmd_change_reference_data(&apdu, resp, resp_max);
+            result_len = cmd_change_reference_data(&apdu, resp, resp_max);
+            break;
+
+        case INS_RESET_RETRY:
+            result_len = cmd_reset_retry_counter(&apdu, resp, resp_max);
+            break;
 
         case INS_PSO:
             if (apdu.p1 == 0x9E && apdu.p2 == 0x9A) {
-                // PSO:CDS - Compute Digital Signature
-                return cmd_pso_cds(&apdu, resp, resp_max);
+                result_len = cmd_pso_cds(&apdu, resp, resp_max);
+            } else if (apdu.p1 == 0x80 && apdu.p2 == 0x86) {
+                result_len = cmd_pso_decipher(&apdu, resp, resp_max);
+            } else {
+                result_len = apdu_sw(resp, SW_INCORRECT_P1P2);
             }
-            if (apdu.p1 == 0x80 && apdu.p2 == 0x86) {
-                // PSO:DECIPHER - ECDH decryption
-                return cmd_pso_decipher(&apdu, resp, resp_max);
-            }
-            return apdu_sw(resp, SW_INCORRECT_P1P2);
+            break;
+
+        case INS_INTERNAL_AUTH:
+            result_len = cmd_internal_authenticate(&apdu, resp, resp_max);
+            break;
+
+        case INS_MSE:
+            result_len = cmd_manage_security_env(&apdu, resp, resp_max);
+            break;
 
         case INS_GENERATE_KEYPAIR:
-            return cmd_generate_keypair(&apdu, resp, resp_max);
+            result_len = cmd_generate_keypair(&apdu, resp, resp_max);
+            break;
 
         case INS_GET_CHALLENGE: {
-            // Return random bytes from TROPIC01 TRNG
             uint8_t challenge[255];
             size_t len = apdu.le > 0 ? apdu.le : 8;
             if (len > sizeof(challenge)) len = sizeof(challenge);
-
-            // Use TROPIC01 TRNG (with ESP32 fallback)
             se_random_fill(challenge, len);
-            return apdu_build_response(resp, resp_max, challenge, len, SW_OK);
+            result_len = apdu_build_response(resp, resp_max, challenge, len, SW_OK);
+            break;
         }
 
+        case INS_GET_RESPONSE:
+            // GET RESPONSE is handled before chaining is applied — it owns
+            // the chained buffer directly.
+            return cmd_get_response(&apdu, resp, resp_max);
+
+        case INS_TERMINATE:
+            result_len = cmd_terminate_df(&apdu, resp, resp_max);
+            break;
+
+        case INS_ACTIVATE:
+            result_len = cmd_activate_file(&apdu, resp, resp_max);
+            break;
+
         default:
-            ESP_LOGW(TAG, "Unknown instruction: 0x%02X", apdu.ins);
+            LOG_W(TAG, "Unknown instruction: 0x%02X", apdu.ins);
             return apdu_sw(resp, SW_INS_NOT_SUPPORTED);
     }
+
+    return apply_response_chaining(apdu.le, resp, resp_max, result_len);
 }

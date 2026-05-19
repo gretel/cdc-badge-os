@@ -107,7 +107,7 @@ Commands marked with `[AUTH]` require authentication when `FEATURE_SECURE_SERIAL
 | `GPG_STATUS` | Show GPG key status `[AUTH]` |
 | `GPG_GENERATE <curve> <user_id>` | Generate GPG keys (1=Ed25519, 2=P-256) `[AUTH]` |
 | `GPG_EXPORT` | Export public keys `[AUTH]` |
-| `GPG_RESET` | Reset GPG keys `[AUTH]` |
+| `GPG_RESET` | Two-step destructive reset of all GPG keys (`GPG_RESET` prints a token; confirm within 30 s via `GPG_RESET <token>`) `[AUTH]` |
 
 ## Examples
 

@@ -34,6 +34,7 @@
 #include "cdc_os_ui/AppUi.h"
 #include "driver/rtc_io.h"
 #include "esp_sleep.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 
 static const char* TAG = "BOOT";
@@ -445,7 +446,13 @@ extern "C" void app_main(void)
     initNvs();
 
     // STAGE 1: Core Services
-    if (!initCoreServices()) return;
+    if (!initCoreServices()) {
+        // No log channel and no display available at this point: best-effort
+        // ESP_LOG to UART0, delay to let any output flush, then reboot.
+        ESP_LOGE(TAG, "Core service init failed, restarting in 5s");
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        esp_restart();
+    }
 
     // STAGE 2: Time
     initRtc();

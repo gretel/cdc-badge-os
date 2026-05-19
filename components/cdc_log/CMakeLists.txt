@@ -7,4 +7,5 @@ idf_component_register(
     REQUIRES
         usb_badge
         esp_timer
+        freertos
 )

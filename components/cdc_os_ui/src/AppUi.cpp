@@ -12,6 +12,7 @@
 #include "cdc_os_ui/AppUi.h"
 #include "cdc_os_ui/views/LockScreenView.h"
 #include "cdc_os_ui/views/PinChangeView.h"
+#include "cdc_os_ui/views/BlePairingPromptView.h"
 #include "cdc_os_ui/WifiHandlers.h"
 #include "cdc_os_ui/SettingsHandlers.h"
 #include "cdc_os_ui/SleepManager.h"
@@ -89,6 +90,7 @@ static ListView* s_languageMenu = nullptr;
 static DateInputView* s_dateInput = nullptr;
 static TimeInputView* s_timeInput = nullptr;
 static PinChangeView* s_pinChangeView = nullptr;
+static BlePairingPromptView* s_pairingPrompt = nullptr;
 
 /** \brief Runtime dependencies provided during `ui_init`. */
 static UiDeps s_deps = {};
@@ -510,6 +512,36 @@ static void onLanguageSelect(uint16_t index, void* userData) {
 }
 
 /**
+ * \brief Returns whether the badge is currently locked (showing lock screen with no menu above).
+ * \return `true` if the lock screen is the only view on the stack.
+ */
+static bool isBadgeLocked() {
+    return ViewStack::instance().depth() <= 1 &&
+           ViewStack::instance().current() == s_lockScreen;
+}
+
+/**
+ * \brief Numeric-comparison pairing handler used by all BLE-capable modules.
+ *
+ * If the badge is locked the request is rejected without prompting the user.
+ * Otherwise a modal pairing prompt is displayed and the user accepts/rejects
+ * via the keypad.
+ */
+static void onBleNumericComparison(uint16_t connHandle, uint32_t passkey) {
+    auto* ble = hal::getBluetoothControllerInstance();
+    if (isBadgeLocked()) {
+        if (ble) ble->respondToNumericComparison(connHandle, false);
+        return;
+    }
+    if (!s_pairingPrompt) {
+        s_pairingPrompt = new BlePairingPromptView();
+    }
+    s_pairingPrompt->prepare(connHandle, passkey);
+    ViewStack::instance().showModal(s_pairingPrompt);
+    ViewStack::instance().render();
+}
+
+/**
  * \brief Initializes App UI, builds all core views, and wires callbacks.
  * \param deps Hardware/service dependencies used by the UI runtime.
  */
@@ -711,6 +743,11 @@ void ui_init(const UiDeps& deps) {
 
     // Subscribe to module error events
     core::EventBus::instance().subscribe(onModuleErrorEvent, static_cast<uint32_t>(core::EventType::MODULE_ERROR));
+
+    // Central numeric-comparison pairing prompt
+    if (auto* ble = hal::getBluetoothControllerInstance()) {
+        ble->addNumericComparisonCallback(onBleNumericComparison);
+    }
 
     // Serial callbacks
     serial::SerialCmd::setTextCallback([](const char* field, const char* value) {

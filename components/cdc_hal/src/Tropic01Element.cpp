@@ -78,7 +78,7 @@ public:
     bool getFwVersion(uint8_t riscvVer[4], uint8_t spectVer[4]) override;
 
     // Signing
-    SeResult ecdsaSign(uint8_t slot, const uint8_t* hash, size_t hashLen,
+    SeResult ecdsaSign(uint8_t slot, const uint8_t* msg, size_t msgLen,
                        uint8_t* sig, size_t* sigLen) override;
     SeResult eddsaSign(uint8_t slot, const uint8_t* msg, size_t msgLen,
                        uint8_t* sig) override;
@@ -98,6 +98,7 @@ public:
 
     // Random
     bool getRandom(uint8_t* buffer, uint16_t size) override;
+    bool getRandomStrict(uint8_t* buffer, uint16_t size) override;
 
     // Diagnostics
     bool getChipId(uint8_t* serialNum, uint8_t size) override;
@@ -129,9 +130,10 @@ private:
     lt_ctx_mbedtls_v4_t cryptoCtx_ = {};
     lt_dev_esp32_t device_ = {};
 
-    // Cache for slot usage (protected by bus lock)
-    mutable uint32_t eccSlotCache_ = 0;
-    mutable bool eccCacheValid_ = false;
+    // ECC slot-usage cache. Mutated under the SPI bus lock; read lock-free
+    // from the const accessor, hence atomic.
+    mutable std::atomic<uint32_t> eccSlotCache_{0};
+    mutable std::atomic<bool> eccCacheValid_{false};
 };
 
 /**
@@ -290,7 +292,7 @@ bool Tropic01Element::sessionStart_unlocked() {
     }
 
     sessionActive_.store(true, std::memory_order_release);
-    eccCacheValid_ = false;
+    eccCacheValid_.store(false, std::memory_order_release);
 
     uint32_t sleepCfg = 0;
     if (lt_r_config_read(&handle_, TR01_CFG_SLEEP_MODE_ADDR, &sleepCfg) == LT_OK) {
@@ -393,6 +395,8 @@ SeResult Tropic01Element::mapResult(lt_ret_t ret) const {
         case LT_L3_R_MEM_DATA_READ_SLOT_EMPTY:
         case LT_L3_SLOT_EMPTY:
             return SeResult::SLOT_EMPTY;
+        case LT_L3_SLOT_NOT_EMPTY:
+            return SeResult::SLOT_OCCUPIED;
         case LT_HOST_NO_SESSION:
         case LT_L2_NO_SESSION:
             return SeResult::SESSION_REQUIRED;
@@ -463,7 +467,7 @@ SeResult Tropic01Element::eccGenerate(uint8_t slot, EccCurve curve) {
                                        TR01_CURVE_ED25519 : TR01_CURVE_P256;
         lt_ret_t ret = lt_ecc_key_generate(&handle_, static_cast<lt_ecc_slot_t>(slot), ltCurve);
         if (ret == LT_OK) {
-            eccSlotCache_ |= (1u << slot);
+            eccSlotCache_.fetch_or(1u << slot, std::memory_order_release);
         }
         handleSessionError(ret);
         result = mapResult(ret);
@@ -490,7 +494,7 @@ SeResult Tropic01Element::eccImport(uint8_t slot, const uint8_t* privKey, EccCur
                                        TR01_CURVE_ED25519 : TR01_CURVE_P256;
         lt_ret_t ret = lt_ecc_key_store(&handle_, static_cast<lt_ecc_slot_t>(slot), ltCurve, privKey);
         if (ret == LT_OK) {
-            eccSlotCache_ |= (1u << slot);
+            eccSlotCache_.fetch_or(1u << slot, std::memory_order_release);
         }
         handleSessionError(ret);
         result = mapResult(ret);
@@ -550,7 +554,7 @@ SeResult Tropic01Element::eccDelete(uint8_t slot) {
     } else {
         lt_ret_t ret = lt_ecc_key_erase(&handle_, static_cast<lt_ecc_slot_t>(slot));
         if (ret == LT_OK) {
-            eccSlotCache_ &= ~(1u << slot);
+            eccSlotCache_.fetch_and(~(1u << slot), std::memory_order_release);
         }
         handleSessionError(ret);
         result = mapResult(ret);
@@ -566,8 +570,8 @@ bool Tropic01Element::eccSlotUsed(uint8_t slot) const {
     if (slot >= ECC_SLOT_COUNT) {
         return false;
     }
-    if (eccCacheValid_) {
-        return (eccSlotCache_ & (1u << slot)) != 0;
+    if (eccCacheValid_.load(std::memory_order_acquire)) {
+        return (eccSlotCache_.load(std::memory_order_acquire) & (1u << slot)) != 0;
     }
     auto* self = const_cast<Tropic01Element*>(this);
     uint8_t tempKey[65];
@@ -575,7 +579,11 @@ bool Tropic01Element::eccSlotUsed(uint8_t slot) const {
 }
 
 /**
- * \brief Signs a 32-byte hash using ECDSA key in slot.
+ * \brief Signs a message using ECDSA key in slot.
+ *
+ * libtropic computes SHA-256 over `msg` internally before signing, so callers
+ * pass the raw message and MUST NOT pre-hash. Maximum message length matches
+ * libtropic's internal SHA-256 streaming limit.
  */
 SeResult Tropic01Element::ecdsaSign(uint8_t slot, const uint8_t* msg, size_t msgLen,
                                      uint8_t* sig, size_t* sigLen) {
@@ -845,31 +853,60 @@ SeResult Tropic01Element::rmemReadWithHeader(uint16_t slot, RMemHeader* headerOu
 
 /**
  * \brief Fills buffer with random bytes from TROPIC TRNG with ESP fallback.
+ *
+ * Always returns true on a non-empty request; a WARN is logged whenever the
+ * ESP32 TRNG fallback is taken so the origin is auditable in the log stream.
+ * Callers that require hardware-only entropy must use getRandomStrict().
  */
 bool Tropic01Element::getRandom(uint8_t* buffer, uint16_t size) {
     if (!buffer || size == 0) {
         return false;
     }
     if (core::SystemLock::instance().isLocked()) {
+        LOG_W(TAG, "SystemLock active, ESP32 TRNG fallback (size=%u)", size);
         esp_fill_random(buffer, size);
         return true;
     }
     if (!acquireBus()) {
+        LOG_W(TAG, "Bus unavailable, ESP32 TRNG fallback (size=%u)", size);
         esp_fill_random(buffer, size);
         return true;
     }
 
-    bool ok = true;
     if (!ensureSession_unlocked("getRandom")) {
-        LOG_W(TAG, "Using ESP32 TRNG as fallback");
+        LOG_W(TAG, "No SE session, ESP32 TRNG fallback (size=%u)", size);
         esp_fill_random(buffer, size);
     } else {
         lt_ret_t ret = lt_random_value_get(&handle_, buffer, size);
         handleSessionError(ret);
         if (ret != LT_OK) {
-            LOG_W(TAG, "TROPIC01 TRNG failed, using ESP32 TRNG");
+            LOG_W(TAG, "TROPIC01 TRNG failed (%s), ESP32 TRNG fallback (size=%u)",
+                  lt_ret_verbose(ret), size);
             esp_fill_random(buffer, size);
         }
+    }
+    releaseBus();
+    return true;
+}
+
+/**
+ * \brief Fills buffer with random bytes from TROPIC TRNG only; no fallback.
+ */
+bool Tropic01Element::getRandomStrict(uint8_t* buffer, uint16_t size) {
+    if (!buffer || size == 0) {
+        return false;
+    }
+    if (core::SystemLock::instance().isLocked()) {
+        return false;
+    }
+    if (!acquireBus()) {
+        return false;
+    }
+    bool ok = false;
+    if (ensureSession_unlocked("getRandomStrict")) {
+        lt_ret_t ret = lt_random_value_get(&handle_, buffer, size);
+        handleSessionError(ret);
+        ok = (ret == LT_OK);
     }
     releaseBus();
     return ok;
@@ -923,7 +960,7 @@ bool Tropic01Element::getFwVersion(uint8_t riscvVer[4], uint8_t spectVer[4]) {
         if (ret2 == LT_OK) {
             for (int i = 0; i < 4; i++) spectVer[i] = spectFw[i];
         }
-        handleSessionError(ret);
+        handleSessionError(ret == LT_OK ? ret2 : ret);
         ok = (ret == LT_OK) && (ret2 == LT_OK);
     }
     releaseBus();

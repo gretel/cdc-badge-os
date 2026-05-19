@@ -151,7 +151,7 @@ bool fido2_init(void) {
     }
 
     // Start FIDO2 processing task
-    xTaskCreate(fido2_task, "fido2", 8192, nullptr,
+    xTaskCreate(fido2_task, "fido2", 6144, nullptr,
                 configMAX_PRIORITIES - 2, &g_fido2.task_handle);
 
     g_fido2.initialized = true;

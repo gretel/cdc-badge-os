@@ -9,12 +9,22 @@
 #include "sdkconfig.h"
 #include "esp_timer.h"
 #include "esp_attr.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #if CONFIG_TINYUSB_CDC_ENABLED
 #include "tusb.h"
 #endif
 
+#ifndef DEBUG_MODE
+#define DEBUG_MODE 1
+#endif
+
+#if DEBUG_MODE
 static log_level_t s_log_level = CDC_LOG_LEVEL_DEBUG;
+#else
+static log_level_t s_log_level = CDC_LOG_LEVEL_WARN;
+#endif
 static bool s_initialized = false;
 
 /** \brief Optional console hooks for additional I/O transports (for example BLE). */
@@ -127,7 +137,11 @@ void error_log_dump(void) {
  * \brief Initializes logging subsystem and console backend.
  */
 void log_init(void) {
+#if DEBUG_MODE
     s_log_level = CDC_LOG_LEVEL_DEBUG;
+#else
+    s_log_level = CDC_LOG_LEVEL_WARN;
+#endif
     console_init();
 }
 
@@ -292,13 +306,23 @@ void console_print(const char* str) {
     fflush(stdout);
 
 #if CONFIG_TINYUSB_CDC_ENABLED
-    // Also send to USB CDC if connected
+    // Also send to USB CDC if connected. If the host stops reading the TX
+    // FIFO fills up; without a bound the original `while (avail == 0)
+    // continue;` loop deadlocks the caller — and because logging happens on
+    // every task this drags the whole UART driver lock along, freezing the
+    // device end-to-end. We give the FIFO a short retry window and then drop
+    // the rest of this log line: dropping a log entry is non-fatal, but
+    // hanging on it is.
     if (s_initialized && tud_cdc_connected()) {
         size_t written = 0;
+        const TickType_t deadline =
+            xTaskGetTickCount() + pdMS_TO_TICKS(20);
         while (written < len) {
             size_t avail = tud_cdc_write_available();
             if (avail == 0) {
                 tud_cdc_write_flush();
+                if (xTaskGetTickCount() >= deadline) break;
+                vTaskDelay(1);
                 continue;
             }
             size_t to_write = len - written;

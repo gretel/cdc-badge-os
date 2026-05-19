@@ -51,7 +51,9 @@ public:
 
 private:
     const char* title_ = nullptr;
-    const ContextMenuItem* items_ = nullptr;
+    // Items are copied so callers can safely use stack arrays; the i18n
+    // strings the labels point to are stable for the program lifetime.
+    ContextMenuItem items_[MAX_ITEMS] = {};
     uint8_t itemCount_ = 0;
     uint8_t selection_ = 0;
     uint8_t scrollPos_ = 0;

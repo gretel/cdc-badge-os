@@ -39,6 +39,11 @@ public:
     // Storage
     static constexpr uint16_t RMEM_SLOT_PIN = 0;
 
+    // Chip-bound attestation key in ECC slot 0 (managed by AttestationKeyService).
+    // Used by saveToStorage / loadFromStorage to sign and verify the PIN payload
+    // so a tampered or regenerated slot triggers a silent reset to defaults.
+    static constexpr uint8_t ATTESTATION_ECC_SLOT = 0;
+
     // Hash sizes
     static constexpr uint8_t BADGE_HASH_SIZE = 16;  // LEFT(SHA256, 16)
     static constexpr uint8_t KDF_HASH_SIZE = 32;    // Full SHA256
@@ -114,8 +119,11 @@ private:
     PinManager() = default;
 
     static constexpr uint8_t MAX_RETRIES = 3;
-    static constexpr uint8_t MAGIC_V3 = 0xDD;
-    static constexpr uint8_t STORAGE_SIZE = 106;
+    static constexpr uint8_t MAGIC = 0xDE;
+    static constexpr uint8_t SIGNATURE_SIZE = 64;        // P-256 ECDSA raw R||S
+    static constexpr uint8_t PAYLOAD_SIZE = 106;
+    // Stored buffer: [PAYLOAD_SIZE bytes payload][SIGNATURE_SIZE bytes ECDSA sig]
+    static constexpr uint16_t STORAGE_SIZE = PAYLOAD_SIZE + SIGNATURE_SIZE;
 
     // Badge/FIDO2
     uint8_t badgeHash_[BADGE_HASH_SIZE] = {};
@@ -129,6 +137,13 @@ private:
     uint8_t pw3Hash_[KDF_HASH_SIZE] = {};
     uint8_t pw1Retries_ = MAX_RETRIES;
     uint8_t pw3Retries_ = MAX_RETRIES;
+
+    // Mirrors of what is currently persisted in R-Memory. Updated by
+    // saveToStorage() after a successful write. Used to skip redundant
+    // writes when the in-RAM counters already match the on-chip value.
+    uint8_t persistedBadgeRetries_ = MAX_RETRIES;
+    uint8_t persistedPw1Retries_   = MAX_RETRIES;
+    uint8_t persistedPw3Retries_   = MAX_RETRIES;
 
     bool pinLoaded_ = false;
     bool badgePinIsSet_ = false;

@@ -26,6 +26,7 @@ enum class EventType : uint8_t {
     SYSTEM_LOCK,
     SYSTEM_SLEEP,
     SYSTEM_WAKE,
+    SYSTEM_SLEEP_INCOMING,
 
     // Bluetooth events
     BLE_CONNECTED,

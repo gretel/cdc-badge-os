@@ -12,7 +12,6 @@
 #include <nvs.h>
 #include <string.h>
 
-using cdc::mod_fido2::get_se;
 using cdc::mod_fido2::sha256;
 
 static const char* TAG = "FIDO2";
@@ -189,7 +188,7 @@ static uint16_t rmem_slot_for_logical(uint8_t slot) {
 static bool read_rmem_credential(uint8_t logical_slot, fido2_stored_cred_t* stored) {
     if (!stored) return false;
 
-    auto* se = get_se();
+    auto* se = cdc::hal::getSecureElementInstance();
     if (!se) return false;
 
     uint16_t rmem_slot = rmem_slot_for_logical(logical_slot);
@@ -239,7 +238,7 @@ static void update_cache_from_stored(uint8_t slot, const fido2_stored_cred_t* st
  * \return void
  */
 static void erase_slot_data(uint8_t logical_slot) {
-    auto* se = get_se();
+    auto* se = cdc::hal::getSecureElementInstance();
     if (!se) return;
 
     uint8_t phys_slot = ecc_slot_for_logical(logical_slot);
@@ -312,7 +311,7 @@ static uint8_t raw_sig_to_der(const uint8_t raw_sig[FIDO2_SIG_SIZE], uint8_t* de
  * \return `true` if write succeeded, otherwise `false`.
  */
 static bool write_rmem_credential(uint8_t logical_slot, const fido2_stored_cred_t* stored) {
-    auto* se = get_se();
+    auto* se = cdc::hal::getSecureElementInstance();
     if (!se) return false;
 
     uint16_t rmem_slot = rmem_slot_for_logical(logical_slot);
@@ -378,7 +377,7 @@ bool fido2_storage_counter_increment(void) {
     if (!g_storage.counter_loaded) {
         fido2_storage_counter_load();
     }
-    g_storage.auth_counter++;
+    uint32_t new_value = g_storage.auth_counter + 1;
 
     nvs_handle_t nvs;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
@@ -387,7 +386,7 @@ bool fido2_storage_counter_increment(void) {
         return false;
     }
 
-    err = nvs_set_u32(nvs, NVS_KEY_COUNTER, g_storage.auth_counter);
+    err = nvs_set_u32(nvs, NVS_KEY_COUNTER, new_value);
     if (err != ESP_OK) {
         LOG_E(TAG, "Failed to set counter in NVS: %s", esp_err_to_name(err));
         nvs_close(nvs);
@@ -396,10 +395,21 @@ bool fido2_storage_counter_increment(void) {
 
     err = nvs_commit(nvs);
     if (err != ESP_OK) {
-        LOG_W(TAG, "NVS commit failed: %s", esp_err_to_name(err));
+        LOG_E(TAG, "NVS commit failed for counter: %s", esp_err_to_name(err));
+        nvs_close(nvs);
+        return false;
     }
 
     nvs_close(nvs);
+    g_storage.auth_counter = new_value;
+    return true;
+}
+
+/**
+ * \brief No-op flush retained for API stability; per-increment path commits.
+ * \return Always `true`.
+ */
+bool fido2_storage_counter_flush(void) {
     return true;
 }
 
@@ -794,7 +804,7 @@ bool fido2_storage_create_credential(
     // (handles cache/chip state mismatch)
     LOG_D(TAG, "Erasing slot %d before key generation", slot);
     uint8_t phys_slot = ecc_slot_for_logical(static_cast<uint8_t>(slot));
-    auto* se = get_se();
+    auto* se = cdc::hal::getSecureElementInstance();
     if (!se) return false;
     se->eccDelete(phys_slot);
 
@@ -939,7 +949,7 @@ bool fido2_storage_sign(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
         return false;
     }
 
-    auto* se = get_se();
+    auto* se = cdc::hal::getSecureElementInstance();
     if (!se) return false;
 
     uint8_t raw_sig[FIDO2_SIG_SIZE];
@@ -978,7 +988,7 @@ bool fido2_storage_sign_raw(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
 
     if (curve == CDC_CURVE_ED25519) {
         // EdDSA sign: sign message directly
-        auto* se = get_se();
+        auto* se = cdc::hal::getSecureElementInstance();
         if (!se) return false;
 
         uint8_t phys_slot = ecc_slot_for_logical(slot);
@@ -989,7 +999,7 @@ bool fido2_storage_sign_raw(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
         *sig_len = FIDO2_SIG_SIZE;  // Ed25519 signature is always 64 bytes
         LOG_D(TAG, "EdDSA signed %d bytes with slot %d", msg_len, slot);
     } else {
-        auto* se = get_se();
+        auto* se = cdc::hal::getSecureElementInstance();
         if (!se) return false;
         uint8_t phys_slot = ecc_slot_for_logical(slot);
         size_t raw_len = FIDO2_SIG_SIZE;
@@ -1022,7 +1032,7 @@ bool fido2_storage_sign_der(uint8_t slot, const uint8_t *msg, uint16_t msg_len,
         return false;
     }
 
-    auto* se = get_se();
+    auto* se = cdc::hal::getSecureElementInstance();
     if (!se) return false;
 
     uint8_t raw_sig[FIDO2_SIG_SIZE];
@@ -1053,7 +1063,7 @@ bool fido2_storage_get_pubkey(uint8_t slot, uint8_t *pubkey) {
         return false;
     }
 
-    auto* se = get_se();
+    auto* se = cdc::hal::getSecureElementInstance();
     if (!se) {
         return false;
     }

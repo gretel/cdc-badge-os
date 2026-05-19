@@ -9,7 +9,6 @@ idf_component_register(
         "src/fido2_storage.cpp"
         "src/Fido2Module.cpp"
         "src/Fido2Ui.cpp"
-        "src/pin_storage.cpp"
         "src/u2f.cpp"
     INCLUDE_DIRS
         "include"

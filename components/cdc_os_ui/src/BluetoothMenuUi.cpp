@@ -20,6 +20,7 @@ enum BluetoothMenuIdx {
     BT_IDX_ENABLE = 0,
     BT_IDX_STATUS,
     BT_IDX_SCAN,
+    BT_IDX_FORGET_BONDS,
     BT_IDX_FIXED_COUNT
 };
 
@@ -131,6 +132,7 @@ void rebuildBluetoothMenu() {
     }
     s_bluetoothItems[BT_IDX_STATUS] = {tr(StringId::BLE_STATUS), 0, false, nullptr};
     s_bluetoothItems[BT_IDX_SCAN] = {tr(StringId::BLE_SCAN), 0, !enabled, nullptr};
+    s_bluetoothItems[BT_IDX_FORGET_BONDS] = {"Forget all bonds", 0, !enabled, nullptr};
 
     auto& moduleReg = core::ModuleRegistry::instance();
     s_bluetoothModuleCount = moduleReg.getMenuItems(
@@ -178,6 +180,15 @@ static void onBluetoothMenuSelect(uint16_t index, void* userData) {
             return;
         case BT_IDX_SCAN:
             startBluetoothScan();
+            return;
+        case BT_IDX_FORGET_BONDS:
+            askConfirm("Forget all paired devices?", [](void*) {
+                auto* ble = hal::getBluetoothControllerInstance();
+                if (ble) {
+                    ble->clearAllBonds();
+                    showToastSuccess("Bonds cleared");
+                }
+            });
             return;
     }
 

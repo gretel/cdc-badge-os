@@ -6,15 +6,15 @@ idf_component_register(
         "src/ccid/ccid_driver.cpp"
         "src/gpg.cpp"
         "src/GpgStorage.cpp"
-        "src/pin_storage.cpp"
         "src/openpgp/apdu.cpp"
+        "src/openpgp/algo_attr.cpp"
         "src/openpgp/ccid.cpp"
-        "src/openpgp/openpgp.cpp"
         "src/openpgp/ecdh.cpp"
+        "src/openpgp/openpgp.cpp"
+        "src/openpgp/tlv.cpp"
     INCLUDE_DIRS
         "include"
         "src/openpgp"
-        "${CMAKE_SOURCE_DIR}/components/serial_cmd/include"
     REQUIRES
         cdc_core
         cdc_ui

@@ -83,6 +83,8 @@ enum VcardStatusValue : uint8_t {
     STATUS_TIMEOUT  = 0x04,
 };
 
+// 0xFFFF is the reserved test/placeholder Bluetooth SIG company identifier.
+// A real Company ID must be acquired from the SIG before shipping.
 static constexpr uint16_t VCARD_COMPANY_ID = 0xFFFF;
 static constexpr uint8_t VCARD_ADV_TYPE = 0x01;
 static constexpr uint16_t INVALID_HANDLE = 0xFFFF;
@@ -175,6 +177,27 @@ static vcard_consent_callback_t s_consent_callback = nullptr;
 static vcard_exchange_complete_callback_t s_exchange_complete_callback = nullptr;
 
 /**
+ * \brief Guards exchange state machine fields against concurrent GAP events
+ *        and user-facing API calls.
+ */
+static SemaphoreHandle_t s_exchange_mutex = nullptr;
+
+/**
+ * \brief RAII helper that takes/releases s_exchange_mutex.
+ */
+struct ExchangeLock {
+    bool held = false;
+    ExchangeLock() {
+        if (s_exchange_mutex && xSemaphoreTake(s_exchange_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            held = true;
+        }
+    }
+    ~ExchangeLock() {
+        if (held && s_exchange_mutex) xSemaphoreGive(s_exchange_mutex);
+    }
+};
+
+/**
  * \brief Timeout constants for connection, discovery, consent, and operations.
  */
 static constexpr uint32_t CONNECT_TIMEOUT_MS = 10000;
@@ -187,6 +210,16 @@ static constexpr uint32_t OPERATION_TIMEOUT_MS = 10000;
  */
 static GattCharacteristic s_gattChars[4] = {};
 static GattServiceDef s_gattSvcDef = {};
+
+/**
+ * \brief Listener tokens for cleanup in ble_vcard_deinit.
+ */
+static IBluetoothController::ListenerToken s_tokConn = IBluetoothController::INVALID_LISTENER;
+static IBluetoothController::ListenerToken s_tokDisconn = IBluetoothController::INVALID_LISTENER;
+static IBluetoothController::ListenerToken s_tokSvcDisc = IBluetoothController::INVALID_LISTENER;
+static IBluetoothController::ListenerToken s_tokCharRead = IBluetoothController::INVALID_LISTENER;
+static IBluetoothController::ListenerToken s_tokNotify = IBluetoothController::INVALID_LISTENER;
+static IBluetoothController::ListenerToken s_tokWriteComplete = IBluetoothController::INVALID_LISTENER;
 
 /**
  * \brief Internal forward declarations.
@@ -260,6 +293,9 @@ static void onServiceDiscovered(uint16_t connHandle,
         else if (chr.uuid == ctrlUuid) s_remote_control_handle = chr.valueHandle;
         else if (chr.uuid == statUuid) {
             s_remote_status_handle = chr.valueHandle;
+            // The CCCD is typically at valueHandle + 1 but the spec does not
+            // guarantee this layout. A real implementation must enumerate
+            // descriptors via ble_gattc_disc_all_dscs and locate UUID 0x2902.
             s_remote_status_cccd_handle = chr.valueHandle + 1;
         }
     }
@@ -734,6 +770,13 @@ bool ble_vcard_init(void) {
             return false;
         }
     }
+    if (!s_exchange_mutex) {
+        s_exchange_mutex = xSemaphoreCreateMutex();
+        if (!s_exchange_mutex) {
+            LOG_E(TAG, "Failed to create exchange mutex");
+            return false;
+        }
+    }
 
     auto* ble = getBle();
     if (!ble) {
@@ -757,15 +800,15 @@ bool ble_vcard_init(void) {
         return false;
     }
 
-    // Register GATT client callbacks for exchange
-    ble->setServiceDiscoveryCallback(onServiceDiscovered);
-    ble->setCharacteristicReadCallback(onCharacteristicRead);
-    ble->setNotificationCallback(onNotification);
-    ble->setWriteCompleteCallback(onWriteComplete);
+    // Register GATT client callbacks for exchange using multi-listener API
+    s_tokSvcDisc = ble->addServiceDiscoveryCallback(onServiceDiscovered);
+    s_tokCharRead = ble->addCharacteristicReadCallback(onCharacteristicRead);
+    s_tokNotify = ble->addNotificationCallback(onNotification);
+    s_tokWriteComplete = ble->addWriteCompleteCallback(onWriteComplete);
 
     // Register connection callbacks
-    ble->addConnectionCallback(onConnect);
-    ble->addDisconnectionCallback(onDisconnect);
+    s_tokConn = ble->addConnectionCallback(onConnect);
+    s_tokDisconn = ble->addDisconnectionCallback(onDisconnect);
 
     s_initialized = true;
     LOG_I(TAG, "BLE vCard service initialized");
@@ -780,6 +823,14 @@ void ble_vcard_deinit(void) {
     if (ble) {
         ble->removeAdvertisingUuid(BleUuid::from128(VCARD_SVC_UUID));
         ble->clearAdvertisingManufacturerData();
+        // Remove all callback registrations so a stale this-state pointer
+        // is never dereferenced after the module is torn down.
+        ble->removeConnectionCallback(s_tokConn);
+        ble->removeDisconnectionCallback(s_tokDisconn);
+        ble->removeServiceDiscoveryCallback(s_tokSvcDisc);
+        ble->removeCharacteristicReadCallback(s_tokCharRead);
+        ble->removeNotificationCallback(s_tokNotify);
+        ble->removeWriteCompleteCallback(s_tokWriteComplete);
     }
 
     s_initialized = false;
@@ -955,6 +1006,7 @@ bool ble_vcard_exchange_with(const uint8_t addr[6], uint8_t addr_type) {
         return false;
     }
 
+    ExchangeLock lock;
     if (s_exchange_state != VCARD_EXCHANGE_IDLE) {
         LOG_W(TAG, "Exchange already in progress");
         return false;
@@ -990,6 +1042,7 @@ bool ble_vcard_exchange_with(const uint8_t addr[6], uint8_t addr_type) {
  * \return `true` after cancellation logic completes.
  */
 bool ble_vcard_exchange_cancel(void) {
+    ExchangeLock lock;
     if (s_exchange_state == VCARD_EXCHANGE_IDLE) {
         return true;
     }

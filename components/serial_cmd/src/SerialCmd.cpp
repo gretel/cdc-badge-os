@@ -17,6 +17,7 @@
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_memory_utils.h"
 #include <cstring>
 #include <cctype>
 #include <cstdlib>
@@ -130,10 +131,9 @@ static void redrawLine(const char* newContent, size_t& bufferPos) {
     }
 
     if (newContent) {
-        size_t len = strlen(newContent);
-        if (len >= SerialCmd::CMD_BUFFER_SIZE) len = SerialCmd::CMD_BUFFER_SIZE - 1;
-        strncpy(s_cmdBuffer, newContent, len);
-        s_cmdBuffer[len] = '\0';
+        strncpy(s_cmdBuffer, newContent, SerialCmd::CMD_BUFFER_SIZE - 1);
+        s_cmdBuffer[SerialCmd::CMD_BUFFER_SIZE - 1] = '\0';
+        size_t len = strlen(s_cmdBuffer);
         bufferPos = len;
         Console::print(s_cmdBuffer);
     }
@@ -381,13 +381,12 @@ static void printNvsValue(nvs_handle_t nvs, const char* key, nvs_type_t type) {
 /**
  * \brief Retrieves the current time as `timeval` and local `tm`.
  * \param tv Output `timeval`.
- * \param tm Output pointer to local time structure.
+ * \param tm Caller-owned output `tm` populated via `localtime_r`.
  * \return `true` if time conversion succeeded, otherwise `false`.
  */
-static bool getCurrentTime(struct timeval& tv, struct tm*& tm) {
+static bool getCurrentTime(struct timeval& tv, struct tm& tm) {
     gettimeofday(&tv, nullptr);
-    tm = localtime(&tv.tv_sec);
-    return tm != nullptr;
+    return localtime_r(&tv.tv_sec, &tm) != nullptr;
 }
 
 /**
@@ -441,12 +440,104 @@ static void cmdStatus(const char* args) {
  * \brief Prints heap and PSRAM usage statistics.
  * \param args Unused command arguments.
  */
+/**
+ * \brief Prints detailed per-task stack watermarks plus heap fragmentation.
+ *        Heavier than cmdMem; only relevant for diagnostics.
+ */
+static void cmdMemInfo(const char* args) {
+    (void)args;
+    Console::printf("=== Detailed Memory Info ===\r\n");
+
+    multi_heap_info_t info;
+    heap_caps_get_info(&info, MALLOC_CAP_INTERNAL);
+    Console::printf("\r\n-- Internal DRAM --\r\n");
+    Console::printf("  total free      : %lu\r\n", (unsigned long)info.total_free_bytes);
+    Console::printf("  total allocated : %lu\r\n", (unsigned long)info.total_allocated_bytes);
+    Console::printf("  largest free    : %lu\r\n", (unsigned long)info.largest_free_block);
+    Console::printf("  min ever free   : %lu\r\n", (unsigned long)info.minimum_free_bytes);
+    Console::printf("  free blocks     : %lu\r\n", (unsigned long)info.free_blocks);
+    Console::printf("  alloc blocks    : %lu\r\n", (unsigned long)info.allocated_blocks);
+
+    heap_caps_get_info(&info, MALLOC_CAP_DMA);
+    Console::printf("\r\n-- DMA-capable --\r\n");
+    Console::printf("  total free      : %lu\r\n", (unsigned long)info.total_free_bytes);
+    Console::printf("  largest free    : %lu\r\n", (unsigned long)info.largest_free_block);
+
+    heap_caps_get_info(&info, MALLOC_CAP_SPIRAM);
+    if (info.total_free_bytes + info.total_allocated_bytes > 0) {
+        Console::printf("\r\n-- PSRAM --\r\n");
+        Console::printf("  total free      : %lu\r\n", (unsigned long)info.total_free_bytes);
+        Console::printf("  total allocated : %lu\r\n", (unsigned long)info.total_allocated_bytes);
+        Console::printf("  largest free    : %lu\r\n", (unsigned long)info.largest_free_block);
+    }
+
+#if CONFIG_FREERTOS_USE_TRACE_FACILITY
+    UBaseType_t numTasks = uxTaskGetNumberOfTasks();
+    TaskStatus_t* tasks = (TaskStatus_t*)calloc(numTasks, sizeof(TaskStatus_t));
+    if (tasks) {
+        numTasks = uxTaskGetSystemState(tasks, numTasks, nullptr);
+        Console::printf("\r\n-- Tasks (%u) --\r\n", (unsigned)numTasks);
+        Console::printf("  %-16s  Prio  StkMinFree  Stk@   State  Core\r\n", "Name");
+        uint32_t totalStackFree = 0;
+        for (UBaseType_t i = 0; i < numTasks; i++) {
+            const char* st = "?";
+            switch (tasks[i].eCurrentState) {
+                case eRunning:   st = "RUN"; break;
+                case eReady:     st = "RDY"; break;
+                case eBlocked:   st = "BLK"; break;
+                case eSuspended: st = "SUS"; break;
+                case eDeleted:   st = "DEL"; break;
+                case eInvalid:   st = "INV"; break;
+            }
+            BaseType_t coreId = -1;
+#if INCLUDE_xTaskGetCoreID
+            coreId = xTaskGetCoreID(tasks[i].xHandle);
+#endif
+            const char* stackLoc = "DRAM";
+            if (tasks[i].pxStackBase != nullptr &&
+                esp_ptr_external_ram(tasks[i].pxStackBase)) {
+                stackLoc = "PSRAM";
+            }
+            Console::printf("  %-16s  %-4u  %-10lu  %-5s  %-5s  %d\r\n",
+                            tasks[i].pcTaskName,
+                            (unsigned)tasks[i].uxCurrentPriority,
+                            (unsigned long)tasks[i].usStackHighWaterMark,
+                            stackLoc,
+                            st,
+                            (int)coreId);
+            totalStackFree += tasks[i].usStackHighWaterMark;
+        }
+        Console::printf("  (Sum stack headroom across all tasks: %lu B)\r\n",
+                        (unsigned long)totalStackFree);
+        free(tasks);
+    }
+#else
+    Console::printf("\r\nTask list unavailable (FREERTOS_USE_TRACE_FACILITY=n)\r\n");
+#endif
+
+    Console::flush();
+}
+
 static void cmdMem(const char* args) {
     (void)args;
     Console::printf("=== Memory Usage ===\r\n");
-    Console::printf("Heap: %lu / %lu bytes free\r\n",
+    Console::printf("Heap (total): %lu / %lu bytes free\r\n",
                    (unsigned long)esp_get_free_heap_size(),
                    (unsigned long)heap_caps_get_total_size(MALLOC_CAP_DEFAULT));
+
+    size_t intFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t intTotal = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+    size_t intLargest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    Console::printf("Internal DRAM: %lu / %lu free (largest block %lu)\r\n",
+                    (unsigned long)intFree,
+                    (unsigned long)intTotal,
+                    (unsigned long)intLargest);
+
+    size_t dmaFree = heap_caps_get_free_size(MALLOC_CAP_DMA);
+    size_t dmaLargest = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
+    Console::printf("DMA-capable: %lu free (largest %lu)\r\n",
+                    (unsigned long)dmaFree,
+                    (unsigned long)dmaLargest);
 
     size_t psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     size_t psramTotal = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
@@ -665,9 +756,9 @@ static void cmdNvsDel(const char* args) {
 static void cmdGetTime(const char* args) {
     (void)args;
     struct timeval tv;
-    struct tm* tm;
+    struct tm tm;
     if (getCurrentTime(tv, tm)) {
-        Console::printf("%02d:%02d:%02d\r\n", tm->tm_hour, tm->tm_min, tm->tm_sec);
+        Console::printf("%02d:%02d:%02d\r\n", tm.tm_hour, tm.tm_min, tm.tm_sec);
     } else {
         Console::printf("--:--:--\r\n");
     }
@@ -680,9 +771,9 @@ static void cmdGetTime(const char* args) {
 static void cmdGetDate(const char* args) {
     (void)args;
     struct timeval tv;
-    struct tm* tm;
+    struct tm tm;
     if (getCurrentTime(tv, tm)) {
-        Console::printf("%02d.%02d.%04d\r\n", tm->tm_mday, tm->tm_mon + 1, tm->tm_year + 1900);
+        Console::printf("%02d.%02d.%04d\r\n", tm.tm_mday, tm.tm_mon + 1, tm.tm_year + 1900);
     } else {
         Console::printf("--.---.----\r\n");
     }
@@ -708,12 +799,12 @@ static void cmdSetTime(const char* args) {
     }
 
     struct timeval tv;
-    struct tm* tm;
+    struct tm tm;
     if (getCurrentTime(tv, tm)) {
-        tm->tm_hour = h;
-        tm->tm_min = m;
-        tm->tm_sec = s;
-        if (setSystemTime(tm)) {
+        tm.tm_hour = h;
+        tm.tm_min = m;
+        tm.tm_sec = s;
+        if (setSystemTime(&tm)) {
             Console::printf("OK: Time set to %02d:%02d:%02d\r\n", h, m, s);
             if (s_timeCallback) {
                 s_timeCallback();
@@ -746,12 +837,12 @@ static void cmdSetDate(const char* args) {
     }
 
     struct timeval tv;
-    struct tm* tm;
+    struct tm tm;
     if (getCurrentTime(tv, tm)) {
-        tm->tm_mday = d;
-        tm->tm_mon = m - 1;
-        tm->tm_year = y - 1900;
-        if (setSystemTime(tm)) {
+        tm.tm_mday = d;
+        tm.tm_mon = m - 1;
+        tm.tm_year = y - 1900;
+        if (setSystemTime(&tm)) {
             Console::printf("OK: Date set to %02d.%02d.%04d\r\n", d, m, y);
             if (s_timeCallback) {
                 s_timeCallback();
@@ -827,14 +918,25 @@ static void cmdAuth(const char* args) {
     }
 
     if (!args || !*args) {
-        Console::printf("Usage: AUTH <pin>\r\n");
-        Console::printf("Retries: %d\r\n", pm.getBadgeRetries());
+        // No PIN argument: treat as logout.
+        if (SerialCmd::isAuthenticated()) {
+            SerialCmd::logout();
+            Console::printf("OK: Logged out\r\n");
+        } else {
+            Console::printf("Usage: AUTH <pin>\r\n");
+            Console::printf("Retries: %d\r\n", pm.getBadgeRetries());
+        }
         return;
     }
 
     if (SerialCmd::authenticate(args)) {
         Console::printf("OK: Authenticated\r\n");
     } else {
+        // Wrong PIN drops any active session so the next command runs
+        // unprivileged instead of inheriting the previous session.
+        if (SerialCmd::isAuthenticated()) {
+            SerialCmd::logout();
+        }
         uint8_t retries = pm.getBadgeRetries();
         if (retries == 0) {
             if (pm.isLockoutActive()) {
@@ -1210,6 +1312,8 @@ void SerialCmd::init() {
 #if FEATURE_SECURE_SERIAL
     getCommandRegistry().setAuthProvider(isAuthenticated);
     getCommandRegistry().setOnCommandExecuted(resetAuthTimer);
+#else
+    log_set_level(CDC_LOG_LEVEL_DEBUG);
 #endif
 
     registerBuiltinCommands();
@@ -1490,6 +1594,9 @@ bool SerialCmd::isAuthenticated() {
     uint64_t now = esp_timer_get_time();
     if ((now - s_authTimestamp) > (AUTH_TIMEOUT_MS * 1000ULL)) {
         s_authenticated = false;
+#if !DEBUG_MODE
+        log_set_level(CDC_LOG_LEVEL_WARN);
+#endif
         LOG_I(TAG, "Session timed out");
         return false;
     }
@@ -1530,6 +1637,9 @@ bool SerialCmd::authenticate(const char* pin) {
 
     s_authenticated = true;
     s_authTimestamp = esp_timer_get_time();
+#if !DEBUG_MODE
+    log_set_level(CDC_LOG_LEVEL_DEBUG);
+#endif
     LOG_I(TAG, "Authenticated via serial");
     return true;
 }
@@ -1540,6 +1650,9 @@ bool SerialCmd::authenticate(const char* pin) {
 void SerialCmd::logout() {
     s_authenticated = false;
     s_authTimestamp = 0;
+#if !DEBUG_MODE
+    log_set_level(CDC_LOG_LEVEL_WARN);
+#endif
     LOG_I(TAG, "Logged out");
 }
 
@@ -1551,7 +1664,15 @@ void SerialCmd::executeCommand(char* cmd) {
     cmd = trim(cmd);
     if (!*cmd) return;
 
-    LOG_D(TAG, "Executing: %s", cmd);
+    char first_token[24];
+    size_t i = 0;
+    while (cmd[i] && !isspace(static_cast<unsigned char>(cmd[i])) &&
+           i < sizeof(first_token) - 1) {
+        first_token[i] = cmd[i];
+        i++;
+    }
+    first_token[i] = '\0';
+    LOG_D(TAG, "Executing: %s", first_token);
     getCommandRegistry().processCommand(cmd);
 }
 
@@ -1584,6 +1705,7 @@ void SerialCmd::registerBuiltinCommands() {
     reg.registerCommand({"PING", "Check if device is responsive", cmdPing, "system", false});
     reg.registerCommand({"STATUS", "Show system status", cmdStatus, "system", false});
     reg.registerCommand({"MEM", "Show memory usage", cmdMem, "system", false});
+    reg.registerCommand({"MEMINFO", "Show detailed memory + task info", cmdMemInfo, "system", false});
     reg.registerCommand({"ERROR_LOG", "Show error log (CLEAR to reset)", cmdErrorLog, "system", false});
     reg.registerCommand({"REBOOT", "Restart the device", cmdReboot, "system", true});
 

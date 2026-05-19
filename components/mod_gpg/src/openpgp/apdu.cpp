@@ -42,7 +42,7 @@ bool apdu_parse(const uint8_t *raw, size_t raw_len, apdu_t *apdu) {
 
         // Extended Lc (3 bytes: 0x00 + 2 bytes)
         if (pos + 3 <= raw_len) {
-            apdu->lc = (raw[pos + 1] << 8) | raw[pos + 2];
+            apdu->lc = static_cast<uint16_t>((raw[pos + 1] << 8) | raw[pos + 2]);
             pos += 3;
         }
     } else {
@@ -75,7 +75,7 @@ bool apdu_parse(const uint8_t *raw, size_t raw_len, apdu_t *apdu) {
         if (apdu->extended) {
             // Extended Le (2 bytes)
             if (pos + 2 <= raw_len) {
-                uint16_t le_val = (raw[pos] << 8) | raw[pos + 1];
+                uint16_t le_val = static_cast<uint16_t>((raw[pos] << 8) | raw[pos + 1]);
                 apdu->le = (le_val == 0) ? 65536 : le_val;
             }
         } else {

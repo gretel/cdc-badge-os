@@ -4,8 +4,8 @@
 #include "cdc_hal/ISleepController.h"
 #include "cdc_hal/IPowerManager.h"
 #include "cdc_hal/IDisplay.h"
+#include "cdc_core/EventBus.h"
 #include "cdc_log.h"
-#include "mod_fido2/Fido2Ui.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -109,9 +109,9 @@ void SleepManager::checkLockScreenSleep(uint32_t nowMs) {
 void SleepManager::enterLockScreenSleep() {
     if (!lockScreen_ || !sleep_) return;
 
-    if (cdc::mod_fido2::fido2_ui_abort_prompt()) {
-        LOG_I(TAG, "Aborted active FIDO2 prompt before sleep");
-    }
+    auto& bus = cdc::core::EventBus::instance();
+    bus.publish(cdc::core::EventType::SYSTEM_SLEEP_INCOMING);
+    bus.process();
 
     lockScreen_->addStatusIcon(StatusIcon::LIGHT_SLEEP);
     inLightSleep_ = true;

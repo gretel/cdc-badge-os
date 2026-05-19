@@ -10,6 +10,7 @@ idf_component_register(
         "src/TimeInputView.cpp"
         "src/MessageBox.cpp"
         "src/T9InputView.cpp"
+        "src/PasswordT9View.cpp"
         "src/InfoView.cpp"
         "src/ToastView.cpp"
         "src/ContextMenuView.cpp"

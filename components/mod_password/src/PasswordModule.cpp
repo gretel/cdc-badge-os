@@ -411,8 +411,8 @@ static void cmd_password_edit(const char* args) {
         cdc::core::unescapeSpaces(entry.url);
     } else if (strcasecmp(field, "totp") == 0) {
         int totp = atoi(value);
-        if (totp < 0 || totp > 255) {
-            cdc::serial::Console::printf("ERROR: totp slot out of range (0-255)\r\n");
+        if (totp < 0 || totp > 254) {
+            cdc::serial::Console::printf("ERROR: totp slot out of range (0-254)\r\n");
             return;
         }
         entry.totpSlot = static_cast<uint8_t>(totp);
@@ -726,6 +726,7 @@ static void wizardEdit(uint16_t slot) {
  */
 static void onWizardTitle(const char* text) {
     strncpy(s_wizard.entry.title, text ? text : "", sizeof(s_wizard.entry.title) - 1);
+    s_wizard.entry.title[sizeof(s_wizard.entry.title) - 1] = '\0';
     pushT9WizardStep(mstr(STR_USERNAME), s_wizard.entry.username, PasswordStore::USERNAME_LEN, onWizardUsername);
 }
 
@@ -735,6 +736,7 @@ static void onWizardTitle(const char* text) {
  */
 static void onWizardUsername(const char* text) {
     strncpy(s_wizard.entry.username, text ? text : "", sizeof(s_wizard.entry.username) - 1);
+    s_wizard.entry.username[sizeof(s_wizard.entry.username) - 1] = '\0';
     s_t9Input.init(mstr(STR_PASSWORD), s_wizard.entry.password, PasswordStore::PASSWORD_LEN);
     s_t9Input.setHint("x=Random Y=OK N=Back");
     s_t9Input.setOnSave(onWizardPassword);
@@ -754,6 +756,7 @@ static void onWizardPassword(const char* text) {
     } else {
         strncpy(s_wizard.entry.password, text ? text : "", sizeof(s_wizard.entry.password) - 1);
     }
+    s_wizard.entry.password[sizeof(s_wizard.entry.password) - 1] = '\0';
     pushT9WizardStep(mstr(STR_URL), s_wizard.entry.url, PasswordStore::URL_LEN, onWizardUrl);
 }
 
@@ -763,6 +766,7 @@ static void onWizardPassword(const char* text) {
  */
 static void onWizardUrl(const char* text) {
     strncpy(s_wizard.entry.url, text ? text : "", sizeof(s_wizard.entry.url) - 1);
+    s_wizard.entry.url[sizeof(s_wizard.entry.url) - 1] = '\0';
 
     char totpBuf[8] = {};
     if (s_wizard.entry.totpSlot != PasswordStore::TOTP_SLOT_NONE) {
@@ -780,7 +784,7 @@ static void onWizardTotp(const char* text) {
         s_wizard.entry.totpSlot = PasswordStore::TOTP_SLOT_NONE;
     } else {
         int value = atoi(text);
-        if (value < 0 || value > 255) {
+        if (value < 0 || value > 254) {
             ui::showToastError(mstr(STR_INVALID_INPUT));
             pushT9WizardStep(mstr(STR_TOTP_SLOT), text, 3, onWizardTotp);
             return;
@@ -797,6 +801,7 @@ static void onWizardTotp(const char* text) {
  */
 static void onWizardNotes(const char* text) {
     strncpy(s_wizard.entry.notes, text ? text : "", sizeof(s_wizard.entry.notes) - 1);
+    s_wizard.entry.notes[sizeof(s_wizard.entry.notes) - 1] = '\0';
     wizardFinish();
 }
 

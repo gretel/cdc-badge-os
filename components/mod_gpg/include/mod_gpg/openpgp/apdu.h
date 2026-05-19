@@ -24,6 +24,7 @@ extern "C" {
 #define INS_SELECT              0xA4
 #define INS_GET_DATA            0xCA
 #define INS_PUT_DATA            0xDA
+#define INS_PUT_DATA_ODD        0xDB  // PUT DATA (odd INS) with Extended Header List
 #define INS_VERIFY              0x20
 #define INS_CHANGE_PIN          0x24
 #define INS_RESET_RETRY         0x2C
@@ -31,6 +32,7 @@ extern "C" {
 #define INS_INTERNAL_AUTH       0x88
 #define INS_GENERATE_KEYPAIR    0x47
 #define INS_GET_CHALLENGE       0x84
+#define INS_GET_RESPONSE        0xC0  // Drain remainder of a chained response (ISO 7816-4 §5.3.4)
 #define INS_TERMINATE           0xE6
 #define INS_ACTIVATE            0x44
 #define INS_GET_VERSION         0xF1

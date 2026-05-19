@@ -99,8 +99,9 @@ static bool usb_start_stack(void) {
 
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // Create USB task
-    xTaskCreate(usb_device_task, "usbd", 4096, nullptr,
+    // Stack sized for worst case mbedTLS ECP P-256 keypair generation
+    // and ECDH point multiplication invoked from CCID APDU handlers.
+    xTaskCreate(usb_device_task, "usbd", 8192, nullptr,
                 configMAX_PRIORITIES - 1, &g_usb_task);
 
     g_usb_started = true;

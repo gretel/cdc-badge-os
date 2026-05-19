@@ -39,7 +39,11 @@ bool TropicStorage::init() {
     cacheValid_ = loadHeader();
 
     if (!cacheValid_) {
-        LOG_W(TAG, "Cache header missing or stale - rebuild required");
+        if (saveHeader()) {
+            cacheValid_ = true;
+        } else {
+            LOG_W(TAG, "Cache header missing or stale - rebuild required");
+        }
     }
 
     state_ = ServiceState::INITIALIZED;

@@ -14,6 +14,7 @@ idf_component_register(
         "src/KeyFingerprint.cpp"
         "src/UsbManager.cpp"
         "src/IKeyboardProvider.cpp"
+        "src/pin_storage_c.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES

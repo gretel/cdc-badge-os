@@ -1,4 +1,5 @@
 #include "mod_vcard/VcardModule.h"
+#include "mod_vcard/VcardWizard.h"
 #include "mod_vcard/ble_vcard.h"
 #include "mod_vcard/vcard_store.h"
 #include "serial_cmd/ICommandRegistry.h"
@@ -9,6 +10,7 @@
 #include "cdc_views/ListView.h"
 #include "cdc_views/InfoView.h"
 #include "cdc_views/ConfirmView.h"
+#include "cdc_views/QRCodeView.h"
 #include "cdc_views/ToastView.h"
 #include "cdc_log.h"
 #include <cstring>
@@ -38,7 +40,48 @@ static constexpr uint16_t STR_DECLINE = 12;
 static constexpr uint16_t STR_EXCHANGE_OK = 13;
 static constexpr uint16_t STR_EXCHANGE_FAIL = 14;
 static constexpr uint16_t STR_CONNECTING = 15;
-static constexpr uint16_t STR_COUNT = 16;
+static constexpr uint16_t STR_EDIT_MY_VCARD = 16;
+static constexpr uint16_t STR_NO_VCARD = 17;
+static constexpr uint16_t STR_SAVED = 18;
+static constexpr uint16_t STR_GIVEN_NAME = 19;
+static constexpr uint16_t STR_FAMILY_NAME = 20;
+static constexpr uint16_t STR_FORMATTED_NAME = 21;
+static constexpr uint16_t STR_ORGANIZATION = 22;
+static constexpr uint16_t STR_POSITION = 23;
+static constexpr uint16_t STR_EMAIL = 24;
+static constexpr uint16_t STR_TEL_CELL = 25;
+static constexpr uint16_t STR_TEL_HOME = 26;
+static constexpr uint16_t STR_TEL_WORK = 27;
+static constexpr uint16_t STR_URL = 28;
+static constexpr uint16_t STR_TELEGRAM = 29;
+static constexpr uint16_t STR_SIGNAL = 30;
+static constexpr uint16_t STR_MATRIX = 31;
+static constexpr uint16_t STR_THREEMA = 32;
+static constexpr uint16_t STR_SOCIAL_PROFILE = 33;
+static constexpr uint16_t STR_NOTE = 34;
+static constexpr uint16_t STR_COUNT = 35;
+
+/**
+ * \brief Wizard step title offsets in the same order as VcardWizard::WizardStepId.
+ */
+static const uint16_t s_wizardStepOffsets[16] = {
+    STR_GIVEN_NAME,
+    STR_FAMILY_NAME,
+    STR_FORMATTED_NAME,
+    STR_ORGANIZATION,
+    STR_POSITION,
+    STR_EMAIL,
+    STR_TEL_CELL,
+    STR_TEL_HOME,
+    STR_TEL_WORK,
+    STR_URL,
+    STR_TELEGRAM,
+    STR_SIGNAL,
+    STR_MATRIX,
+    STR_THREEMA,
+    STR_SOCIAL_PROFILE,
+    STR_NOTE,
+};
 
 /**
  * \brief Resolves module-localized string by offset.
@@ -60,39 +103,77 @@ static void registerStrings() {
         return;
     }
 
-    i18n.registerTranslation(s_strIdBase + STR_VCARD, ui::Language::EN, "vCards");
-    i18n.registerTranslation(s_strIdBase + STR_MY_VCARD, ui::Language::EN, "My vCard");
-    i18n.registerTranslation(s_strIdBase + STR_NEARBY, ui::Language::EN, "Nearby");
-    i18n.registerTranslation(s_strIdBase + STR_SCAN, ui::Language::EN, "Start Scan");
-    i18n.registerTranslation(s_strIdBase + STR_STOP_SCAN, ui::Language::EN, "Stop Scan");
-    i18n.registerTranslation(s_strIdBase + STR_ADVERTISING, ui::Language::EN, "Start Advertising");
-    i18n.registerTranslation(s_strIdBase + STR_STOP_ADV, ui::Language::EN, "Stop Advertising");
-    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE, ui::Language::EN, "Exchange");
-    i18n.registerTranslation(s_strIdBase + STR_NO_PEERS, ui::Language::EN, "No peers found");
-    i18n.registerTranslation(s_strIdBase + STR_SCANNING, ui::Language::EN, "Scanning...");
-    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE_REQ, ui::Language::EN, "Exchange Request");
-    i18n.registerTranslation(s_strIdBase + STR_ACCEPT, ui::Language::EN, "Accept");
-    i18n.registerTranslation(s_strIdBase + STR_DECLINE, ui::Language::EN, "Decline");
-    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE_OK, ui::Language::EN, "Exchange successful");
-    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE_FAIL, ui::Language::EN, "Exchange failed");
-    i18n.registerTranslation(s_strIdBase + STR_CONNECTING, ui::Language::EN, "Connecting...");
+    i18n.registerTranslation(s_strIdBase + STR_VCARD,            ui::Language::EN, "vCards");
+    i18n.registerTranslation(s_strIdBase + STR_MY_VCARD,         ui::Language::EN, "My vCard");
+    i18n.registerTranslation(s_strIdBase + STR_NEARBY,           ui::Language::EN, "Nearby");
+    i18n.registerTranslation(s_strIdBase + STR_SCAN,             ui::Language::EN, "Start Scan");
+    i18n.registerTranslation(s_strIdBase + STR_STOP_SCAN,        ui::Language::EN, "Stop Scan");
+    i18n.registerTranslation(s_strIdBase + STR_ADVERTISING,      ui::Language::EN, "Start Advertising");
+    i18n.registerTranslation(s_strIdBase + STR_STOP_ADV,         ui::Language::EN, "Stop Advertising");
+    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE,         ui::Language::EN, "Exchange");
+    i18n.registerTranslation(s_strIdBase + STR_NO_PEERS,         ui::Language::EN, "No peers found");
+    i18n.registerTranslation(s_strIdBase + STR_SCANNING,         ui::Language::EN, "Scanning...");
+    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE_REQ,     ui::Language::EN, "Exchange Request");
+    i18n.registerTranslation(s_strIdBase + STR_ACCEPT,           ui::Language::EN, "Accept");
+    i18n.registerTranslation(s_strIdBase + STR_DECLINE,          ui::Language::EN, "Decline");
+    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE_OK,      ui::Language::EN, "Exchange successful");
+    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE_FAIL,    ui::Language::EN, "Exchange failed");
+    i18n.registerTranslation(s_strIdBase + STR_CONNECTING,       ui::Language::EN, "Connecting...");
+    i18n.registerTranslation(s_strIdBase + STR_EDIT_MY_VCARD,    ui::Language::EN, "Edit my vCard");
+    i18n.registerTranslation(s_strIdBase + STR_NO_VCARD,         ui::Language::EN, "No vCard set");
+    i18n.registerTranslation(s_strIdBase + STR_SAVED,            ui::Language::EN, "Saved");
+    i18n.registerTranslation(s_strIdBase + STR_GIVEN_NAME,       ui::Language::EN, "First name");
+    i18n.registerTranslation(s_strIdBase + STR_FAMILY_NAME,      ui::Language::EN, "Last name");
+    i18n.registerTranslation(s_strIdBase + STR_FORMATTED_NAME,   ui::Language::EN, "Display name");
+    i18n.registerTranslation(s_strIdBase + STR_ORGANIZATION,     ui::Language::EN, "Organization");
+    i18n.registerTranslation(s_strIdBase + STR_POSITION,         ui::Language::EN, "Position");
+    i18n.registerTranslation(s_strIdBase + STR_EMAIL,            ui::Language::EN, "Email");
+    i18n.registerTranslation(s_strIdBase + STR_TEL_CELL,         ui::Language::EN, "Phone (Mobile)");
+    i18n.registerTranslation(s_strIdBase + STR_TEL_HOME,         ui::Language::EN, "Phone (Home)");
+    i18n.registerTranslation(s_strIdBase + STR_TEL_WORK,         ui::Language::EN, "Phone (Work)");
+    i18n.registerTranslation(s_strIdBase + STR_URL,              ui::Language::EN, "Website");
+    i18n.registerTranslation(s_strIdBase + STR_TELEGRAM,         ui::Language::EN, "Telegram");
+    i18n.registerTranslation(s_strIdBase + STR_SIGNAL,           ui::Language::EN, "Signal");
+    i18n.registerTranslation(s_strIdBase + STR_MATRIX,           ui::Language::EN, "Matrix");
+    i18n.registerTranslation(s_strIdBase + STR_THREEMA,          ui::Language::EN, "Threema");
+    i18n.registerTranslation(s_strIdBase + STR_SOCIAL_PROFILE,   ui::Language::EN, "Social Profile");
+    i18n.registerTranslation(s_strIdBase + STR_NOTE,             ui::Language::EN, "Note");
 
-    i18n.registerTranslation(s_strIdBase + STR_VCARD, ui::Language::DE, "vCards");
-    i18n.registerTranslation(s_strIdBase + STR_MY_VCARD, ui::Language::DE, "Meine vCard");
-    i18n.registerTranslation(s_strIdBase + STR_NEARBY, ui::Language::DE, "In der Naehe");
-    i18n.registerTranslation(s_strIdBase + STR_SCAN, ui::Language::DE, "Scan starten");
-    i18n.registerTranslation(s_strIdBase + STR_STOP_SCAN, ui::Language::DE, "Scan stoppen");
-    i18n.registerTranslation(s_strIdBase + STR_ADVERTISING, ui::Language::DE, "Werbung starten");
-    i18n.registerTranslation(s_strIdBase + STR_STOP_ADV, ui::Language::DE, "Werbung stoppen");
-    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE, ui::Language::DE, "Tauschen");
-    i18n.registerTranslation(s_strIdBase + STR_NO_PEERS, ui::Language::DE, "Keine Geraete gefunden");
-    i18n.registerTranslation(s_strIdBase + STR_SCANNING, ui::Language::DE, "Scanne...");
-    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE_REQ, ui::Language::DE, "Tauschanfrage");
-    i18n.registerTranslation(s_strIdBase + STR_ACCEPT, ui::Language::DE, "Annehmen");
-    i18n.registerTranslation(s_strIdBase + STR_DECLINE, ui::Language::DE, "Ablehnen");
-    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE_OK, ui::Language::DE, "Tausch erfolgreich");
-    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE_FAIL, ui::Language::DE, "Tausch fehlgeschlagen");
-    i18n.registerTranslation(s_strIdBase + STR_CONNECTING, ui::Language::DE, "Verbinde...");
+    i18n.registerTranslation(s_strIdBase + STR_VCARD,            ui::Language::DE, "vCards");
+    i18n.registerTranslation(s_strIdBase + STR_MY_VCARD,         ui::Language::DE, "Meine vCard");
+    i18n.registerTranslation(s_strIdBase + STR_NEARBY,           ui::Language::DE, "In der Naehe");
+    i18n.registerTranslation(s_strIdBase + STR_SCAN,             ui::Language::DE, "Scan starten");
+    i18n.registerTranslation(s_strIdBase + STR_STOP_SCAN,        ui::Language::DE, "Scan stoppen");
+    i18n.registerTranslation(s_strIdBase + STR_ADVERTISING,      ui::Language::DE, "Werbung starten");
+    i18n.registerTranslation(s_strIdBase + STR_STOP_ADV,         ui::Language::DE, "Werbung stoppen");
+    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE,         ui::Language::DE, "Tauschen");
+    i18n.registerTranslation(s_strIdBase + STR_NO_PEERS,         ui::Language::DE, "Keine Geraete gefunden");
+    i18n.registerTranslation(s_strIdBase + STR_SCANNING,         ui::Language::DE, "Scanne...");
+    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE_REQ,     ui::Language::DE, "Tauschanfrage");
+    i18n.registerTranslation(s_strIdBase + STR_ACCEPT,           ui::Language::DE, "Annehmen");
+    i18n.registerTranslation(s_strIdBase + STR_DECLINE,          ui::Language::DE, "Ablehnen");
+    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE_OK,      ui::Language::DE, "Tausch erfolgreich");
+    i18n.registerTranslation(s_strIdBase + STR_EXCHANGE_FAIL,    ui::Language::DE, "Tausch fehlgeschlagen");
+    i18n.registerTranslation(s_strIdBase + STR_CONNECTING,       ui::Language::DE, "Verbinde...");
+    i18n.registerTranslation(s_strIdBase + STR_EDIT_MY_VCARD,    ui::Language::DE, "Meine vCard bearbeiten");
+    i18n.registerTranslation(s_strIdBase + STR_NO_VCARD,         ui::Language::DE, "Keine vCard gesetzt");
+    i18n.registerTranslation(s_strIdBase + STR_SAVED,            ui::Language::DE, "Gespeichert");
+    i18n.registerTranslation(s_strIdBase + STR_GIVEN_NAME,       ui::Language::DE, "Vorname");
+    i18n.registerTranslation(s_strIdBase + STR_FAMILY_NAME,      ui::Language::DE, "Nachname");
+    i18n.registerTranslation(s_strIdBase + STR_FORMATTED_NAME,   ui::Language::DE, "Anzeigename");
+    i18n.registerTranslation(s_strIdBase + STR_ORGANIZATION,     ui::Language::DE, "Organisation");
+    i18n.registerTranslation(s_strIdBase + STR_POSITION,         ui::Language::DE, "Position");
+    i18n.registerTranslation(s_strIdBase + STR_EMAIL,            ui::Language::DE, "Email");
+    i18n.registerTranslation(s_strIdBase + STR_TEL_CELL,         ui::Language::DE, "Tel (Mobil)");
+    i18n.registerTranslation(s_strIdBase + STR_TEL_HOME,         ui::Language::DE, "Tel (Privat)");
+    i18n.registerTranslation(s_strIdBase + STR_TEL_WORK,         ui::Language::DE, "Tel (Arbeit)");
+    i18n.registerTranslation(s_strIdBase + STR_URL,              ui::Language::DE, "Webseite");
+    i18n.registerTranslation(s_strIdBase + STR_TELEGRAM,         ui::Language::DE, "Telegram");
+    i18n.registerTranslation(s_strIdBase + STR_SIGNAL,           ui::Language::DE, "Signal");
+    i18n.registerTranslation(s_strIdBase + STR_MATRIX,           ui::Language::DE, "Matrix");
+    i18n.registerTranslation(s_strIdBase + STR_THREEMA,          ui::Language::DE, "Threema");
+    i18n.registerTranslation(s_strIdBase + STR_SOCIAL_PROFILE,   ui::Language::DE, "Social Profile");
+    i18n.registerTranslation(s_strIdBase + STR_NOTE,             ui::Language::DE, "Notiz");
 }
 
 /**
@@ -117,6 +198,7 @@ static char s_peerLabels[MAX_UI_PEERS][48] = {};
  */
 enum MainMenuItem {
     MENU_MY_VCARD = 0,
+    MENU_EDIT_MY_VCARD,
     MENU_NEARBY,
     MENU_SCAN_TOGGLE,
     MENU_ADV_TOGGLE,
@@ -156,7 +238,6 @@ static void onConsentDecline(void* userData) {
  * \param peerName Remote peer display name.
  */
 static void onConsentRequest(const char* peerName) {
-    // Build consent prompt
     static char promptText[256];
     snprintf(promptText, sizeof(promptText),
              "%s\n\n%s\nmoechte vCard tauschen\n\n[Y] %s\n[N] %s",
@@ -194,13 +275,14 @@ static void rebuildMainMenu() {
     bool scanning = ble_vcard_is_scan_active();
     bool advertising = ble_vcard_is_adv_active();
 
-    s_mainMenuItems[MENU_MY_VCARD] = {mstr(STR_MY_VCARD), 0, false, nullptr};
-    s_mainMenuItems[MENU_NEARBY] = {mstr(STR_NEARBY), 0, false, nullptr};
-    s_mainMenuItems[MENU_SCAN_TOGGLE] = {
+    s_mainMenuItems[MENU_MY_VCARD]      = {mstr(STR_MY_VCARD),         0, false, nullptr};
+    s_mainMenuItems[MENU_EDIT_MY_VCARD] = {mstr(STR_EDIT_MY_VCARD),    0, false, nullptr};
+    s_mainMenuItems[MENU_NEARBY]        = {mstr(STR_NEARBY),           0, false, nullptr};
+    s_mainMenuItems[MENU_SCAN_TOGGLE]   = {
         scanning ? mstr(STR_STOP_SCAN) : mstr(STR_SCAN),
         0, false, nullptr
     };
-    s_mainMenuItems[MENU_ADV_TOGGLE] = {
+    s_mainMenuItems[MENU_ADV_TOGGLE]    = {
         advertising ? mstr(STR_STOP_ADV) : mstr(STR_ADVERTISING),
         0, false, nullptr
     };
@@ -218,18 +300,25 @@ static void onMainMenuSelect(uint16_t index, void* userData) {
 
     switch (index) {
         case MENU_MY_VCARD: {
-            // Show own vCard
-            static char vcardText[512];
+            static char vcardText[VCARD_MAX_LEN + 1];
             size_t len = vcard_store_get_own(vcardText, sizeof(vcardText));
             if (len > 0) {
                 static ui::InfoView infoView;
                 infoView.init(mstr(STR_MY_VCARD), vcardText);
                 ui::ViewStack::instance().push(&infoView);
             } else {
-                ui::showToastInfo("No vCard configured");
+                ui::showToastInfo(mstr(STR_NO_VCARD));
             }
             break;
         }
+
+        case MENU_EDIT_MY_VCARD:
+            if (vcard_store_has_own()) {
+                VcardWizard::edit(&s_mainMenu);
+            } else {
+                VcardWizard::start(&s_mainMenu);
+            }
+            break;
 
         case MENU_NEARBY:
             rebuildPeerList();
@@ -264,7 +353,6 @@ static void onMainMenuSelect(uint16_t index, void* userData) {
  * \brief Rebuilds nearby-peer list from BLE discovery cache.
  */
 static void rebuildPeerList() {
-    // Get current peers
     s_uiPeerCount = ble_vcard_get_peers(s_uiPeers, MAX_UI_PEERS);
 
     if (s_uiPeerCount == 0) {
@@ -294,12 +382,59 @@ static void onPeerSelect(uint16_t index, void* userData) {
 
     vcard_peer_t& peer = s_uiPeers[index];
 
-    // Start exchange
     if (ble_vcard_exchange_with(peer.addr, peer.addr_type)) {
         ui::showToastInfo(mstr(STR_CONNECTING));
     } else {
         ui::showToastError("Exchange failed");
     }
+}
+
+// ============================================================================
+// Lock-screen quick action: show own vCard as a QR code.
+// ============================================================================
+
+/**
+ * \brief Returns the localized label for the lock-screen quick action.
+ */
+static const char* getMyVcardLockscreenLabel() {
+    return mstr(STR_MY_VCARD);
+}
+
+/**
+ * \brief Lock-screen quick action: shows the own vCard as a QR code.
+ *        Falls back to a toast when no vCard has been configured yet.
+ */
+static void onMyVcardLockscreenSelect() {
+    static char s_qrBuf[VCARD_MAX_LEN + 1];
+    size_t len = vcard_store_get_own(s_qrBuf, sizeof(s_qrBuf));
+    if (len == 0) {
+        ui::showToastError(mstr(STR_NO_VCARD));
+        return;
+    }
+
+    static vcard_data_t s_parsed;
+    static char s_qrTitle[96];
+    static char s_qrSubtitle[96];
+
+    memset(&s_parsed, 0, sizeof(s_parsed));
+    vcard_parse_to_struct(s_qrBuf, &s_parsed);
+
+    if (s_parsed.formatted_name[0]) {
+        snprintf(s_qrTitle, sizeof(s_qrTitle), "%s", s_parsed.formatted_name);
+    } else if (s_parsed.given_name[0] || s_parsed.family_name[0]) {
+        snprintf(s_qrTitle, sizeof(s_qrTitle), "%s %s",
+                 s_parsed.given_name, s_parsed.family_name);
+    } else {
+        snprintf(s_qrTitle, sizeof(s_qrTitle), "%s", mstr(STR_MY_VCARD));
+    }
+
+    const char* sub = s_parsed.organization[0] ? s_parsed.organization
+                    : s_parsed.title[0]        ? s_parsed.title
+                    : s_parsed.email[0]        ? s_parsed.email
+                    : "";
+    snprintf(s_qrSubtitle, sizeof(s_qrSubtitle), "%s", sub);
+
+    ui::showQRCode(s_qrBuf, s_qrTitle, s_qrSubtitle[0] ? s_qrSubtitle : nullptr);
 }
 
 // ============================================================================
@@ -320,7 +455,6 @@ static bool vcardLineInterceptor(const char* line) {
 
     using Console = serial::Console;
 
-    // "---" terminates paste mode
     if (strncmp(line, "---", 3) == 0) {
         s_vcardBuf[s_vcardBufPos] = '\0';
 
@@ -339,7 +473,6 @@ static bool vcardLineInterceptor(const char* line) {
         return true;
     }
 
-    // Append line + newline to buffer
     size_t lineLen = strlen(line);
     if (s_vcardBufPos + static_cast<int>(lineLen) + 2 < static_cast<int>(sizeof(s_vcardBuf))) {
         memcpy(s_vcardBuf + s_vcardBufPos, line, lineLen);
@@ -380,7 +513,6 @@ static void cmdVcardGet(const char* args) {
     size_t len = vcard_store_get_own(out, sizeof(out));
 
     if (len == 0) {
-        // Output empty template for manual editing
         Console::printf("BEGIN:VCARD\r\n");
         Console::printf("VERSION:4.0\r\n");
         Console::printf("N:;;\r\n");
@@ -402,7 +534,6 @@ static void cmdVcardGet(const char* args) {
         return;
     }
 
-    // Output line by line (Console::printf has a 256-byte limit)
     char* line = out;
     char* next;
     while ((next = strchr(line, '\n')) != nullptr) {
@@ -460,16 +591,15 @@ bool VcardModule::init() {
     registerStrings();
     registerSerialCommands();
 
-    // Initialize BLE vCard service
+    VcardWizard::configure(mstr, s_wizardStepOffsets, STR_SAVED, STR_EXCHANGE_FAIL);
+
     if (!ble_vcard_init()) {
         LOG_W(TAG, "BLE vCard init failed (BLE might not be available)");
     }
 
-    // Set up callbacks
     ble_vcard_set_consent_callback(onConsentRequest);
     ble_vcard_set_exchange_complete_callback(onExchangeComplete);
 
-    // Enable receiving by default
     ble_vcard_set_receive_enabled(true);
 
     core::ModuleRegistry::instance().registerModule(this);
@@ -528,14 +658,20 @@ uint8_t VcardModule::getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems)
 }
 
 /**
- * \brief Provides lock-screen context items (none for vCard module).
- * \param items Output array (unused).
- * \param maxItems Capacity (unused).
- * \return Always `0`.
+ * \brief Provides the lock-screen quick action that shows the owner vCard as a QR code.
+ * \param items Output array for context items.
+ * \param maxItems Maximum writable entries.
+ * \return Number of populated entries.
  */
 uint8_t VcardModule::getLockScreenContextItems(core::LockScreenContextItem* items, uint8_t maxItems) {
-    (void)items; (void)maxItems;
-    return 0;
+    if (!items || maxItems == 0) return 0;
+    items[0] = {
+        getMyVcardLockscreenLabel,
+        onMyVcardLockscreenSelect,
+        60,
+        nullptr,
+    };
+    return 1;
 }
 
 /**

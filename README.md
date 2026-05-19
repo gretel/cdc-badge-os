@@ -30,9 +30,9 @@ Modular firmware for the CDC Badge v1.0/v1.1 hardware security key featuring TRO
 
 ### Planned
 
-- [ ] Badge Mode (QR code vCard display)
 - [ ] Certificate Authority (CA) module
 - [ ] TROPIC01 firmware updater
+- [ ] Home Assistant controller (`mod_homeassistant`): keypad-driven quick-action remote with favorites, WiFi on-demand, token stored in TROPIC01 R-Memory
 
 ## Architecture
 

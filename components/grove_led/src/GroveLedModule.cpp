@@ -603,7 +603,9 @@ void GroveLedModule::loadSettings() {
 
         // Effect
         if (nvs_get_u8(handle, NVS_KEY_EFFECT, &val) == ESP_OK) {
-            effect_ = static_cast<LedEffect>(val);
+            if (val <= static_cast<uint8_t>(LedEffect::STATIC)) {
+                effect_ = static_cast<LedEffect>(val);
+            }
         }
 
         nvs_close(handle);

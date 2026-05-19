@@ -3,6 +3,7 @@
 idf_component_register(
     SRCS
         "src/VcardModule.cpp"
+        "src/VcardWizard.cpp"
         "src/vcard_store.cpp"
         "src/ble_vcard.cpp"
     INCLUDE_DIRS

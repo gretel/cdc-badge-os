@@ -74,7 +74,7 @@ public:
     const char* getName() const override { return "T9InputView"; }
     const char* getFooterHint() const override;
 
-private:
+protected:
     const char* title_ = nullptr;
     const char* placeholder_ = nullptr;
     const char* hintOverride_ = nullptr;

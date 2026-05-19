@@ -17,7 +17,7 @@ namespace cdc::core {
  *       kb->typeString(totpCode);
  *   }
  *
- *   // Provider (e.g., mod_hid):
+ *   // Provider (e.g. a USB or BLE HID module):
  *   ServiceRegistry::instance().provide<IKeyboardProvider>(ServiceType::KEYBOARD, this);
  */
 class IKeyboardProvider {
