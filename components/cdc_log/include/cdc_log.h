@@ -122,6 +122,21 @@ void console_register_output_hook(console_output_hook_t hook);
 void console_register_input_hook(console_input_available_hook_t avail_hook,
                                   console_input_getchar_hook_t getchar_hook);
 
+/**
+ * \brief Hook polled before INFO/DEBUG/VERBOSE log lines reach the console.
+ * \return `true` if those levels may be emitted, `false` to drop the line.
+ *
+ * ERROR/WARN are never gated. Used by SerialCmd to suppress INFO/DEBUG
+ * output until a session is authenticated.
+ */
+typedef bool (*log_authgate_hook_t)(void);
+
+/**
+ * \brief Registers (or clears) the auth-gate hook for INFO/DEBUG/VERBOSE.
+ * \param hook Callback, or NULL to disable gating.
+ */
+void log_register_authgate_hook(log_authgate_hook_t hook);
+
 #ifdef __cplusplus
 }
 #endif

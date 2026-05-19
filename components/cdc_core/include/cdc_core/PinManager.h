@@ -9,9 +9,9 @@ namespace cdc::core {
  * PIN Manager - Manages all device PINs in TROPIC01 R-Memory Slot 0
  *
  * Storage Format (106 bytes):
- * [Magic 0xDD]           (1)  - Format identifier
+ * [Magic 0xDF]           (1)  - Format identifier
  * [Badge/FIDO2 Hash]     (16) - LEFT(SHA256(PIN), 16)
- * [Badge Retries]        (1)  - Remaining attempts for Badge PIN
+ * [Badge Locked]         (1)  - 0x00 unlocked, 0x01 locked (recovery on next boot)
  * [KDF Algorithm]        (1)  - 0x03 = KDF_ITERSALTED_S2K
  * [Hash Algorithm]       (1)  - 0x08 = SHA256
  * [Iteration Count]      (4)  - Default 100000
@@ -19,8 +19,17 @@ namespace cdc::core {
  * [PW3 Salt]             (8)  - Random salt for Admin PIN
  * [PW1 Hash]             (32) - KDF hash of User PIN
  * [PW3 Hash]             (32) - KDF hash of Admin PIN
- * [PW1 Retries]          (1)  - Remaining attempts
- * [PW3 Retries]          (1)  - Remaining attempts
+ * [PW1 Retries]          (1)  - Remaining attempts (smartcard-style, no recovery)
+ * [PW3 Retries]          (1)  - Remaining attempts (smartcard-style, no recovery)
+ *
+ * Badge PIN: retry counter lives in RAM only. R-Memory persists just a binary
+ * "locked" flag. Boot grants one attempt (or zero if locked) and starts the
+ * 60-second recovery timer; on expiry the counter is restored to MAX_RETRIES
+ * and the locked flag cleared. A crash mid-verify cannot brick the badge PIN.
+ *
+ * PW1/PW3: smartcard semantics. Pre-decrement is persisted synchronously
+ * before the verify so a power-cycle cannot reset the counter, and reaching
+ * zero is terminal until an admin reset.
  *
  * Defaults:
  * - Badge/FIDO2: "123456"
@@ -119,15 +128,16 @@ private:
     PinManager() = default;
 
     static constexpr uint8_t MAX_RETRIES = 3;
-    static constexpr uint8_t MAGIC = 0xDE;
+    static constexpr uint8_t MAGIC = 0xDF;
     static constexpr uint8_t SIGNATURE_SIZE = 64;        // P-256 ECDSA raw R||S
     static constexpr uint8_t PAYLOAD_SIZE = 106;
     // Stored buffer: [PAYLOAD_SIZE bytes payload][SIGNATURE_SIZE bytes ECDSA sig]
     static constexpr uint16_t STORAGE_SIZE = PAYLOAD_SIZE + SIGNATURE_SIZE;
 
-    // Badge/FIDO2
+    // Badge/FIDO2 (retry counter is RAM-only)
     uint8_t badgeHash_[BADGE_HASH_SIZE] = {};
     uint8_t badgeRetries_ = MAX_RETRIES;
+    bool    badgeLocked_  = false;
 
     // OpenPGP KDF data
     uint32_t iterations_ = DEFAULT_ITERATIONS;
@@ -140,15 +150,18 @@ private:
 
     // Mirrors of what is currently persisted in R-Memory. Updated by
     // saveToStorage() after a successful write. Used to skip redundant
-    // writes when the in-RAM counters already match the on-chip value.
-    uint8_t persistedBadgeRetries_ = MAX_RETRIES;
-    uint8_t persistedPw1Retries_   = MAX_RETRIES;
-    uint8_t persistedPw3Retries_   = MAX_RETRIES;
+    // writes when the in-RAM state already matches the on-chip value.
+    bool    persistedBadgeLocked_ = false;
+    uint8_t persistedPw1Retries_  = MAX_RETRIES;
+    uint8_t persistedPw3Retries_  = MAX_RETRIES;
 
     bool pinLoaded_ = false;
     bool badgePinIsSet_ = false;
 
-    // Lockout timer (RAM only, resets on power cycle)
+    // Badge recovery timer (RAM only). Runs from boot and after every
+    // transition of badgeRetries_ to zero. On expiry: badgeRetries_ is
+    // restored to MAX_RETRIES and badgeLocked_ is cleared (and persisted
+    // if it was set).
     uint32_t lockoutStartMs_ = 0;
     bool lockoutActive_ = false;
 

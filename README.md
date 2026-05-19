@@ -4,6 +4,20 @@ Modular firmware for the CDC Badge v1.0/v1.1 hardware security key featuring TRO
 
 ![CDC Badge Demo](docs/demo.jpg)
 
+> ## ⚠️ Beta - data loss on flash
+>
+> This firmware is **pre-1.0 beta**. Every flash can wipe all stored data
+> on the badge: FIDO2/U2F credentials, TOTP seeds, password-vault entries,
+> GPG keys and the badge PIN. The build-profile factory-reset guard
+> (`DEBUG_MODE` / `FEATURE_SECURE_SERIAL` change) will erase NVS and the
+> TROPIC01 R-Memory / ECC slots before booting the new image. Layout-breaking
+> changes between versions can also trigger a re-initialisation.
+>
+> **Treat the badge as a working copy, not the authoritative store.** Keep an
+> independent backup of anything you cannot afford to lose (FIDO2 recovery
+> codes, password-manager export, GPG private subkeys, TOTP seeds) somewhere
+> off-badge.
+
 ## Features
 
 | Feature | Status | Description |
@@ -12,7 +26,7 @@ Modular firmware for the CDC Badge v1.0/v1.1 hardware security key featuring TRO
 | **SSH Hardware Keys** | Working | Native SSH via ed25519-sk (OpenSSH 8.2+) |
 | **U2F** | Working | Legacy two-factor authentication |
 | **TOTP Authenticator** | Working | Time-based OTP (100 accounts, Google Authenticator compatible) |
-| **Password Vault** | Working | Secure password storage (353 entries) |
+| **Password Vault** | Working | Secure password storage (369 entries) |
 | **GPG/CCID** | Working (UI WIP) | OpenPGP smartcard via USB CCID, sign / encrypt / decrypt / SSH end-to-end with GnuPG |
 | **BLE vCard** | WIP | Badge-to-badge contact exchange via BLE |
 | **BLE HID** | WIP | Bluetooth keyboard for auto-type |
@@ -73,15 +87,20 @@ See [Module Development Guide](docs/MODULE_DEVELOPMENT.md) for creating new modu
 
 The device uses a multi-PIN system with brute-force protection:
 
-| PIN | Purpose | Max Retries | Lockout |
-|-----|---------|-------------|---------|
-| Badge PIN | Device unlock, serial auth | 3 | 60 seconds |
-| PW1 | FIDO2/GPG user operations | 3 | 60 seconds |
-| PW3 | GPG admin operations | 3 | 60 seconds |
+| PIN | Purpose | Max Retries | Recovery |
+|-----|---------|-------------|----------|
+| Badge PIN | Device unlock, serial auth | 3 | 60 seconds (timer) |
+| PW1 | OpenPGP user operations | 3 | None (smartcard semantics) |
+| PW3 | OpenPGP admin operations | 3 | None (smartcard semantics) |
 
-After 3 failed attempts, the device locks for 60 seconds. Retries reset after successful authentication.
+The Badge PIN retry counter lives only in RAM; R-Memory persists a single
+locked flag. A boot grants one attempt (zero if locked) and starts the 60-second
+recovery timer that restores the counter to MAX_RETRIES on expiry. A crash
+mid-verify cannot brick the device.
 
-**Note:** `DEBUG_MODE=1` disables lockouts for development. Set to 0 for production!
+PW1 and PW3 follow OpenPGP smartcard rules: the counter is decremented and
+persisted *before* the verify, and reaching zero is terminal until an admin
+reset.
 
 ### TROPIC01 Secure Element
 
@@ -179,6 +198,20 @@ Or via Kconfig menuconfig:
 ```bash
 ~/.platformio/penv/bin/pio run -t menuconfig
 ```
+
+### Factory Reset on Flag Change
+
+Switching `DEBUG_MODE` or `FEATURE_SECURE_SERIAL` between builds and reflashing
+triggers an automatic factory reset on the next boot: the NVS partition is
+erased and every used TROPIC01 R-Memory and ECC slot is wiped. This doubles
+as the recovery path for a forgotten Badge PIN — rebuild with a different
+flag value, flash, and the device returns to defaults (PIN `123456`).
+
+In the current beta the check itself runs in firmware and is therefore
+trivially bypassable by an attacker who can flash arbitrary firmware. Real
+enforcement (Secure Boot v2 + anti-rollback) is on the 1.0 roadmap; see
+[Security Hardening Guide](docs/SECURITY.md) for details and for what a
+beta user can add today to harden their own device.
 
 ### First-Time Setup
 

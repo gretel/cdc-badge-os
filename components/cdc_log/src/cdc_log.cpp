@@ -30,6 +30,7 @@ static bool s_initialized = false;
 /** \brief Optional console hooks for additional I/O transports (for example BLE). */
 static console_output_hook_t s_output_hook = nullptr;
 static console_input_available_hook_t s_input_avail_hook = nullptr;
+static log_authgate_hook_t s_authgate_hook = nullptr;
 static console_input_getchar_hook_t s_input_getchar_hook = nullptr;
 
 static const char* level_str[] = {
@@ -188,6 +189,12 @@ void log_write(log_level_t level, const char* tag, const char* fmt, ...) {
         error_log_add(level, line);
     }
 
+    // Suppress INFO/DEBUG/VERBOSE while the auth-gate hook (if installed)
+    // reports an unauthenticated state. ERROR/WARN always emit.
+    if (level > CDC_LOG_LEVEL_WARN && s_authgate_hook && !s_authgate_hook()) {
+        return;
+    }
+
     // Output if not suppressed
     if (level <= s_log_level) {
         console_printf("%s\n", line);
@@ -215,6 +222,10 @@ void log_raw(const char* fmt, ...) {
  * \param len Buffer length.
  */
 void log_hex(const char* tag, const char* label, const uint8_t* data, size_t len) {
+#if !DEBUG_MODE
+    // Release build: hex dumps can leak key material, swallow silently.
+    (void)tag; (void)label; (void)data; (void)len;
+#else
     console_printf("[D][%s] %s (%zu bytes): ", tag ? tag : "HEX", label ? label : "data", len);
     for (size_t i = 0; i < len; i++) {
         console_printf("%02X", data[i]);
@@ -225,6 +236,7 @@ void log_hex(const char* tag, const char* label, const uint8_t* data, size_t len
         }
     }
     console_print("\n");
+#endif
 }
 
 /**
@@ -405,4 +417,14 @@ void console_register_input_hook(console_input_available_hook_t avail_hook,
                                   console_input_getchar_hook_t getchar_hook) {
     s_input_avail_hook = avail_hook;
     s_input_getchar_hook = getchar_hook;
+}
+
+/**
+ * \brief Installs the auth-gate hook used to suppress INFO/DEBUG/VERBOSE
+ *        output while a session is unauthenticated.
+ * \param hook Callback returning true when the gate is open, false to drop
+ *             the line. NULL disables gating.
+ */
+void log_register_authgate_hook(log_authgate_hook_t hook) {
+    s_authgate_hook = hook;
 }

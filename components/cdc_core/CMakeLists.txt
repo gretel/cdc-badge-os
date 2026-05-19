@@ -15,6 +15,7 @@ idf_component_register(
         "src/UsbManager.cpp"
         "src/IKeyboardProvider.cpp"
         "src/pin_storage_c.cpp"
+        "src/FactoryReset.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES

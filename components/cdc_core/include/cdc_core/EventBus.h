@@ -82,30 +82,30 @@ public:
 
     /**
      * Initialize the event bus
-     * @param queueSize Number of events that can be queued
-     * @return true on success
+     * \param queueSize Number of events that can be queued
+     * \return true on success
      */
     bool init(size_t queueSize = DEFAULT_QUEUE_SIZE);
 
     /**
      * Subscribe to events
-     * @param handler Function to call when event occurs
-     * @param mask Bitmask of EventTypes to receive (0 = all)
-     * @return Handler ID (0 on failure)
+     * \param handler Function to call when event occurs
+     * \param mask Bitmask of EventTypes to receive (0 = all)
+     * \return Handler ID (0 on failure)
      */
     uint8_t subscribe(EventHandler handler, uint32_t mask = 0);
 
     /**
      * Unsubscribe handler
-     * @param id Handler ID from subscribe()
+     * \param id Handler ID from subscribe()
      */
     void unsubscribe(uint8_t id);
 
     /**
      * Publish an event
-     * @param event Event to publish
-     * @param fromISR true if called from interrupt context
-     * @return true if event was queued
+     * \param event Event to publish
+     * \param fromISR true if called from interrupt context
+     * \return true if event was queued
      */
     bool publish(const Event& event, bool fromISR = false);
 

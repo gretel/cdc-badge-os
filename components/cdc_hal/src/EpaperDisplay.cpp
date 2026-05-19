@@ -25,7 +25,7 @@ static const char* TAG = "EpaperDisplay";
 
 /** \brief Splash-screen text defaults. */
 static constexpr const char* SPLASH_TITLE = "CDC Badge";
-static constexpr const char* SPLASH_VERSION = "v0.5";
+static constexpr const char* SPLASH_VERSION = "v" APP_VERSION;
 
 namespace cdc::hal {
 
@@ -396,8 +396,8 @@ void EpaperDisplay::showSplash(const char* subtitle) {
     s_epd_display->setCursor(2, 120);
     s_epd_display->print(build_str);
 
-    // Right: "Modular Rewrite"
-    const char* status_text = "Modular Rewrite";
+    // Right: tagline
+    const char* status_text = "Open Hardware Security";
     int status_x = s_epd_display->width() - (strlen(status_text) * 6) - 2;
     s_epd_display->setCursor(status_x, 120);
     s_epd_display->print(status_text);

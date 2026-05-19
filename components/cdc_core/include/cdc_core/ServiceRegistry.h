@@ -40,15 +40,15 @@ public:
 
     /**
      * Register a service by name
-     * @param name Unique service name (e.g., "display", "keypad")
-     * @param service Pointer to service instance (must outlive registry)
-     * @return true on success, false if full or duplicate name
+     * \param name Unique service name (e.g., "display", "keypad")
+     * \param service Pointer to service instance (must outlive registry)
+     * \return true on success, false if full or duplicate name
      */
     bool registerService(const char* name, IService* service);
 
     /**
      * Get service by name (untyped)
-     * @return nullptr if not found
+     * \return nullptr if not found
      */
     IService* getService(const char* name);
 
@@ -67,9 +67,9 @@ public:
 
     /**
      * Provide a typed service ("I offer service X")
-     * @param type The service type to register
-     * @param service Pointer to service implementation
-     * @return true on success
+     * \param type The service type to register
+     * \param service Pointer to service implementation
+     * \return true on success
      */
     template<typename T>
     bool provide(ServiceType type, T* service) {
@@ -78,8 +78,8 @@ public:
 
     /**
      * Request a typed service ("I need service X")
-     * @param type The service type to request
-     * @return Pointer to service or nullptr if not available
+     * \param type The service type to request
+     * \return Pointer to service or nullptr if not available
      */
     template<typename T>
     T* request(ServiceType type) {
@@ -97,13 +97,13 @@ public:
 
     /**
      * Initialize all registered services
-     * @return true if all succeeded
+     * \return true if all succeeded
      */
     bool initAll();
 
     /**
      * Start all registered services
-     * @return true if all succeeded
+     * \return true if all succeeded
      */
     bool startAll();
 

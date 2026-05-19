@@ -1,5 +1,6 @@
 #include "cdc_core/ModuleRegistry.h"
 #include "cdc_core/TropicSlotMap.h"
+#include "cdc_core/TropicStorage.h"
 #include "cdc_core/EventBus.h"
 #include "cdc_log.h"
 #include <nvs_flash.h>
@@ -41,6 +42,16 @@ void ModuleRegistry::registerInitializer(ModuleInitFunc initFunc) {
  * \brief Executes all registered initializers and post-registration housekeeping.
  */
 void ModuleRegistry::runAllInitializers() {
+    // Modules access TropicStorage during their init() (slot-map lookups,
+    // initial chunk reads). Hard-fail loudly if main() forgot to bring it
+    // up first instead of letting modules run on undefined state.
+    auto storageState = TropicStorage::instance().getState();
+    if (storageState != ServiceState::STARTED) {
+        LOG_E(TAG, "TropicStorage not STARTED (state=%d) before module init - aborting",
+              static_cast<int>(storageState));
+        return;
+    }
+
     LOG_I(TAG, "Running %d module initializers", initCount_);
 
     for (uint8_t i = 0; i < initCount_; i++) {

@@ -290,11 +290,6 @@ static void onUnlockRequested() {
     clearKeypadBuffer();
     s_ignoreKeyUntilRelease = true;
 
-    if (!core::PinManager::instance().isPinSet()) {
-        onPinSuccess();
-        return;
-    }
-
     if (s_pinEntry) {
         s_pinEntry->clear();
         ViewStack::instance().push(s_pinEntry);

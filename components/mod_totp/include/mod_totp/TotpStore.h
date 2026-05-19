@@ -40,7 +40,14 @@ public:
                        uint8_t digits, uint32_t period, uint8_t algorithm);
     bool deleteAccount(uint16_t slot);
 
-    int8_t generateCode(uint16_t slot, char* codeOut);
+    /**
+     * \brief Renders the current TOTP code or a placeholder into \p codeOut.
+     * \param slot Logical slot index.
+     * \param codeOut Output buffer (must hold at least 9 bytes for 8-digit codes).
+     * \param codeOutLen Size of \p codeOut in bytes.
+     * \return Remaining seconds in the current step, or `-1` on failure.
+     */
+    int8_t generateCode(uint16_t slot, char* codeOut, size_t codeOutLen);
 
     bool isTimeValid() const;
     uint8_t timeRemaining(uint32_t period) const;

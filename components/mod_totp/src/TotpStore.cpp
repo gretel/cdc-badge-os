@@ -442,8 +442,9 @@ bool TotpStore::hmacCompute(TotpAlgorithm algo, const uint8_t* key, size_t keyLe
  * \param codeOut Output text buffer.
  * \return Remaining seconds for current step, or `-1` on failure.
  */
-int8_t TotpStore::generateCode(uint16_t slot, char* codeOut) {
-    if (!codeOut) return -1;
+int8_t TotpStore::generateCode(uint16_t slot, char* codeOut, size_t codeOutLen) {
+    if (!codeOut || codeOutLen == 0) return -1;
+    codeOut[0] = '\0';
 
     TotpAccount account = {};
     if (!readAccount(slot, &account)) {
@@ -451,7 +452,7 @@ int8_t TotpStore::generateCode(uint16_t slot, char* codeOut) {
     }
 
     if (!isTimeValid()) {
-        strcpy(codeOut, "------");
+        snprintf(codeOut, codeOutLen, "------");
         return -1;
     }
 
@@ -460,11 +461,11 @@ int8_t TotpStore::generateCode(uint16_t slot, char* codeOut) {
                              static_cast<TotpAlgorithm>(account.algorithm));
 
     if (account.digits == 8) {
-        snprintf(codeOut, 9, "%08lu", static_cast<unsigned long>(code));
+        snprintf(codeOut, codeOutLen, "%08lu", static_cast<unsigned long>(code));
     } else if (account.digits == 7) {
-        snprintf(codeOut, 8, "%07lu", static_cast<unsigned long>(code));
+        snprintf(codeOut, codeOutLen, "%07lu", static_cast<unsigned long>(code));
     } else {
-        snprintf(codeOut, 7, "%06lu", static_cast<unsigned long>(code));
+        snprintf(codeOut, codeOutLen, "%06lu", static_cast<unsigned long>(code));
     }
 
     return static_cast<int8_t>(timeRemaining(account.period));

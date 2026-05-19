@@ -32,3 +32,12 @@
 #ifndef DEBUG_MODE
 #define DEBUG_MODE 1
 #endif
+
+// Build profile byte. A mismatch between the byte stored in NVS and the
+// byte compiled into the running firmware triggers a complete factory wipe
+// (NVS partition + TROPIC01 R-Memory + ECC slots) at the next boot. This
+// is the beta-phase software guard; bypass-resistant enforcement against an
+// active attacker requires Secure Boot v2 with anti-rollback and is on the
+// 1.0 roadmap (see docs/SECURITY.md).
+#define BUILD_PROFILE_BYTE \
+    ((FEATURE_SECURE_SERIAL ? 0x02 : 0x00) | (DEBUG_MODE ? 0x01 : 0x00))

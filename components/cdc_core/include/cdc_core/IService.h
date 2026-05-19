@@ -30,13 +30,13 @@ public:
 
     /**
      * Initialize the service (called once during boot)
-     * @return true on success
+     * \return true on success
      */
     virtual bool init() = 0;
 
     /**
      * Start the service (can be called after init or stop)
-     * @return true on success
+     * \return true on success
      */
     virtual bool start() = 0;
 

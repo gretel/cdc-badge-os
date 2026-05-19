@@ -4,7 +4,16 @@ USB serial command interface for the CDC Badge.
 
 Connect via USB CDC at **115200 baud**. Use `HELP` to list all available commands.
 
-Commands marked with `[AUTH]` require authentication when `FEATURE_SECURE_SERIAL` is enabled.
+When `FEATURE_SECURE_SERIAL` is enabled (the default for shipped builds), every
+command except `PING` and `AUTH` requires an authenticated session. Use
+`AUTH <pin>` to log in. The session ends on `LOGOUT`, on a wrong PIN, or after
+the device idle timeout.
+
+Commands tagged `[AUTH]` additionally require authentication even when
+`FEATURE_SECURE_SERIAL` is disabled. The tag is applied to anything that
+mutates persistent state or accesses secret material: `REBOOT`, all NVS
+mutators, every TROPIC01 slot mutator, the full TOTP / Password / GPG /
+Home Assistant module surface, and the factory-wipe commands.
 
 ## Authentication
 
@@ -21,6 +30,7 @@ Commands marked with `[AUTH]` require authentication when `FEATURE_SECURE_SERIAL
 | `PING` | Check if device is responsive (returns PONG) |
 | `STATUS` | Show system status |
 | `MEM` | Show memory usage (Heap/PSRAM/NVS) |
+| `MEMINFO` | Show detailed memory + FreeRTOS task info |
 | `ERROR_LOG` | Show error log |
 | `ERROR_LOG CLEAR` | Clear error log |
 | `REBOOT` | Restart the device `[AUTH]` |
@@ -98,6 +108,7 @@ Commands marked with `[AUTH]` require authentication when `FEATURE_SECURE_SERIAL
 | `PASSWORD_LIST` | List password entries `[AUTH]` |
 | `PASSWORD_GET <index>` | Get password entry details `[AUTH]` |
 | `PASSWORD_ADD <name> <user> <url> <password>` | Add password entry `[AUTH]` |
+| `PASSWORD_EDIT <index> ...` | Edit existing password entry `[AUTH]` |
 | `PASSWORD_DEL <index>` | Delete password entry `[AUTH]` |
 
 ## GPG Module
@@ -108,6 +119,14 @@ Commands marked with `[AUTH]` require authentication when `FEATURE_SECURE_SERIAL
 | `GPG_GENERATE <curve> <user_id>` | Generate GPG keys (1=Ed25519, 2=P-256) `[AUTH]` |
 | `GPG_EXPORT` | Export public keys `[AUTH]` |
 | `GPG_RESET` | Two-step destructive reset of all GPG keys (`GPG_RESET` prints a token; confirm within 30 s via `GPG_RESET <token>`) `[AUTH]` |
+
+## vCard Module (BLE Badge-to-Badge)
+
+| Command | Description |
+|---------|-------------|
+| `VCARD_SET` | Set own vCard (multiline paste, terminate with empty line) |
+| `VCARD_GET` | Show own vCard |
+| `VCARD_DELETE` | Delete own vCard |
 
 ## Examples
 

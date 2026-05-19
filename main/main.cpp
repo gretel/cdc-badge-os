@@ -1,5 +1,5 @@
 /**
- * CDC Badge OS v0.5 - Modular Rewrite
+ * CDC Badge OS
  * USB CDC + Serial + Display + UI
  */
 
@@ -8,6 +8,7 @@
 #include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "cdc_log.h"
@@ -18,6 +19,9 @@
 #include "cdc_core/SystemLock.h"
 #include "cdc_core/TropicStorage.h"
 #include "cdc_core/AttestationKeyService.h"
+#include "cdc_core/feature_flags.h"
+#include "cdc_core/PinManager.h"
+#include "cdc_core/FactoryReset.h"
 #include "modules_init.gen.h"  // Auto-generated module registrations
 #include "usb_badge/usb_cdc.h"
 #include "serial_cmd/SerialCmd.h"
@@ -66,6 +70,8 @@ static void lockdownShutdownHandler(cdc::core::LockdownReason reason,
             reasonText = "Secure element offline"; break;
         case cdc::core::LockdownReason::TR01_INIT_FAILED:
             reasonText = "Secure element init failed"; break;
+        case cdc::core::LockdownReason::NVS_UNREADABLE:
+            reasonText = "Non-volatile storage unreadable"; break;
         default:
             reasonText = "Unknown failure"; break;
     }
@@ -139,6 +145,89 @@ static bool initNvs() {
 }
 
 /**
+ * \brief Compares the persisted build profile byte against the compiled-in
+ *        value and triggers a NVS wipe on mismatch.
+ *
+ * \return `true` when a wipe occurred and the TROPIC01 should be wiped too
+ *         once its session is available.
+ */
+static bool checkBuildProfileAndWipeNvs() {
+    constexpr const char* NS  = "boot_profile";
+    constexpr const char* KEY = "profile";
+    constexpr uint8_t expected = BUILD_PROFILE_BYTE;
+    constexpr uint8_t kMaxValid = 0x03;
+
+    nvs_handle_t handle = 0;
+    uint8_t stored = 0;
+    esp_err_t openErr = nvs_open(NS, NVS_READONLY, &handle);
+    esp_err_t readErr = ESP_ERR_NVS_NOT_FOUND;
+    if (openErr == ESP_OK) {
+        readErr = nvs_get_u8(handle, KEY, &stored);
+        nvs_close(handle);
+    }
+
+    // Treat first-boot (namespace or key absent) and a malformed value as a
+    // reason to wipe and re-seed the byte. A structural NVS error (anything
+    // other than ESP_OK / NOT_FOUND / TYPE_MISMATCH) is a hardware-level
+    // failure and must trigger lockdown rather than a destructive wipe.
+    bool structuralFault = false;
+    if (openErr != ESP_OK && openErr != ESP_ERR_NVS_NOT_FOUND) {
+        structuralFault = true;
+    }
+    if (openErr == ESP_OK
+        && readErr != ESP_OK
+        && readErr != ESP_ERR_NVS_NOT_FOUND
+        && readErr != ESP_ERR_NVS_TYPE_MISMATCH) {
+        structuralFault = true;
+    }
+
+    if (structuralFault) {
+        ESP_LOGE(TAG, "NVS unreadable (open=0x%X read=0x%X), entering lockdown", openErr, readErr);
+        cdc::core::SystemLock::instance().triggerLockdown(
+            cdc::core::LockdownReason::NVS_UNREADABLE, "boot_profile read failed");
+        return false;
+    }
+
+    bool present = (openErr == ESP_OK && readErr == ESP_OK);
+    bool valid   = present && stored <= kMaxValid;
+    if (valid && stored == expected) {
+        return false;
+    }
+
+    if (!present) {
+        ESP_LOGW(TAG, "Build profile absent, factory reset and seed 0x%02X", expected);
+    } else if (!valid) {
+        ESP_LOGW(TAG, "Build profile malformed (0x%02X), factory reset and seed 0x%02X", stored, expected);
+    } else {
+        ESP_LOGW(TAG, "Build profile changed (0x%02X -> 0x%02X), factory reset", stored, expected);
+    }
+    ESP_ERROR_CHECK(cdc::core::wipeNvs());
+
+    if (nvs_open(NS, NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_set_u8(handle, KEY, expected);
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
+    return true;
+}
+
+/**
+ * \brief Wipes all TROPIC01 R-Memory and ECC slots used by application code.
+ *        Called after a build-profile change has already wiped NVS so the
+ *        TROPIC01 state matches the cleared flash state.
+ */
+static void wipeTropicForFactoryReset() {
+    LOG_W(TAG, "Build profile change: wiping TROPIC01 ECC and R-Memory slots");
+    auto result = cdc::core::wipeTropic(cdc::hal::getSecureElementInstance());
+    if (!result.sessionReady) {
+        LOG_E(TAG, "TROPIC01 factory wipe skipped (SE session unavailable)");
+        return;
+    }
+    LOG_W(TAG, "TROPIC01 factory wipe: deleted %u ECC keys, %u R-Memory slots",
+          result.eccDeleted, result.rmemDeleted);
+}
+
+/**
  * \brief Stage 1: brings up event bus, USB CDC and the logging subsystem.
  * \return `true` if all core services initialized successfully.
  */
@@ -154,8 +243,8 @@ static bool initCoreServices() {
     log_init();
 
     LOG_I(TAG, "=================================");
-    LOG_I(TAG, "CDC Badge OS v0.5");
-    LOG_I(TAG, "Modular Rewrite");
+    LOG_I(TAG, "CDC Badge OS v" APP_VERSION);
+    LOG_I(TAG, "Open Hardware Security");
     LOG_I(TAG, "=================================");
 
     LOG_I(TAG, "EventBus ready");
@@ -422,6 +511,7 @@ static void runMainLoopIteration() {
     SystemLock::instance().enforceIfLocked();
 
     EventBus::instance().process();
+    cdc::core::PinManager::instance().checkAndResetExpiredLockout();
     cdc::serial::SerialCmd::process();
 
     if (s_powerManager) {
@@ -444,6 +534,7 @@ extern "C" void app_main(void)
 {
     // STAGE 0: Hardware Minimum
     initNvs();
+    bool profileChanged = checkBuildProfileAndWipeNvs();
 
     // STAGE 1: Core Services
     if (!initCoreServices()) {
@@ -459,6 +550,10 @@ extern "C" void app_main(void)
 
     // STAGE 3: Hardware Peripherals
     initHardware();
+
+    if (profileChanged) {
+        wipeTropicForFactoryReset();
+    }
 
     // STAGE 4: System Services
     initSystemServices();

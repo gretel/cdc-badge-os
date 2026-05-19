@@ -13,6 +13,7 @@ enum class LockdownReason : uint8_t {
     TR01_ALARM_MODE,    /**< TROPIC01 reported ALARM bit (tamper/protocol violation). */
     TR01_UNREACHABLE,   /**< TROPIC01 not responding (MISO stuck at 0x00 / 0xFF). */
     TR01_INIT_FAILED,   /**< TROPIC01 could not be initialized at boot. */
+    NVS_UNREADABLE,     /**< NVS partition cannot be read for an unexpected reason. */
 };
 
 /**

@@ -15,6 +15,7 @@
 #include "cdc_log.h"
 #include "esp_sleep.h"
 #include "esp_attr.h"
+#include "esp_task_wdt.h"
 #include "driver/gpio.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -144,6 +145,15 @@ void Esp32SleepController::enterLightSleep() {
 
     // Enter light sleep
     esp_light_sleep_start();
+
+    // Reset the task watchdog as soon as we resume: the sleep window can
+    // be longer than the TWDT timeout, and any subscribed task (notably the
+    // idle task we sit in via WDT_CHECK_IDLE_TASK_CPU0) would otherwise fire
+    // the WDT in the middle of coex cleanup, which can land in the panic
+    // handler with a spinlock already held.
+    if (esp_task_wdt_status(nullptr) == ESP_OK) {
+        esp_task_wdt_reset();
+    }
 
     // Log wakeup cause
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();

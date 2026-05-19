@@ -157,6 +157,12 @@ size_t openpgp_get_cardholder_name(char *out, size_t out_size);
  */
 uint32_t openpgp_get_gen_time(uint8_t key_type);
 
+/**
+ * \brief Sets the cardholder name (OpenPGP DO 0x5B) and persists state.
+ * \param name UTF-8 string; truncated to fit the storage buffer.
+ */
+bool openpgp_set_cardholder_name(const char *name);
+
 #ifdef __cplusplus
 }
 #endif

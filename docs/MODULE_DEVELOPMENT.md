@@ -62,6 +62,21 @@ Add dependencies as needed:
 - `nvs_flash` - for NVS storage
 - `freertos` - for FreeRTOS primitives
 
+### What `cdc_views` provides (and what it doesn't)
+
+`cdc_views` is the public framework-view layer. Modules use it for generic UI
+building blocks: `ListView`, `ConfirmView`, `InfoView`, `ToastView`,
+`QRCodeView`, `T9InputView`, `PinChangeView`, `ContextMenuView`. These are
+intentionally module-facing and reusable.
+
+`cdc_os_ui` is the OS-only layer (LockScreen, Settings, Wifi/Bluetooth menus,
+HardwareInfo, ExpertMenu). Modules **must not** depend on `cdc_os_ui`.
+
+Module-specific views (e.g. a HomeAssistant device-detail view, a vCard
+wizard, a FIDO2 credential-management screen) live **inside the module** and
+may compose `cdc_views` primitives, but they should not be exported into
+`cdc_views` itself.
+
 ## Step 3: Module Header
 
 Create `components/mod_example/include/mod_example/ExampleModule.h`:
@@ -491,10 +506,10 @@ The TROPIC01 secure element has two storage types:
 |-------|--------------|
 | 0 | System (PinManager: PIN hashes + ECDSA attestation signature) |
 | 1-3 | mod_gpg (paired with ECC 1-3: SIG / DEC / AUT companion slots) |
-| 4-31 | Available for other privileged modules whose ECC range falls here |
+| 4 | mod_ca (paired with ECC 4) |
+| 5-31 | mod_fido2 (27 credentials, paired with ECC 5-31) |
 | 32-131 | mod_totp (100 accounts) |
-| 132-158 | mod_fido2 (27 credentials) |
-| 159-500 | mod_password (342 entries) |
+| 132-500 | mod_password (369 entries) |
 | 501 | mod_homeassistant |
 | 502-511 | Available for future modules |
 

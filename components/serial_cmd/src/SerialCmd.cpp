@@ -10,6 +10,7 @@
 #include "cdc_core/PinManager.h"
 #include "cdc_core/TropicSlotMap.h"
 #include "cdc_core/TropicStorage.h"
+#include "cdc_core/FactoryReset.h"
 #include "cdc_hal/ISecureElement.h"
 #include "cdc_log.h"
 #include "esp_timer.h"
@@ -594,14 +595,9 @@ static void cmdNvsClear(const char* args) {
     }
 
     Console::printf("Clearing NVS...\r\n");
-    esp_err_t err = nvs_flash_erase();
+    esp_err_t err = core::wipeNvs();
     if (err != ESP_OK) {
-        Console::printf("ERROR: NVS erase failed (%s)\r\n", esp_err_to_name(err));
-        return;
-    }
-    err = nvs_flash_init();
-    if (err != ESP_OK) {
-        Console::printf("ERROR: NVS init failed (%s)\r\n", esp_err_to_name(err));
+        Console::printf("ERROR: NVS wipe failed (%s)\r\n", esp_err_to_name(err));
         return;
     }
     Console::printf("OK: NVS cleared. Reboot recommended.\r\n");
@@ -1262,39 +1258,22 @@ static void cmdTr01Wipe(const char* args) {
         }
     }
 
-    uint16_t eccDeleted = 0;
-    uint16_t rmemDeleted = 0;
-
-    // Delete all ECC keys
-    Console::printf("Erasing ECC keys...\r\n");
+    Console::printf("Erasing ECC keys and R-Memory (this may take a while)...\r\n");
     Console::flush();
-    for (uint8_t i = 0; i < hal::ISecureElement::ECC_SLOT_COUNT; i++) {
-        if (se->eccSlotUsed(i)) {
-            if (se->eccDelete(i) == hal::SeResult::OK) {
-                eccDeleted++;
-            }
-        }
-    }
-    Console::printf("  Deleted %d ECC keys\r\n", eccDeleted);
-
-    // Erase R-Memory slots
-    Console::printf("Erasing R-Memory (this may take a while)...\r\n");
-    Console::flush();
-    for (uint16_t i = 0; i < hal::ISecureElement::RMEM_SLOT_COUNT; i++) {
-        if ((i & (WIPE_PROGRESS_INTERVAL - 1)) == 0) {
-            Console::printf("  Progress: %d/%d\r\n", i, hal::ISecureElement::RMEM_SLOT_COUNT);
+    auto result = core::wipeTropic(se, WIPE_PROGRESS_INTERVAL,
+        [](uint16_t current, uint16_t total) {
+            Console::printf("  Progress: %d/%d\r\n", current, total);
             Console::flush();
-        }
-        if (se->rmemSlotUsed(i)) {
-            if (se->rmemErase(i) == hal::SeResult::OK) {
-                rmemDeleted++;
-            }
-        }
+        });
+
+    if (!result.sessionReady) {
+        Console::printf("ERROR: SE session unavailable\r\n");
+        return;
     }
-    Console::printf("  Deleted %d R-Memory slots\r\n", rmemDeleted);
 
     Console::printf("\r\n=== Factory Reset Complete ===\r\n");
-    Console::printf("Deleted: %d ECC keys, %d R-Memory slots\r\n", eccDeleted, rmemDeleted);
+    Console::printf("Deleted: %d ECC keys, %d R-Memory slots\r\n",
+                    result.eccDeleted, result.rmemDeleted);
 }
 
 /**
@@ -1312,6 +1291,12 @@ void SerialCmd::init() {
 #if FEATURE_SECURE_SERIAL
     getCommandRegistry().setAuthProvider(isAuthenticated);
     getCommandRegistry().setOnCommandExecuted(resetAuthTimer);
+#if !DEBUG_MODE
+    // Release profile: suppress INFO/DEBUG/VERBOSE log output until a session
+    // is authenticated. ERROR/WARN keep flowing so boot failures are still
+    // visible.
+    log_register_authgate_hook(SerialCmd::isAuthenticated);
+#endif
 #else
     log_set_level(CDC_LOG_LEVEL_DEBUG);
 #endif

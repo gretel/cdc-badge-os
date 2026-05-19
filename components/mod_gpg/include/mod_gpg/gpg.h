@@ -13,17 +13,15 @@ extern "C" {
 
 #define GPG_USER_ID_MAX         64
 #define GPG_FINGERPRINT_LEN     20
-#define GPG_FINGERPRINT_V5_LEN  32
 #define GPG_PUBKEY_MAX_LEN      64
-#define GPG_SIGNATURE_MAX_LEN   64
-
-#define GPG_METADATA_MAGIC      0x4750
-#define GPG_METADATA_VERSION    2
 
 #ifdef __DOXYGEN__
 namespace cdc::mod_gpg {
 #endif
 
+/**
+ * \brief Snapshot of the current OpenPGP card-application state for UI display.
+ */
 typedef struct {
     bool initialized;
     uint8_t curve;
@@ -33,36 +31,65 @@ typedef struct {
     uint32_t sign_count;
 } gpg_status_t;
 
-typedef struct __attribute__((packed)) {
-    uint16_t magic;
-    uint8_t version;
-    uint8_t curve;
-    char user_id[GPG_USER_ID_MAX];
-    uint32_t created_at;
-    uint8_t fingerprint[GPG_FINGERPRINT_LEN];
-    uint8_t pubkey[GPG_PUBKEY_MAX_LEN];
-    uint8_t pubkey_len;
-    uint32_t sign_count;
-    uint8_t fingerprint_v5[GPG_FINGERPRINT_V5_LEN];
-} gpg_metadata_t;
-
 #ifdef __DOXYGEN__
 } // namespace cdc::mod_gpg
 #endif
 
+/**
+ * \brief Initializes the GPG module bookkeeping.
+ *
+ * No persistent state is loaded here: the OpenPGP card application owns the
+ * canonical state in its own NVS blob (see openpgp.h) and the device-UI reads
+ * straight from there.
+ */
 bool gpg_init(void);
+
+/**
+ * \brief Reports whether at least one OpenPGP key role has a configured
+ *        fingerprint on the card.
+ */
 bool gpg_is_initialized(void);
+
+/**
+ * \brief Fills \p status from the OpenPGP card-application state.
+ * \return `true` if a key snapshot was returned, `false` if no key configured.
+ */
 bool gpg_get_status(gpg_status_t *status);
+
+/**
+ * \brief Stages a user-id string for the next on-device key generation.
+ * The string is forwarded to OpenpgpNvsState::cardholder_name during
+ * gpg_generate_key() so that gpg --card-status sees it.
+ */
 bool gpg_set_pending_user_id(const char *user_id);
+
+/**
+ * \brief Returns whether a user-id was staged via gpg_set_pending_user_id().
+ */
 bool gpg_has_pending_user_id(void);
+
+/**
+ * \brief Generates SIG / DEC / AUT keys on the device and announces them to
+ *        the OpenPGP card application (fingerprints, gen-time, cardholder name).
+ *
+ * Used by the on-device wizard. The host-side `gpg --card-edit -> generate`
+ * path goes through CCID and bypasses this function entirely.
+ */
 bool gpg_generate_key(uint8_t curve);
+
+/**
+ * \brief Factory-resets all GPG key material and metadata.
+ *
+ * Wipes ECC slots, the wrapped DEC private key, the NVS-resident OpenPGP
+ * state (fingerprints, gen-times, counter, cardholder, RC) and the PINs.
+ */
 bool gpg_reset(void);
+
+/**
+ * \brief Renders the current SIG public key as a SubjectPublicKeyInfo PEM.
+ * The key is read straight from the secure element.
+ */
 bool gpg_export_pubkey_pem(char *buf, size_t size, size_t *out_len);
-bool gpg_export_pubkey_raw(uint8_t *pubkey, size_t *pubkey_len, uint8_t *curve);
-bool gpg_get_fingerprint(uint8_t *fp_out);
-bool gpg_get_fingerprint_v5(uint8_t *fp_out);
-bool gpg_sign_hash(const uint8_t *hash, size_t hash_len,
-                   uint8_t *sig_out, size_t *sig_len);
 
 #ifdef __cplusplus
 }

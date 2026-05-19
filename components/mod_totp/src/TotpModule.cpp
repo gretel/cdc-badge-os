@@ -275,7 +275,7 @@ static void cmd_totp_get(const char* args) {
         return;
     }
     char code[9] = {};
-    int8_t remaining = TotpStore::instance().generateCode(slot, code);
+    int8_t remaining = TotpStore::instance().generateCode(slot, code, sizeof(code));
     if (remaining < 0) {
         cdc::serial::Console::printf("ERROR: time not valid\r\n");
         return;
@@ -495,7 +495,7 @@ private:
         strncpy(issuer_, account.issuer, sizeof(issuer_) - 1);
         issuer_[sizeof(issuer_) - 1] = '\0';
         period_ = account.period;
-        int8_t rem = store.generateCode(slot_, code_);
+        int8_t rem = store.generateCode(slot_, code_, sizeof(code_));
         if (rem >= 0) {
             remaining_ = static_cast<uint8_t>(rem);
         } else {

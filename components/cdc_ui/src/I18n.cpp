@@ -214,7 +214,7 @@ void I18n::initCoreStrings() {
     REG(INFO,           "Info",             "Info");
     REG(INFO2,          "Info 2",            "Info 2");
     REG(DEFAULT_NAME,   "CDC Badge",        "CDC Badge");
-    REG(DEFAULT_INFO,   "v0.5 Modular",     "v0.5 Modular");
+    REG(DEFAULT_INFO,   "v" APP_VERSION,    "v" APP_VERSION);
     REG(BACK,           "Back",             "Zuruck");
     REG(OK,             "OK",               "OK");
     REG(CANCEL,         "Cancel",           "Abbrechen");

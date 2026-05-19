@@ -6,6 +6,7 @@
  */
 
 #include "cdc_core/PinManager.h"
+#include "cdc_core/feature_flags.h"
 #include "cdc_hal/ISecureElement.h"
 #include "cdc_log.h"
 #include "mbedtls/sha256.h"
@@ -40,19 +41,16 @@ bool PinManager::init() {
     if (pinLoaded_) return true;
 
     if (!loadFromStorage()) {
-        // Either first-boot (R-Memory slot empty) or the chip-bound signature
-        // over the stored payload failed to verify. In both cases we fall
-        // back to defaults and immediately persist them so the slot ends up
-        // in a known-good, signed state. The TROPIC01 session might not be
-        // ready yet on the very first boot — in that case saveToStorage
-        // silently fails and we keep the defaults in RAM until the next
-        // mutating operation flushes them.
         LOG_I(TAG, "Loading default PINs (storage empty or unreadable)");
         loadDefaults();
         saveToStorage();
     }
-
     pinLoaded_ = true;
+
+    badgeRetries_ = badgeLocked_ ? 0 : 1;
+    startLockout();
+    LOG_I(TAG, "Badge state after init: locked=%d retries=%u pinSet=%d",
+          badgeLocked_, badgeRetries_, badgePinIsSet_);
     return true;
 }
 
@@ -63,6 +61,7 @@ void PinManager::loadDefaults() {
     // Badge/FIDO2 hash
     computeBadgeHash(DEFAULT_BADGE_PIN, badgeHash_);
     badgeRetries_ = MAX_RETRIES;
+    badgeLocked_ = false;
 
     // Generate random salts
     generateSalt(pw1Salt_);
@@ -202,8 +201,8 @@ bool PinManager::loadFromStorage() {
     memcpy(badgeHash_, &data[pos], BADGE_HASH_SIZE);
     pos += BADGE_HASH_SIZE;
 
-    // Badge retries
-    badgeRetries_ = data[pos++];
+    // Badge locked flag (counter itself is RAM-only)
+    badgeLocked_ = (data[pos++] != 0);
 
     // KDF params (skip algorithm bytes, we know them)
     pos += 2;  // KDF algo + Hash algo
@@ -229,17 +228,17 @@ bool PinManager::loadFromStorage() {
     pw3Retries_ = data[pos++];
 
     // Mirror starts in sync with whatever is on the chip.
-    persistedBadgeRetries_ = badgeRetries_;
-    persistedPw1Retries_   = pw1Retries_;
-    persistedPw3Retries_   = pw3Retries_;
+    persistedBadgeLocked_ = badgeLocked_;
+    persistedPw1Retries_  = pw1Retries_;
+    persistedPw3Retries_  = pw3Retries_;
 
     // Check if badge PIN differs from default
     uint8_t defaultHash[BADGE_HASH_SIZE];
     computeBadgeHash(DEFAULT_BADGE_PIN, defaultHash);
     badgePinIsSet_ = !compareHash(badgeHash_, defaultHash, BADGE_HASH_SIZE);
 
-    LOG_I(TAG, "Loaded PINs from R-Memory (Badge=%d, PW1=%d, PW3=%d retries)",
-          badgeRetries_, pw1Retries_, pw3Retries_);
+    LOG_I(TAG, "Loaded PINs from R-Memory (Badge locked=%s, PW1=%d, PW3=%d retries)",
+          badgeLocked_ ? "yes" : "no", pw1Retries_, pw3Retries_);
     return true;
 }
 
@@ -263,8 +262,8 @@ bool PinManager::saveToStorage() {
     memcpy(&data[pos], badgeHash_, BADGE_HASH_SIZE);
     pos += BADGE_HASH_SIZE;
 
-    // Badge retries
-    data[pos++] = badgeRetries_;
+    // Badge locked flag (retry counter is RAM-only)
+    data[pos++] = badgeLocked_ ? 0x01 : 0x00;
 
     // KDF params
     data[pos++] = KDF_ITERSALTED_S2K;
@@ -318,9 +317,9 @@ bool PinManager::saveToStorage() {
         return false;
     }
 
-    persistedBadgeRetries_ = badgeRetries_;
-    persistedPw1Retries_   = pw1Retries_;
-    persistedPw3Retries_   = pw3Retries_;
+    persistedBadgeLocked_ = badgeLocked_;
+    persistedPw1Retries_  = pw1Retries_;
+    persistedPw3Retries_  = pw3Retries_;
 
     LOG_D(TAG, "PINs saved to R-Memory slot %d (signed, %u bytes)",
           RMEM_SLOT_PIN, STORAGE_SIZE);
@@ -422,67 +421,72 @@ bool PinManager::verifyPin(PinSlot slot, const char* pin) {
     if (!pin) return false;
     if (!pinLoaded_) init();
 
-    // Resolve slot-specific state.
+    if (slot == PinSlot::BADGE) {
+        checkAndResetExpiredLockout();
+        if (badgeRetries_ == 0) {
+            LOG_W(TAG, "Badge PIN blocked");
+            return false;
+        }
+        uint8_t inputHash[BADGE_HASH_SIZE];
+        if (!computeBadgeHash(pin, inputHash)) return false;
+
+        badgeRetries_--;
+
+        if (compareHash(badgeHash_, inputHash, BADGE_HASH_SIZE)) {
+            badgeRetries_ = MAX_RETRIES;
+            lockoutActive_ = false;
+            if (persistedBadgeLocked_) {
+                badgeLocked_ = false;
+                saveToStorage();
+            }
+            LOG_I(TAG, "Badge PIN verified");
+            return true;
+        }
+
+        LOG_W(TAG, "Wrong Badge PIN, %d retries left", badgeRetries_);
+        if (badgeRetries_ == 0) {
+            badgeLocked_ = true;
+            saveToStorage();
+            startLockout();
+        }
+        return false;
+    }
+
+    // PW1/PW3: smartcard semantics. Pre-decrement is persisted synchronously
+    // before the verify so a power-cycle between hash and persist cannot
+    // resurrect the counter. Reaching zero is terminal until an admin reset.
     const char* label = nullptr;
     uint8_t* retries = nullptr;
     uint8_t* storedHash = nullptr;
-    size_t hashSize = 0;
-    uint8_t inputHash[KDF_HASH_SIZE];  // Sized for the largest hash (KDF >= Badge).
-    bool hashOk = false;
+    uint8_t* salt = nullptr;
+    uint8_t* mirror = nullptr;
 
     switch (slot) {
-        case PinSlot::BADGE:
-            label = "Badge PIN";
-            retries = &badgeRetries_;
-            storedHash = badgeHash_;
-            hashSize = BADGE_HASH_SIZE;
-            // Allow expired lockout to clear before evaluating block state.
-            checkAndResetExpiredLockout();
-            if (isBadgeBlocked()) {
-                LOG_W(TAG, "%s blocked", label);
-                return false;
-            }
-            hashOk = computeBadgeHash(pin, inputHash);
-            break;
         case PinSlot::PW1:
             label = "PW1";
             retries = &pw1Retries_;
             storedHash = pw1Hash_;
-            hashSize = KDF_HASH_SIZE;
-            if (*retries == 0) {
-                LOG_W(TAG, "%s blocked", label);
-                return false;
-            }
-            hashOk = computeKdfHash(pin, pw1Salt_, inputHash);
+            salt = pw1Salt_;
+            mirror = &persistedPw1Retries_;
             break;
         case PinSlot::PW3:
             label = "PW3";
             retries = &pw3Retries_;
             storedHash = pw3Hash_;
-            hashSize = KDF_HASH_SIZE;
-            if (*retries == 0) {
-                LOG_W(TAG, "%s blocked", label);
-                return false;
-            }
-            hashOk = computeKdfHash(pin, pw3Salt_, inputHash);
+            salt = pw3Salt_;
+            mirror = &persistedPw3Retries_;
             break;
+        case PinSlot::BADGE:
+            return false;  // unreachable
     }
 
-    if (!hashOk) return false;
-
-    // Pre-decrement strategy: persist the lower counter BEFORE compareHash so
-    // a power-cycle between hash and persist cannot reset the retry counter.
-    // To minimise R-Memory wear we only call saveToStorage() when the value
-    // we are about to commit would actually change the stored counter (mirror
-    // diverges). On success we restore the counter only in RAM; the on-chip
-    // value stays one step lower until the next failed verify reasserts the
-    // mirror (the worst case is the user has one fewer retry after a reboot).
-    uint8_t* mirror = nullptr;
-    switch (slot) {
-        case PinSlot::BADGE: mirror = &persistedBadgeRetries_; break;
-        case PinSlot::PW1:   mirror = &persistedPw1Retries_; break;
-        case PinSlot::PW3:   mirror = &persistedPw3Retries_; break;
+    if (*retries == 0) {
+        LOG_W(TAG, "%s blocked", label);
+        return false;
     }
+
+    uint8_t inputHash[KDF_HASH_SIZE];
+    if (!computeKdfHash(pin, salt, inputHash)) return false;
 
     const uint8_t before = *retries;
     (*retries)--;
@@ -493,24 +497,16 @@ bool PinManager::verifyPin(PinSlot slot, const char* pin) {
         }
     }
 
-    if (compareHash(storedHash, inputHash, hashSize)) {
-        // Restore retries in RAM only - skip the flash write. The mirror is
-        // already at the lower value, so the next failed verify will persist
-        // again before any brute-force advantage can be gained.
+    if (compareHash(storedHash, inputHash, KDF_HASH_SIZE)) {
         *retries = MAX_RETRIES;
-        if (slot == PinSlot::BADGE) {
-            lockoutActive_ = false;
+        if (*mirror != MAX_RETRIES) {
+            saveToStorage();
         }
         LOG_I(TAG, "%s verified", label);
         return true;
     }
 
     LOG_W(TAG, "Wrong %s, %d retries left", label, *retries);
-
-    // Start lockout timer when badge retries are exhausted.
-    if (slot == PinSlot::BADGE && *retries == 0) {
-        startLockout();
-    }
     return false;
 }
 
@@ -555,6 +551,8 @@ bool PinManager::setBadgePin(const char* newPin) {
 
     computeBadgeHash(newPin, badgeHash_);
     badgeRetries_ = MAX_RETRIES;
+    badgeLocked_ = false;
+    lockoutActive_ = false;
 
     uint8_t defaultHash[BADGE_HASH_SIZE];
     computeBadgeHash(DEFAULT_BADGE_PIN, defaultHash);
@@ -569,8 +567,10 @@ bool PinManager::setBadgePin(const char* newPin) {
  * \brief Resets badge retry counter to maximum.
  */
 void PinManager::resetBadgeRetries() {
-    if (badgeRetries_ < MAX_RETRIES) {
-        badgeRetries_ = MAX_RETRIES;
+    badgeRetries_ = MAX_RETRIES;
+    lockoutActive_ = false;
+    if (badgeLocked_) {
+        badgeLocked_ = false;
         saveToStorage();
     }
 }
@@ -762,20 +762,16 @@ void PinManager::resetPW3Retries() {
  * \return `true` if blocked.
  */
 bool PinManager::isBadgeBlocked() const {
-    // Blocked if retries exhausted AND lockout still active
-    if (badgeRetries_ == 0) {
-        return isLockoutActive();
-    }
-    return false;
+    return badgeRetries_ == 0;
 }
 
 /**
- * \brief Starts lockout timer after retries are exhausted.
+ * \brief Starts the badge recovery timer.
  */
 void PinManager::startLockout() {
-    lockoutStartMs_ = esp_timer_get_time() / 1000;  // Convert to ms
+    lockoutStartMs_ = esp_timer_get_time() / 1000;
     lockoutActive_ = true;
-    LOG_W(TAG, "Lockout started for %lu ms", LOCKOUT_DURATION_MS);
+    LOG_I(TAG, "Badge recovery timer started (%lu ms)", LOCKOUT_DURATION_MS);
 }
 
 /**
@@ -783,7 +779,7 @@ void PinManager::startLockout() {
  * \return Remaining lockout time in milliseconds.
  */
 uint32_t PinManager::getLockoutRemainingMs() const {
-    if (!lockoutActive_ || badgeRetries_ > 0) {
+    if (!lockoutActive_) {
         return 0;
     }
 
@@ -815,15 +811,16 @@ bool PinManager::isLockoutActive() const {
  * needing `const_cast`.
  */
 void PinManager::checkAndResetExpiredLockout() {
-    if (!lockoutActive_) {
-        return;
-    }
-    if (getLockoutRemainingMs() == 0) {
-        lockoutActive_ = false;
-        badgeRetries_ = MAX_RETRIES;
+    if (!lockoutActive_) return;
+    if (getLockoutRemainingMs() > 0) return;
+
+    lockoutActive_ = false;
+    badgeRetries_ = MAX_RETRIES;
+    if (badgeLocked_) {
+        badgeLocked_ = false;
         saveToStorage();
-        LOG_I(TAG, "Lockout expired, retries reset");
     }
+    LOG_I(TAG, "Badge recovery timer expired, retries restored to %u", MAX_RETRIES);
 }
 
 } // namespace cdc::core

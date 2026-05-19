@@ -933,6 +933,19 @@ uint32_t openpgp_get_gen_time(uint8_t key_type) {
             static_cast<uint32_t>(src[3]);
 }
 
+bool openpgp_set_cardholder_name(const char *name) {
+    if (!name) return false;
+    size_t len = strlen(name);
+    if (len >= sizeof(cardholder_name)) len = sizeof(cardholder_name) - 1;
+    memcpy(cardholder_name, name, len);
+    cardholder_name[len] = '\0';
+    if (len + 1 < sizeof(cardholder_name)) {
+        memset(cardholder_name + len + 1, 0, sizeof(cardholder_name) - len - 1);
+    }
+    save_state_to_nvs();
+    return true;
+}
+
 bool openpgp_set_key_fingerprint(uint8_t key_type, const uint8_t *fingerprint,
                                   uint32_t gen_time) {
     if (!fingerprint) return false;
@@ -2062,7 +2075,9 @@ static int cmd_pso_decipher(const apdu_t *apdu, uint8_t *resp, size_t resp_max) 
         mbedtls_platform_zeroize(shared_secret, sizeof(shared_secret));
         return apdu_sw(resp, SW_UNKNOWN);
     }
-    return apdu_build_response(resp, resp_max, shared_secret, P256_ECDH_SECRET_SIZE, SW_OK);
+    int n = apdu_build_response(resp, resp_max, shared_secret, P256_ECDH_SECRET_SIZE, SW_OK);
+    mbedtls_platform_zeroize(shared_secret, sizeof(shared_secret));
+    return n;
 }
 
 /**
@@ -2645,6 +2660,10 @@ static int cmd_get_response(const apdu_t *apdu, uint8_t *resp, size_t resp_max) 
     if (want + 2 > resp_max) want = resp_max - 2;
 
     memcpy(resp, g_resp_buffer + g_resp_pos, want);
+    // Wipe the bytes we just handed out so the PSRAM-backed chain buffer
+    // doesn't retain a copy after delivery (PSO:DECIPHER shared secret can
+    // end up here when Le forces a chain).
+    mbedtls_platform_zeroize(g_resp_buffer + g_resp_pos, want);
     g_resp_pos       += want;
     g_resp_remaining -= want;
 
@@ -2653,6 +2672,8 @@ static int cmd_get_response(const apdu_t *apdu, uint8_t *resp, size_t resp_max) 
         const uint8_t sw2 = (g_resp_remaining > 0xFF) ? 0x00
                                                       : static_cast<uint8_t>(g_resp_remaining);
         sw = static_cast<uint16_t>((0x61 << 8) | sw2);
+    } else {
+        g_resp_pos = 0;
     }
     resp[want]     = static_cast<uint8_t>((sw >> 8) & 0xFF);
     resp[want + 1] = static_cast<uint8_t>(sw & 0xFF);

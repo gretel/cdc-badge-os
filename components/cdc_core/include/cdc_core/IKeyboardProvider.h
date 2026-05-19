@@ -26,28 +26,28 @@ public:
 
     /**
      * Check if keyboard is connected and ready to type
-     * @return true if connected and ready
+     * \return true if connected and ready
      */
     virtual bool isConnected() const = 0;
 
     /**
      * Type a string (UTF-8 encoded)
-     * @param text Text to type (null-terminated)
-     * @param delayMs Delay between keystrokes in milliseconds (default 50ms)
-     * @return true if typing started successfully
+     * \param text Text to type (null-terminated)
+     * \param delayMs Delay between keystrokes in milliseconds (default 50ms)
+     * \return true if typing started successfully
      */
     virtual bool typeString(const char* text, uint16_t delayMs = 50) = 0;
 
     /**
      * Type a single character
-     * @param c Character to type
-     * @return true if successful
+     * \param c Character to type
+     * \return true if successful
      */
     virtual bool typeChar(char c) = 0;
 
     /**
      * Check if typing operation is in progress
-     * @return true if busy typing
+     * \return true if busy typing
      */
     virtual bool isBusy() const = 0;
 
@@ -58,14 +58,14 @@ public:
 
     /**
      * Get human-readable connection status for UI
-     * @return Status string (e.g., "Connected to MacBook Pro")
+     * \return Status string (e.g., "Connected to MacBook Pro")
      */
     virtual const char* getStatusText() const { return isConnected() ? "Connected" : "Disconnected"; }
 };
 
 /**
  * Convenience function to get keyboard provider
- * @return Pointer to keyboard provider or nullptr if none registered
+ * \return Pointer to keyboard provider or nullptr if none registered
  */
 IKeyboardProvider* getKeyboard();
 

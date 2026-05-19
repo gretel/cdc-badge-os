@@ -28,7 +28,7 @@ public:
     /**
      * Register a module initializer (called before system is fully ready)
      * The initializer will be called later by runAllInitializers()
-     * @param initFunc Function to call for module init
+     * \param initFunc Function to call for module init
      */
     void registerInitializer(ModuleInitFunc initFunc);
 
@@ -47,39 +47,39 @@ public:
 
     /**
      * Register a module
-     * @param module Module instance (must remain valid)
-     * @return true on success
+     * \param module Module instance (must remain valid)
+     * \return true on success
      */
     bool registerModule(IModule* module);
 
     /**
      * Unregister a module by name
-     * @param name Module name
+     * \param name Module name
      */
     void unregisterModule(const char* name);
 
     /**
      * Get a module by name
-     * @param name Module name
-     * @return Module pointer or nullptr
+     * \param name Module name
+     * \return Module pointer or nullptr
      */
     IModule* getModule(const char* name);
 
     /**
      * Initialize all registered modules
-     * @return true if all succeeded
+     * \return true if all succeeded
      */
     bool initAll();
 
     /**
      * Start all registered modules
-     * @return true if all succeeded
+     * \return true if all succeeded
      */
     bool startAll();
 
     /**
      * Start a single module by index (slot map validation enforced)
-     * @return true on success
+     * \return true on success
      */
     bool startModule(uint8_t index);
 
@@ -90,18 +90,18 @@ public:
 
     /**
      * Get all menu items for a specific location
-     * @param location Menu location to filter
-     * @param items Output array
-     * @param maxItems Maximum items to return
-     * @return Number of items written (sorted by priority)
+     * \param location Menu location to filter
+     * \param items Output array
+     * \param maxItems Maximum items to return
+     * \return Number of items written (sorted by priority)
      */
     uint8_t getMenuItems(MenuLocation location, ModuleMenuItem* items, uint8_t maxItems);
 
     /**
      * Get all lock screen context menu items from modules
-     * @param items Output array
-     * @param maxItems Maximum items to return
-     * @return Number of items written (sorted by priority)
+     * \param items Output array
+     * \param maxItems Maximum items to return
+     * \return Number of items written (sorted by priority)
      */
     uint8_t getLockScreenContextItems(LockScreenContextItem* items, uint8_t maxItems);
 
@@ -112,8 +112,8 @@ public:
 
     /**
      * Get module by index
-     * @param index Module index (0 to count-1)
-     * @return Module pointer or nullptr
+     * \param index Module index (0 to count-1)
+     * \return Module pointer or nullptr
      */
     IModule* getModuleAt(uint8_t index);
 
@@ -127,30 +127,30 @@ public:
     /**
      * Check if a module is enabled (will start on boot)
      * Uses module name for lookup - robust against index changes
-     * @param index Module index
-     * @return true if enabled
+     * \param index Module index
+     * \return true if enabled
      */
     bool isModuleEnabled(uint8_t index) const;
 
     /**
      * Check if a module is enabled by name
-     * @param name Module name
-     * @return true if enabled
+     * \param name Module name
+     * \return true if enabled
      */
     bool isModuleEnabledByName(const char* name) const;
 
     /**
      * Enable or disable a module (persistent across reboot)
      * Uses module name for storage - robust against index changes
-     * @param index Module index
-     * @param enabled true to enable, false to disable
+     * \param index Module index
+     * \param enabled true to enable, false to disable
      */
     void setModuleEnabled(uint8_t index, bool enabled);
 
     /**
      * Toggle module enabled state and save to NVS
-     * @param index Module index
-     * @return New enabled state
+     * \param index Module index
+     * \return New enabled state
      */
     bool toggleModuleEnabled(uint8_t index);
 
@@ -168,22 +168,22 @@ public:
      * Report a module error (called by modules at any time)
      * This marks the module as failed, stops it if running, and stores the error message.
      * The module will be treated as disabled until the error is cleared.
-     * @param name Module name
-     * @param message Error message (will be copied)
+     * \param name Module name
+     * \param message Error message (will be copied)
      */
     void reportModuleError(const char* name, const char* message);
 
     /**
      * Clear a module error (e.g., after successful retry)
-     * @param name Module name
+     * \param name Module name
      */
     void clearModuleErrorByName(const char* name);
 
     /**
      * Retry a module that is in error state
      * Clears the error, re-initializes and starts the module.
-     * @param index Module index
-     * @return true if module started successfully, false if still in error
+     * \param index Module index
+     * \return true if module started successfully, false if still in error
      */
     bool retryModule(uint8_t index);
 

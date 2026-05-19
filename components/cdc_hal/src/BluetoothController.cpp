@@ -1328,7 +1328,10 @@ bool BluetoothController::registerGattService(const GattServiceDef& service) {
     rc = ble_gatts_add_svcs(s.nimbleSvcs);
     if (rc == BLE_HS_EBUSY) {
         // GATT DB is already started; rebuild it to include the new service.
-        // Safe at registration time (no client connected yet).
+        // Safe at registration time (no client connected yet). We must not
+        // expose the new slot as active until the rebuild completes
+        // successfully, otherwise other tasks could see a half-initialised
+        // slot during the loop.
         if (advertising_) {
             ble_gap_adv_stop();
             advertising_ = false;
@@ -1337,23 +1340,27 @@ bool BluetoothController::registerGattService(const GattServiceDef& service) {
         ble_svc_gap_init();
         ble_svc_gatt_init();
 
-        s.active = true;
+        bool ok = true;
         for (int i = 0; i < MAX_REGISTERED_SERVICES; i++) {
-            if (!s_services[i].active) continue;
+            if (i != slot && !s_services[i].active) continue;
             int rrc = ble_gatts_count_cfg(s_services[i].nimbleSvcs);
             if (rrc == 0) rrc = ble_gatts_add_svcs(s_services[i].nimbleSvcs);
             if (rrc != 0) {
                 LOG_E(TAG, "GATT rebuild failed for slot %d: %d", i, rrc);
-                s.active = false;
-                return false;
+                ok = false;
+                break;
             }
         }
-        int srv_rc = ble_gatts_start();
-        if (srv_rc != 0) {
-            LOG_E(TAG, "ble_gatts_start after rebuild: %d", srv_rc);
-            s.active = false;
-            return false;
+        if (ok) {
+            int srv_rc = ble_gatts_start();
+            if (srv_rc != 0) {
+                LOG_E(TAG, "ble_gatts_start after rebuild: %d", srv_rc);
+                ok = false;
+            }
         }
+        if (!ok) return false;
+
+        s.active = true;
         if (synced_) {
             startAdvertising();
         }
