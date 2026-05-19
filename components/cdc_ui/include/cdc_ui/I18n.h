@@ -137,6 +137,8 @@ enum class StringId : uint16_t {
     TASK_WORKING,
     SLEEP,
     USB_REPLUG_REQUIRED,
+    MODULE_ERROR_GENERIC,
+    MODULE_RETRY_PROMPT,
 
     // === Hardware Info ===
     HW_SECTION_MEMORY,

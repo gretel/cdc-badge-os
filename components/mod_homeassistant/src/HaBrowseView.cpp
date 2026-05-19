@@ -7,9 +7,12 @@
 #include "cdc_views/ContextMenuView.h"
 #include "cdc_views/T9InputView.h"
 #include "cdc_views/ToastView.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_log.h"
 #include <cctype>
 #include <cstring>
+#include <strings.h>
+#include <algorithm>
 
 static const char* TAG = "HA_BROWSE";
 
@@ -20,7 +23,6 @@ static constexpr uint16_t MAX_BROWSE_ROWS = 256;
 /** \brief Shared view instances reused across pushes. */
 static ui::ListView          s_listView;
 static ui::T9InputView       s_searchInput;
-static ui::ContextMenuView   s_contextMenu;
 
 /** \brief Backing storage for the rendered list. */
 static ui::ListItem          s_listItems[MAX_BROWSE_ROWS];
@@ -76,18 +78,37 @@ void HaBrowseView::rebuildList() {
             const char* lbl = e.friendly_name[0] ? e.friendly_name : e.entity_id;
             strncpy(s_listLabels[s_listCount], lbl, sizeof(s_listLabels[0]) - 1);
             s_listLabels[s_listCount][sizeof(s_listLabels[0]) - 1] = '\0';
-            s_listItems[s_listCount].label        = s_listLabels[s_listCount];
-            s_listItems[s_listCount].icon         = 0;
-            s_listItems[s_listCount].iconDisabled = false;
-            s_listItems[s_listCount].userData     = nullptr;
-            s_listEntities[s_listCount]           = &e;
+            s_listEntities[s_listCount] = &e;
             s_listCount++;
         }
+    }
+
+    // Sort entity pointers by their label (case-insensitive). Items reference
+    // labels via the entity pointer, so labels stay in sync automatically.
+    auto cmp = [](const HaEntityState* a, const HaEntityState* b) {
+        const char* la = a->friendly_name[0] ? a->friendly_name : a->entity_id;
+        const char* lb = b->friendly_name[0] ? b->friendly_name : b->entity_id;
+        return strcasecmp(la, lb) < 0;
+    };
+    std::sort(s_listEntities, s_listEntities + s_listCount, cmp);
+
+    // Rewrite labels and items in the new sorted order.
+    for (uint16_t i = 0; i < s_listCount; i++) {
+        const HaEntityState* e = s_listEntities[i];
+        const char* lbl = e->friendly_name[0] ? e->friendly_name : e->entity_id;
+        strncpy(s_listLabels[i], lbl, sizeof(s_listLabels[0]) - 1);
+        s_listLabels[i][sizeof(s_listLabels[0]) - 1] = '\0';
+        ui::render::utf8ToCp437Inplace(s_listLabels[i]);
+        s_listItems[i].label        = s_listLabels[i];
+        s_listItems[i].icon         = 0;
+        s_listItems[i].iconDisabled = false;
+        s_listItems[i].userData     = nullptr;
     }
 
     s_listView.setOnSelect(cbSelect);
     s_listView.setOnMenu(cbMenu);
     s_listView.init(mstr(STR_BROWSE), s_listItems, s_listCount);
+    s_listView.setHint(mstr(STR_HINT_ADD_FILTER));
 }
 
 void HaBrowseView::cbSelect(uint16_t index, void* userData) {
@@ -137,8 +158,7 @@ void HaBrowseView::handleMenu(uint16_t index) {
         {mstr(STR_SWITCHES),    cbFilterSwitch},
         {mstr(STR_SCENES),      cbFilterScene},
     };
-    s_contextMenu.init(mstr(STR_FILTER), items, 5);
-    ui::ViewStack::instance().push(&s_contextMenu);
+    ui::showContextMenu(mstr(STR_FILTER), items, 5);
 }
 
 void HaBrowseView::cbSearch() {
@@ -172,13 +192,25 @@ void HaBrowseView::applyFilter(uint8_t domainFilter) {
     s_listView.markDirty();
 }
 
-void HaBrowseView::render(bool) {
+void HaBrowseView::render(bool partial) {
+    s_listView.render(partial);
     clearDirty();
 }
 
-ui::InputResult HaBrowseView::onKey(char) {
-    // All real input is consumed by the inner ListView via its callbacks.
-    return ui::InputResult::IGNORED;
+ui::InputResult HaBrowseView::onKey(char key) {
+    return s_listView.onKey(key);
+}
+
+ui::InputResult HaBrowseView::onLongPress(char key) {
+    return s_listView.onLongPress(key);
+}
+
+void HaBrowseView::onTick(uint32_t nowMs) {
+    s_listView.onTick(nowMs);
+}
+
+bool HaBrowseView::needsRender() const {
+    return s_listView.needsRender();
 }
 
 const char* HaBrowseView::getFooterHint() const {

@@ -20,6 +20,7 @@ public:
     void stop() override;
 
     const char* getVersion() const override { return "0.1"; }
+    bool isDefaultEnabled() const override { return false; }
     uint8_t getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems) override;
     core::IModule::SlotRequest getSlotRequest() const override;
     void setSlotRange(const core::IModule::SlotRange& range) override;

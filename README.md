@@ -37,12 +37,12 @@ Modular firmware for the CDC Badge v1.0/v1.1 hardware security key featuring TRO
 | **12-Button Keypad** | Working | Phone-style T9 input |
 | **Multi-Language** | Working | English and German UI |
 | **Secure Serial** | Working | PIN authentication for serial commands |
+| **Home Assistant** | Working | REST controller: favorites with state, browse/search/filter, brightness, HTTPS, token in TROPIC01 R-Memory |
 
 ### Planned
 
 - [ ] Certificate Authority (CA) module
 - [ ] TROPIC01 firmware updater
-- [ ] Home Assistant controller (`mod_homeassistant`): keypad-driven quick-action remote with favorites, WiFi on-demand, token stored in TROPIC01 R-Memory
 
 ## Architecture
 

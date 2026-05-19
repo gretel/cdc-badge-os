@@ -486,14 +486,42 @@ void ModuleRegistry::saveModuleList() {
  */
 void ModuleRegistry::loadDisabledList() {
     nvs_handle_t handle;
+    bool loaded = false;
     if (nvs_open(MODULES_NVS_NAMESPACE, NVS_READONLY, &handle) == ESP_OK) {
         size_t len = sizeof(disabledModules_);
         if (nvs_get_str(handle, MODULES_NVS_KEY_DISABLED, disabledModules_, &len) == ESP_OK) {
             LOG_I(TAG, "Loaded disabled modules: %s", disabledModules_);
-        } else {
-            disabledModules_[0] = '\0';
+            loaded = true;
         }
         nvs_close(handle);
+    }
+    if (loaded) return;
+
+    // No NVS entry: apply factory defaults from each module's isDefaultEnabled().
+    disabledModules_[0] = '\0';
+    size_t offset = 0;
+    for (uint8_t i = 0; i < count_; i++) {
+        if (modules_[i]->isDefaultEnabled()) continue;
+        const char* name = modules_[i]->getName();
+        size_t nameLen = strlen(name);
+        size_t needed = (offset > 0 ? 1 : 0) + nameLen + 1;
+        if (offset + needed > sizeof(disabledModules_)) break;
+        if (offset > 0) disabledModules_[offset++] = ',';
+        memcpy(disabledModules_ + offset, name, nameLen);
+        offset += nameLen;
+        disabledModules_[offset] = '\0';
+    }
+    if (disabledModules_[0] != '\0') {
+        LOG_I(TAG, "Applied factory-default disabled list: %s", disabledModules_);
+        saveDisabledList();
+    }
+
+    // Stop modules that were started by their initializer but should be disabled.
+    for (uint8_t i = 0; i < count_; i++) {
+        if (!isModuleEnabled(i) && modules_[i]->getState() == ServiceState::STARTED) {
+            LOG_I(TAG, "Stopping default-disabled module '%s'", modules_[i]->getName());
+            modules_[i]->stop();
+        }
     }
 }
 

@@ -16,4 +16,5 @@ idf_component_register(
         usb_badge
         cdc_log
         cdc_os_ui
+        cdc_views
 )

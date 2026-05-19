@@ -75,8 +75,9 @@ static void onModuleSelect(uint16_t index, void* userData) {
         const char* error = moduleReg.getModuleSlotError(idx);
 
         static char confirmMsg[128];
-        snprintf(confirmMsg, sizeof(confirmMsg), "%s\n\nNochmal laden?",
-                 error ? error : "Modul-Fehler");
+        snprintf(confirmMsg, sizeof(confirmMsg), "%s\n%s",
+                 error ? error : tr(StringId::MODULE_ERROR_GENERIC),
+                 tr(StringId::MODULE_RETRY_PROMPT));
 
         showConfirm(confirmMsg, onModuleRetryConfirm, nullptr,
                     ConfirmView::Icon::ERROR, reinterpret_cast<void*>(static_cast<uintptr_t>(idx)));

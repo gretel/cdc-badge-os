@@ -37,6 +37,7 @@ public:
 
     // IModule interface
     const char* getVersion() const override { return "1.0"; }
+    bool isDefaultEnabled() const override { return false; }
     uint8_t getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems) override;
     uint8_t getLockScreenContextItems(core::LockScreenContextItem* items, uint8_t maxItems) override;
     void onTick(uint32_t nowMs) override;

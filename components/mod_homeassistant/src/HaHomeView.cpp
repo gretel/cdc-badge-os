@@ -10,6 +10,7 @@
 #include "cdc_views/ContextMenuView.h"
 #include "cdc_views/ConfirmView.h"
 #include "cdc_views/ToastView.h"
+#include "cdc_views/RenderHelpers.h"
 #include "cdc_log.h"
 #include <cstring>
 #include <cstdio>
@@ -20,8 +21,6 @@ namespace cdc::mod_homeassistant {
 
 /** \brief Reused view instances (one per kind, shared across re-entries). */
 static ui::ListView         s_listView;
-static ui::ContextMenuView  s_contextMenu;
-static HaBrowseView         s_browseView;
 static HaLightDetailView    s_lightDetailView;
 
 /** \brief Backing storage for the favorites list. */
@@ -58,12 +57,29 @@ void HaHomeView::init() {
     s_listView.setOnMenu(cbMenu);
     s_listView.init(mstr(STR_TITLE), s_listItems,
                     static_cast<uint16_t>(favorites_.size()));
+    s_listView.setHint(mstr(STR_HINT_TOGGLE_MENU));
+    s_listView.setEmptyText(mstr(STR_NO_FAVORITES));
 }
 
 void HaHomeView::onEnter(void* context) {
     (void)context;
+
+    // Render the HA view first (favorites with cached / stale state) so the
+    // user sees the actual UI immediately. Connecting overlay comes on top.
+    s_listView.markDirty();
+    ui::ViewStack::instance().render();
+
     auto& wifi = ui::WifiHandlers::instance();
-    if (!wifi.ensureConnected()) {
+    bool needConnect = !wifi.isConnected();
+    if (needConnect) {
+        ui::showToastTask(ui::tr(ui::StringId::WIFI_CONNECTING), 0);
+        ui::ViewStack::instance().render();
+    }
+    bool ok = wifi.ensureConnected();
+    if (needConnect) {
+        ui::ViewStack::instance().hideModal();
+    }
+    if (!ok) {
         const char* err = wifi.getLastError();
         LOG_W(TAG, "WiFi ensureConnected failed: %s", err ? err : "(null)");
         ui::showToastError(err ? err : mstr(STR_NO_WIFI));
@@ -79,6 +95,7 @@ void HaHomeView::onExit() {
 
 void HaHomeView::onResume() {
     dirty_ = true;
+    HaFavoriteStorage::loadAll(favorites_);
     rebuildListItems();
     s_listView.init(mstr(STR_TITLE), s_listItems,
                     static_cast<uint16_t>(favorites_.size()));
@@ -99,6 +116,7 @@ void HaHomeView::rebuildListItems() {
         }
         snprintf(s_listLabels[i], sizeof(s_listLabels[i]),
                  "%s %s", stateGlyph(match, fav), fav.display_name);
+        ui::render::utf8ToCp437Inplace(s_listLabels[i]);
         s_listItems[i].label        = s_listLabels[i];
         s_listItems[i].icon         = 0;
         s_listItems[i].iconDisabled = false;
@@ -138,6 +156,27 @@ void HaHomeView::handleSelect(uint16_t index) {
     if (index >= favorites_.size()) return;
     const HaFavorite& fav = favorites_[index];
     HaDomain d = static_cast<HaDomain>(fav.domain);
+
+    // Read-only entities (sensor, binary_sensor): show current state instead of
+    // attempting a service call that would 500.
+    if (isReadOnly(d)) {
+        const HaEntityState* match = nullptr;
+        for (const auto& e : entityStates_) {
+            if (strcmp(e.entity_id, fav.entity_id) == 0) { match = &e; break; }
+        }
+        if (!match) {
+            ui::showToastError(mstr(STR_HA_UNREACHABLE));
+            return;
+        }
+        char msg[96];
+        const char* stateStr = (match->state == static_cast<uint8_t>(HaState::ON))   ? "on"
+                              : (match->state == static_cast<uint8_t>(HaState::OFF)) ? "off"
+                              : "?";
+        snprintf(msg, sizeof(msg), "%s\n%s", fav.display_name, stateStr);
+        ui::showToastInfo(msg, 2500);
+        return;
+    }
+
     const char* service = getPrimaryService(d);
     const char* domain  = getDomainString(d);
     if (!service || !domain) {
@@ -173,27 +212,32 @@ void HaHomeView::handleSelect(uint16_t index) {
 }
 
 void HaHomeView::handleMenu(uint16_t index) {
-    if (index >= favorites_.size()) return;
     pendingMenuIndex_ = index;
+
+    // Empty favorites list: only the browse action is meaningful.
+    if (index >= favorites_.size()) {
+        const ui::ContextMenuItem items[] = {
+            {mstr(STR_BROWSE_ALL), cbBrowse},
+        };
+        ui::showContextMenu(mstr(STR_ACTIONS), items, 1);
+        return;
+    }
 
     const HaFavorite& fav = favorites_[index];
     if (hasBrightness(static_cast<HaDomain>(fav.domain))) {
         const ui::ContextMenuItem items[] = {
-            {mstr(STR_BRIGHTNESS),   cbBrightness},
-            {mstr(STR_BROWSE_ALL),   cbBrowse},
-            {mstr(STR_REMOVE),       cbRemove},
-            {mstr(STR_RESET_MODULE), cbResetModule},
+            {mstr(STR_BRIGHTNESS), cbBrightness},
+            {mstr(STR_BROWSE_ALL), cbBrowse},
+            {mstr(STR_REMOVE),     cbRemove},
         };
-        s_contextMenu.init(mstr(STR_ACTIONS), items, 4);
+        ui::showContextMenu(mstr(STR_ACTIONS), items, 3);
     } else {
         const ui::ContextMenuItem items[] = {
-            {mstr(STR_BROWSE_ALL),   cbBrowse},
-            {mstr(STR_REMOVE),       cbRemove},
-            {mstr(STR_RESET_MODULE), cbResetModule},
+            {mstr(STR_BROWSE_ALL), cbBrowse},
+            {mstr(STR_REMOVE),     cbRemove},
         };
-        s_contextMenu.init(mstr(STR_ACTIONS), items, 3);
+        ui::showContextMenu(mstr(STR_ACTIONS), items, 2);
     }
-    ui::ViewStack::instance().push(&s_contextMenu);
 }
 
 void HaHomeView::cbBrightness() {
@@ -213,8 +257,8 @@ void HaHomeView::cbBrightness() {
 }
 
 void HaHomeView::cbBrowse() {
-    s_browseView.init(&instance().entityStates_);
-    ui::ViewStack::instance().push(&s_browseView);
+    HaBrowseView::instance().init(&instance().entityStates_);
+    ui::ViewStack::instance().push(&HaBrowseView::instance());
 }
 
 void HaHomeView::cbRemove() {
@@ -233,21 +277,31 @@ void HaHomeView::cbRemove() {
 
 void HaHomeView::cbResetModule() {
     ui::showConfirm(mstr(STR_RESET_CONFIRM),
-                    []() {
+                    [](void*) {
                         HaClient::resetAll();
                         ui::showToastSuccess(mstr(STR_RESET_DONE));
                     });
 }
 
-void HaHomeView::render(bool) {
+void HaHomeView::render(bool partial) {
+    s_listView.render(partial);
     clearDirty();
 }
 
-ui::InputResult HaHomeView::onKey(char) {
-    // The underlying ListView is what the user actually interacts with; this
-    // view exists only to own the favorites/state and to be pushed by the
-    // module menu. All key handling lives on the ListView's callbacks.
-    return ui::InputResult::IGNORED;
+ui::InputResult HaHomeView::onKey(char key) {
+    return s_listView.onKey(key);
+}
+
+ui::InputResult HaHomeView::onLongPress(char key) {
+    return s_listView.onLongPress(key);
+}
+
+void HaHomeView::onTick(uint32_t nowMs) {
+    s_listView.onTick(nowMs);
+}
+
+bool HaHomeView::needsRender() const {
+    return s_listView.needsRender();
 }
 
 const char* HaHomeView::getFooterHint() const {

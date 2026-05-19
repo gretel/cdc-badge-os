@@ -76,6 +76,7 @@ void registerStrings() {
     i18n.registerTranslation(s_strIdBase + STR_HA_CONFIG_MISSING, ui::Language::EN, "HA config missing");
     i18n.registerTranslation(s_strIdBase + STR_NO_WIFI,           ui::Language::EN, "No WiFi");
     i18n.registerTranslation(s_strIdBase + STR_UNSUPPORTED,       ui::Language::EN, "Unsupported");
+    i18n.registerTranslation(s_strIdBase + STR_NO_FAVORITES,      ui::Language::EN, "No favorites - press [3] to browse");
 
     // German
     i18n.registerTranslation(s_strIdBase + STR_TITLE,             ui::Language::DE, "Home Assistant");
@@ -121,6 +122,7 @@ void registerStrings() {
     i18n.registerTranslation(s_strIdBase + STR_HA_CONFIG_MISSING, ui::Language::DE, "HA Konfiguration fehlt");
     i18n.registerTranslation(s_strIdBase + STR_NO_WIFI,           ui::Language::DE, "Kein WLAN");
     i18n.registerTranslation(s_strIdBase + STR_UNSUPPORTED,       ui::Language::DE, "Nicht unterstuetzt");
+    i18n.registerTranslation(s_strIdBase + STR_NO_FAVORITES,      ui::Language::DE, "Keine Favoriten - [3] fuer Browse");
 
     LOG_I(TAG, "Registered i18n strings (base=%d)", s_strIdBase);
 }
@@ -155,7 +157,7 @@ void HomeAssistantModule::setSlotRange(const core::IModule::SlotRange& range) {
 
 core::IModule::SlotRequest HomeAssistantModule::getSlotRequest() const {
     core::IModule::SlotRequest req = {};
-    req.mapName      = "HA_TOKEN";
+    req.mapName      = "mod_homeassistant";
     req.minEccSlots  = 0;
     req.minRmemSlots = 1;
     return req;

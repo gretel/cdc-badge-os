@@ -19,7 +19,7 @@ namespace cdc::mod_homeassistant {
  */
 namespace HaFavoriteStorage {
 
-static constexpr const char* NVS_NAMESPACE = "mod_homeassistant";
+static constexpr const char* NVS_NAMESPACE = "mod_ha";
 static constexpr const char* KEY_URL       = "url";
 static constexpr const char* KEY_FAV_COUNT = "fav_count";
 

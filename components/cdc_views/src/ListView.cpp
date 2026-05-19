@@ -157,8 +157,13 @@ InputResult ListView::onKey(char key) {
             return InputResult::CONSUMED;
 
         case KEY_BACK: // Context menu
-            if (onMenu_ && items_ && selection_ < itemCount_) {
-                onMenu_(selection_, items_[selection_].userData);
+            if (onMenu_) {
+                if (items_ && selection_ < itemCount_) {
+                    onMenu_(selection_, items_[selection_].userData);
+                } else {
+                    // Empty list: surface a "no-selection" menu opportunity.
+                    onMenu_(0xFFFF, nullptr);
+                }
                 return InputResult::CONSUMED;
             }
             return InputResult::IGNORED;
@@ -253,6 +258,19 @@ void ListView::render(bool partial) {
                 gfx->print(item.label);
             }
         }
+    }
+
+    // Empty placeholder (after item rects so it's not overpainted)
+    if (itemCount_ == 0 && emptyText_) {
+        int16_t x1, y1;
+        uint16_t w, h;
+        gfx->setTextColor(EPD_BLACK);
+        gfx->setTextSize(1);
+        gfx->getTextBounds(emptyText_, 0, 0, &x1, &y1, &w, &h);
+        int x = (width - static_cast<int>(w)) / 2;
+        int y = LIST_START_Y + (visibleItems_ * itemHeight_) / 2 - h / 2;
+        gfx->setCursor(x < 0 ? 0 : x, y);
+        gfx->print(emptyText_);
     }
 
     // Scroll indicators

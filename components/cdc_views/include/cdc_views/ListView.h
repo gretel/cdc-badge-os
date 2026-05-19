@@ -93,6 +93,11 @@ public:
     void setHint(const char* hint) { customHint_ = hint; }
 
     /**
+     * Set placeholder text shown in the body area when the list is empty.
+     */
+    void setEmptyText(const char* text) { emptyText_ = text; }
+
+    /**
      * Set custom item height (0 = auto-calculate)
      */
     void setItemHeight(uint8_t height) { itemHeight_ = height > 0 ? height : DEFAULT_ITEM_HEIGHT; }
@@ -132,6 +137,7 @@ public:
 private:
     const char* title_ = nullptr;
     const char* customHint_ = nullptr;
+    const char* emptyText_ = nullptr;
     const ListItem* items_ = nullptr;
     uint16_t itemCount_ = 0;
     uint16_t selection_ = 0;

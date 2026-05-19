@@ -75,6 +75,12 @@ public:
     virtual const char* getVersion() const = 0;
 
     /**
+     * \brief Returns whether the module should be enabled by default on a fresh
+     *        install (no NVS entry yet). User toggles persist independently.
+     */
+    virtual bool isDefaultEnabled() const { return true; }
+
+    /**
      * \brief Returns module menu items.
      * \param items Output array to fill.
      * \param maxItems Maximum items to return.

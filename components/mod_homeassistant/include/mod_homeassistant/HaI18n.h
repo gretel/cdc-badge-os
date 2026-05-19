@@ -54,6 +54,7 @@ enum HaStr : uint16_t {
     STR_HA_CONFIG_MISSING  = 40,
     STR_NO_WIFI            = 41,
     STR_UNSUPPORTED        = 42,
+    STR_NO_FAVORITES       = 43,
     STR_COUNT
 };
 

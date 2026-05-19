@@ -30,7 +30,10 @@ bool isPresent() {
     if (!se) return false;
     uint16_t slot = 0;
     if (!resolveSlot(&slot, nullptr)) return false;
-    return se->rmemSlotUsed(slot);
+    hal::ISecureElement::RMemHeader hdr = {};
+    uint16_t payloadLen = 0;
+    auto res = se->rmemReadWithHeader(slot, &hdr, nullptr, 0, &payloadLen);
+    return res == hal::SeResult::OK && payloadLen > 0;
 }
 
 bool read(char* out, size_t maxLen) {

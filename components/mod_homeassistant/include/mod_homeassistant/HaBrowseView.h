@@ -30,6 +30,9 @@ public:
     void onEnter(void* context) override;
     void render(bool partial) override;
     ui::InputResult onKey(char key) override;
+    ui::InputResult onLongPress(char key) override;
+    void onTick(uint32_t nowMs) override;
+    bool needsRender() const override;
     const char* getName() const override { return "HaBrowseView"; }
     const char* getFooterHint() const override;
 

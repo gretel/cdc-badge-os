@@ -18,7 +18,6 @@ namespace cdc::mod_homeassistant {
 static constexpr uint32_t POLL_INTERVAL_MS = 500;
 
 /** \brief Context-menu items reused across the view's lifetime. */
-static ui::ContextMenuView s_contextMenu;
 
 void HaWaitingView::onEnter(void* context) {
     (void)context;
@@ -102,8 +101,7 @@ void HaWaitingView::openContextMenu() {
     const ui::ContextMenuItem items[] = {
         {mstr(STR_ENTER_URL_GUI), onMenuOpenWizard},
     };
-    s_contextMenu.init(mstr(STR_ACTIONS), items, 1);
-    ui::ViewStack::instance().push(&s_contextMenu);
+    ui::showContextMenu(mstr(STR_ACTIONS), items, 1);
 }
 
 ui::InputResult HaWaitingView::onKey(char key) {

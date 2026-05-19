@@ -1,5 +1,6 @@
 #include "mod_homeassistant/HaClient.h"
 #include "mod_homeassistant/HaStorage.h"
+#include <vector>
 #include "serial_cmd/ICommandRegistry.h"
 #include "serial_cmd/Console.h"
 #include "cdc_core/StringUtils.h"
@@ -76,6 +77,26 @@ static void cmdHaStatus(const char* args) {
         url[0] ? url : "(not set)",
         fp[0] ? "sha256:" : "",
         fp[0] ? fp : "(not set)");
+
+    if (!url[0] || !fp[0]) {
+        cdc::serial::Console::printf("Connection: skipped (URL or token missing)\r\n");
+        return;
+    }
+
+    HaClient client;
+    if (!client.loadConfig()) {
+        cdc::serial::Console::printf("Connection: ERROR (config load failed)\r\n");
+        return;
+    }
+    std::vector<HaEntityState> entities;
+    HaResult res = client.getStates(entities);
+    if (res == HaResult::OK) {
+        cdc::serial::Console::printf("Connection: OK (%u entities)\r\n",
+                                     static_cast<unsigned>(entities.size()));
+    } else {
+        cdc::serial::Console::printf("Connection: ERROR (res=%d, http=%d)\r\n",
+                                     static_cast<int>(res), client.getLastHttpStatus());
+    }
 }
 
 /**

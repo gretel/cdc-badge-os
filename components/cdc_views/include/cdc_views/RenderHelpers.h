@@ -35,6 +35,19 @@ void drawDialogFrame(Gdey029T94* gfx, int x, int y, int w, int h);
 uint8_t cp437ToLatin1(uint8_t c);
 
 /**
+ * \brief Maps a Unicode codepoint to the equivalent CP437 byte.
+ *        ASCII passes through; codepoints without a CP437 mapping return 0.
+ */
+uint8_t unicodeToCp437(uint32_t cp);
+
+/**
+ * \brief Decodes a UTF-8 string in place to CP437 single bytes. Truncates if
+ *        the buffer is too small. Unmapped codepoints are dropped silently.
+ * \param buf Mutable null-terminated UTF-8 buffer; written back as CP437.
+ */
+void utf8ToCp437Inplace(char* buf);
+
+/**
  * \brief Prints a CP437 string by mapping each byte to Latin-1 before drawing.
  *        Use with TTF-derived GFX fonts (range 0x20..0xFF) that expect Latin-1 indices.
  * \param gfx Target display.

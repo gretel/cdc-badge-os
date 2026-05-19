@@ -46,7 +46,10 @@ void ToastView::init(const char* message, Icon icon, uint16_t durationMs, bool d
  */
 void ToastView::onTick(uint32_t nowMs) {
     if (durationMs_ > 0 && !expired_) {
-        if (nowMs - startMs_ >= durationMs_) {
+        // Enforce a minimum visible duration so a brief flash isn't all the user sees.
+        static constexpr uint32_t MIN_DISPLAY_MS = 800;
+        uint32_t effective = durationMs_ < MIN_DISPLAY_MS ? MIN_DISPLAY_MS : durationMs_;
+        if (nowMs - startMs_ >= effective) {
             expired_ = true;
             ViewStack::instance().hideModal();
         }
@@ -95,9 +98,10 @@ void ToastView::render(bool partial) {
     gfx->setTextColor(EPD_BLACK);
     gfx->setTextSize(1);
 
-    // Text position (adjusted if icon present)
+    // Text position (adjusted if icon present). y is the TOP of the glyph for
+    // size-1 glcdfont (8px tall), so subtract half the height to vertically center.
     int textX = boxX + 15;
-    int textY = boxY + (BOX_HEIGHT / 2) + 4;
+    int textY = boxY + (BOX_HEIGHT / 2) - 4;
 
     // Draw icon if present
     if (icon_ != Icon::NONE) {

@@ -13,6 +13,7 @@
 #include "cdc_core/FactoryReset.h"
 #include "cdc_hal/ISecureElement.h"
 #include "cdc_log.h"
+#include "cdc_views/RenderHelpers.h"
 #include "esp_timer.h"
 #include "esp_attr.h"
 #include "nvs_flash.h"
@@ -1358,44 +1359,6 @@ void SerialCmd::handleHistoryNav(HistoryDirection dir) {
  * \return `true` if the character was consumed by escape handling and the
  *         caller should not process it further; `false` otherwise.
  */
-/**
- * \brief Maps a Unicode codepoint to its CP437 single-byte equivalent.
- * \param cp Unicode codepoint.
- * \return CP437 byte, or 0 when no mapping exists.
- */
-static uint8_t unicodeToCp437(uint32_t cp) {
-    switch (cp) {
-        case 0x00A1: return 0xAD; case 0x00A2: return 0x9B;
-        case 0x00A3: return 0x9C; case 0x00A5: return 0x9D;
-        case 0x00A6: return 0x7C; case 0x00A7: return 0x15;
-        case 0x00AA: return 0xA6; case 0x00AB: return 0xAE;
-        case 0x00AC: return 0xAA; case 0x00B0: return 0xF8;
-        case 0x00B1: return 0xF1; case 0x00B2: return 0xFD;
-        case 0x00B5: return 0xE6; case 0x00BA: return 0xA7;
-        case 0x00BB: return 0xAF; case 0x00BC: return 0xAC;
-        case 0x00BD: return 0xAB; case 0x00BF: return 0xA8;
-        case 0x00C4: return 0x8E; case 0x00C5: return 0x8F;
-        case 0x00C6: return 0x92; case 0x00C7: return 0x80;
-        case 0x00C9: return 0x90; case 0x00D1: return 0xA5;
-        case 0x00D6: return 0x99; case 0x00DC: return 0x9A;
-        case 0x00DF: return 0xE1; case 0x00E0: return 0x85;
-        case 0x00E1: return 0xA0; case 0x00E2: return 0x83;
-        case 0x00E3: return 0x83; case 0x00E4: return 0x84;
-        case 0x00E5: return 0x86; case 0x00E6: return 0x91;
-        case 0x00E7: return 0x87; case 0x00E8: return 0x8A;
-        case 0x00E9: return 0x82; case 0x00EA: return 0x88;
-        case 0x00EB: return 0x89; case 0x00EC: return 0x8D;
-        case 0x00ED: return 0xA1; case 0x00EE: return 0x8C;
-        case 0x00EF: return 0x8B; case 0x00F1: return 0xA4;
-        case 0x00F2: return 0x95; case 0x00F3: return 0xA2;
-        case 0x00F4: return 0x93; case 0x00F6: return 0x94;
-        case 0x00F7: return 0xF6; case 0x00F9: return 0x97;
-        case 0x00FA: return 0xA3; case 0x00FB: return 0x96;
-        case 0x00FC: return 0x81; case 0x00FF: return 0x98;
-        default: return (cp < 0x80) ? static_cast<uint8_t>(cp) : 0;
-    }
-}
-
 bool SerialCmd::handleEscape(int c) {
     if (s_escState == EscState::ESC) {
         if (c == '[') {
@@ -1493,7 +1456,7 @@ void SerialCmd::handleSpecialChar(int c, bool& commandReady) {
                 if ((c & 0xC0) == 0x80) {
                     utf8Cp = (utf8Cp << 6) | (c & 0x3F);
                     if (--utf8Pending == 0) {
-                        uint8_t cp437 = unicodeToCp437(utf8Cp);
+                        uint8_t cp437 = cdc::ui::render::unicodeToCp437(utf8Cp);
                         if (cp437) appendByte(cp437);
                     }
                 } else {

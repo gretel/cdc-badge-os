@@ -318,10 +318,12 @@ void I18n::initCoreStrings() {
     REG(TR01_CACHE_REBUILD, "TR01 Cache Rebuild",   "TR01 Cache neu aufbauen");
     REG(TR01_CACHE_CLEANUP, "TR01 Cache Cleanup",   "TR01 Cache aufraeumen");
     REG(EXPERT,             "Expert",               "Experte");
-    REG(EXPERT_WARNING,     "Possible breaking",    "Moeglich riskant");
+    REG(EXPERT_WARNING,     "Caution",              "Vorsicht");
     REG(TASK_WORKING,       "Please wait",          "Bitte warten");
     REG(USB_REPLUG_REQUIRED,"USB replug may be needed", "USB replug ggf. noetig");
     REG(SLEEP,              "Sleep",                "Schlafmodus");
+    REG(MODULE_ERROR_GENERIC,"Module error",        "Modul-Fehler");
+    REG(MODULE_RETRY_PROMPT,"Reload module?",       "Modul neu laden?");
 
     // === Hardware Info ===
     REG(HW_SECTION_MEMORY,  "Memory",               "Speicher");

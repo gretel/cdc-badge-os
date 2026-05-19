@@ -89,7 +89,12 @@ HaResult HaClient::performRequest(const char* method,
     }
 
     char fullUrl[MAX_URL_LEN + 64] = {};
-    snprintf(fullUrl, sizeof(fullUrl), "%s%s", url_, path);
+    // Avoid double slashes if the stored URL ends with '/' and path starts with '/'.
+    size_t urlLen = strlen(url_);
+    bool urlHasSlash  = urlLen > 0 && url_[urlLen - 1] == '/';
+    bool pathHasSlash = path && path[0] == '/';
+    const char* pathPart = (urlHasSlash && pathHasSlash && path[1] != '\0') ? path + 1 : path;
+    snprintf(fullUrl, sizeof(fullUrl), "%s%s", url_, pathPart ? pathPart : "");
 
     ResponseBuffer rsp = {nullptr, 0, 0};
 
