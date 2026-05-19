@@ -80,6 +80,8 @@ void LockScreenView::init() {
  * \param name Name text (nullable).
  */
 void LockScreenView::setDisplayName(const char* name) {
+    const char* incoming = name ? name : "";
+    if (strncmp(name_, incoming, MAX_TEXT_LEN) == 0) return;
     if (name) {
         strncpy(name_, name, MAX_TEXT_LEN - 1);
         name_[MAX_TEXT_LEN - 1] = '\0';
@@ -94,6 +96,8 @@ void LockScreenView::setDisplayName(const char* name) {
  * \param info Info text (nullable).
  */
 void LockScreenView::setInfo(const char* info) {
+    const char* incoming = info ? info : "";
+    if (strncmp(info_, incoming, MAX_TEXT_LEN) == 0) return;
     if (info) {
         strncpy(info_, info, MAX_TEXT_LEN - 1);
         info_[MAX_TEXT_LEN - 1] = '\0';
@@ -108,6 +112,8 @@ void LockScreenView::setInfo(const char* info) {
  * \param info2 Secondary info text (nullable).
  */
 void LockScreenView::setInfo2(const char* info2) {
+    const char* incoming = info2 ? info2 : "";
+    if (strncmp(info2_, incoming, MAX_TEXT_LEN) == 0) return;
     if (info2) {
         strncpy(info2_, info2, MAX_TEXT_LEN - 1);
         info2_[MAX_TEXT_LEN - 1] = '\0';
@@ -122,6 +128,8 @@ void LockScreenView::setInfo2(const char* info2) {
  * \param clock Clock text (nullable).
  */
 void LockScreenView::setClock(const char* clock) {
+    const char* incoming = clock ? clock : "--:--";
+    if (strncmp(clock_, incoming, sizeof(clock_)) == 0) return;
     if (clock) {
         strncpy(clock_, clock, sizeof(clock_) - 1);
         clock_[sizeof(clock_) - 1] = '\0';
@@ -136,6 +144,8 @@ void LockScreenView::setClock(const char* clock) {
  * \param date Date text (nullable).
  */
 void LockScreenView::setDate(const char* date) {
+    const char* incoming = date ? date : "";
+    if (strncmp(date_, incoming, sizeof(date_)) == 0) return;
     if (date) {
         strncpy(date_, date, sizeof(date_) - 1);
         date_[sizeof(date_) - 1] = '\0';

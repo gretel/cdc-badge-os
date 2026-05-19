@@ -121,6 +121,14 @@ static bool s_lastWifiConnected = false;
 static bool s_lastBleEnabled = false;
 static bool s_lastBatteryPresent = false;
 
+// Throttle for the battery-percent ADC sample on the lockscreen. The BQ25895
+// ADC step is 20 mV, mapped over 1000 mV (3200-4200 mV) the linear curve gives
+// ~2 %/step; an unrestricted per-tick sample makes ADC jitter flip the
+// rendered percentage, marking the view dirty and triggering a partial EPD
+// refresh on essentially every tick.
+static constexpr uint32_t BATTERY_SAMPLE_INTERVAL_MS = 30000;
+static uint32_t s_lastBatterySampleMs = 0;
+
 /** \brief Prevents stale key events directly after unlock transition. */
 static bool s_ignoreKeyUntilRelease = false;
 
@@ -217,6 +225,8 @@ static void updateStatusIcon(StatusIcon icon, bool active, bool& last) {
  */
 static void updateBatteryIndicator() {
     bool present = s_deps.power->isBatteryPresent();
+    uint32_t nowMs = static_cast<uint32_t>(esp_timer_get_time() / 1000ULL);
+
     if (present != s_lastBatteryPresent) {
         if (present) {
             s_lockScreen->removeStatusIcon(StatusIcon::NO_BATTERY);
@@ -226,9 +236,18 @@ static void updateBatteryIndicator() {
             s_lockScreen->setBatteryPercent(0);
         }
         s_lastBatteryPresent = present;
-    } else if (present) {
-        s_lockScreen->setBatteryPercent(s_deps.power->getBatteryPercent());
+        s_lastBatterySampleMs = nowMs;
+        return;
     }
+
+    if (!present) return;
+
+    if (s_lastBatterySampleMs != 0 &&
+        (nowMs - s_lastBatterySampleMs) < BATTERY_SAMPLE_INTERVAL_MS) {
+        return;
+    }
+    s_lastBatterySampleMs = nowMs;
+    s_lockScreen->setBatteryPercent(s_deps.power->getBatteryPercent());
 }
 
 /**

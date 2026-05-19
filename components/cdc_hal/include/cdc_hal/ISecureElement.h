@@ -60,10 +60,13 @@ public:
     // Slot limits
     static constexpr uint8_t ECC_SLOT_COUNT = 32;
     static constexpr uint16_t RMEM_SLOT_COUNT = 512;
-    // Conservative limit matching TROPIC01 RISC-V FW < 2.x. Newer FW reports
-    // 475, but the actual value is queried by libtropic at runtime from chip
-    // attributes; this constant is the buffer-size ceiling we let callers use.
+    // Minimum guaranteed slot size across all supported TROPIC01 Application
+    // FW versions. Use for static layouts that must remain stable when the
+    // chip is reflashed with older FW; query getRmemSlotSize() for the actual
+    // runtime capability.
     static constexpr uint16_t RMEM_SLOT_SIZE = 444;
+    // Stack-buffer ceiling sized for the largest known FW (>= 2.0 reports 475).
+    static constexpr uint16_t RMEM_SLOT_SIZE_MAX = 475;
     static constexpr uint8_t RMEM_NAME_LEN = 16;
 
     virtual ~ISecureElement() = default;
@@ -237,6 +240,13 @@ public:
      * the chip: index 3 = major, 2 = minor, 1 = patch, 0 = build.
      */
     virtual bool getFwVersion(uint8_t riscvVer[4], uint8_t spectVer[4]) = 0;
+
+    /**
+     * Get the user-data R-Memory slot size in bytes as reported by the chip
+     * for the running Application FW. Always >= RMEM_SLOT_SIZE and
+     * <= RMEM_SLOT_SIZE_MAX.
+     */
+    virtual uint16_t getRmemSlotSize() const = 0;
 };
 
 // Factory function to get secure element instance

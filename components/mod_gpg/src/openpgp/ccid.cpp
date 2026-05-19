@@ -138,27 +138,6 @@ static void ccid_build_header(uint8_t *resp, uint8_t msg_type, uint32_t data_len
 }
 
 /**
- * \brief Logs a hexadecimal preview of CCID payload data.
- * \param prefix Prefix text printed before the hex dump.
- * \param data Pointer to the data buffer.
- * \param len Number of bytes in `data`.
- * \return void
- */
-static void ccid_log_hex_data(const char* prefix, const uint8_t* data, size_t len) {
-    if (len == 0) return;
-    char hex[128];
-    size_t max_bytes = (len > 32) ? 32 : len;
-    for (size_t i = 0; i < max_bytes; i++) {
-        snprintf(hex + i*3, 4, "%02X ", data[i]);
-    }
-    if (len > 32) {
-        LOG_I(TAG, "%s [%zu bytes]: %s...", prefix, len, hex);
-    } else {
-        LOG_I(TAG, "%s [%zu bytes]: %s", prefix, len, hex);
-    }
-}
-
-/**
  * \brief Processes one incoming CCID message and writes corresponding response.
  * \param msg Incoming CCID message bytes.
  * \param msg_len Incoming message length.

@@ -80,6 +80,25 @@ static void buildHardwareInfoText(char* buf, size_t bufSize) {
     append("%s: %s\n", tr(StringId::HW_TR01_SESSION),
            (se && se->isSessionActive()) ? okText : naText);
 
+    if (seOk) {
+        uint8_t riscvVer[4] = {0};
+        uint8_t spectVer[4] = {0};
+        if (se->getFwVersion(riscvVer, spectVer)) {
+            append("%s: %u.%u.%u.%u\n", tr(StringId::HW_TR01_RISCV_FW),
+                   riscvVer[3], riscvVer[2], riscvVer[1], riscvVer[0]);
+            append("%s: %u.%u.%u.%u\n", tr(StringId::HW_TR01_SPECT_FW),
+                   spectVer[3], spectVer[2], spectVer[1], spectVer[0]);
+        } else {
+            append("%s: %s\n", tr(StringId::HW_TR01_RISCV_FW), naText);
+            append("%s: %s\n", tr(StringId::HW_TR01_SPECT_FW), naText);
+        }
+        append("%s: %u B\n", tr(StringId::HW_TR01_RMEM_SLOT), se->getRmemSlotSize());
+    } else {
+        append("%s: %s\n", tr(StringId::HW_TR01_RISCV_FW), naText);
+        append("%s: %s\n", tr(StringId::HW_TR01_SPECT_FW), naText);
+        append("%s: %s\n", tr(StringId::HW_TR01_RMEM_SLOT), naText);
+    }
+
     // WiFi
     auto* wifi = hal::getWifiControllerInstance();
     bool wifiOk = wifi && (wifi->getState() == core::ServiceState::INITIALIZED ||

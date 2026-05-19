@@ -332,6 +332,9 @@ void I18n::initCoreStrings() {
     REG(HW_DISPLAY,         "Display",              "Display");
     REG(HW_TROPIC01,        "TROPIC01",             "TROPIC01");
     REG(HW_TR01_SESSION,    "TR01 Session",         "TR01 Sitzung");
+    REG(HW_TR01_RISCV_FW,   "TR01 RISC-V FW",       "TR01 RISC-V FW");
+    REG(HW_TR01_SPECT_FW,   "TR01 SPECT FW",        "TR01 SPECT FW");
+    REG(HW_TR01_RMEM_SLOT,  "TR01 R-Mem slot",      "TR01 R-Mem Slot");
     REG(HW_WIFI,            "WiFi",                 "WiFi");
     REG(HW_BLE,             "BLE",                  "BLE");
     REG(HW_HEAP,            "Heap",                 "Heap");

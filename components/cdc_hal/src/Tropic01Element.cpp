@@ -76,6 +76,7 @@ public:
     bool eccSlotUsed(uint8_t slot) const override;
 
     bool getFwVersion(uint8_t riscvVer[4], uint8_t spectVer[4]) override;
+    uint16_t getRmemSlotSize() const override { return rmemSlotSize_; }
 
     // Signing
     SeResult ecdsaSign(uint8_t slot, const uint8_t* msg, size_t msgLen,
@@ -134,6 +135,10 @@ private:
     // from the const accessor, hence atomic.
     mutable std::atomic<uint32_t> eccSlotCache_{0};
     mutable std::atomic<bool> eccCacheValid_{false};
+
+    // Populated once during init() from libtropic's runtime FW-attribute
+    // query. Const after init() returns, so no synchronization needed.
+    uint16_t rmemSlotSize_ = ISecureElement::RMEM_SLOT_SIZE;
 };
 
 /**
@@ -177,8 +182,15 @@ bool Tropic01Element::init() {
         return false;
     }
 
+    uint16_t slotSize = handle_.tr01_attrs.r_mem_udata_slot_size_max;
+    if (slotSize >= ISecureElement::RMEM_SLOT_SIZE &&
+        slotSize <= ISecureElement::RMEM_SLOT_SIZE_MAX) {
+        rmemSlotSize_ = slotSize;
+    }
+
     state_ = core::ServiceState::INITIALIZED;
-    LOG_I(TAG, "TROPIC01 initialized (CS=GPIO%d)", TR01_CS_PIN);
+    LOG_I(TAG, "TROPIC01 initialized (CS=GPIO%d, R-Mem slot=%u B)",
+          TR01_CS_PIN, rmemSlotSize_);
     return true;
 }
 
@@ -686,7 +698,7 @@ SeResult Tropic01Element::rmemWrite_unlocked(uint16_t slot, const uint8_t* data,
  */
 SeResult Tropic01Element::rmemWrite(uint16_t slot, const uint8_t* data, uint16_t len) {
     if (core::SystemLock::instance().isLocked()) return SeResult::ALARM_MODE;
-    if (slot >= RMEM_SLOT_COUNT || !data || len == 0 || len > RMEM_SLOT_SIZE) {
+    if (slot >= RMEM_SLOT_COUNT || !data || len == 0 || len > rmemSlotSize_) {
         return SeResult::INVALID_PARAM;
     }
     if (!acquireBus()) return SeResult::ERROR;
@@ -770,7 +782,7 @@ SeResult Tropic01Element::rmemWriteWithHeader(uint16_t slot, uint8_t moduleId,
     if (slot >= RMEM_SLOT_COUNT) {
         return SeResult::INVALID_PARAM;
     }
-    if (payloadLen > (RMEM_SLOT_SIZE - sizeof(RMemHeader))) {
+    if (payloadLen > (rmemSlotSize_ - sizeof(RMemHeader))) {
         return SeResult::INVALID_PARAM;
     }
     if (!acquireBus()) return SeResult::ERROR;
@@ -791,7 +803,7 @@ SeResult Tropic01Element::rmemWriteWithHeader(uint16_t slot, uint8_t moduleId,
         }
         header.checksum = computeHeaderChecksum(header);
 
-        uint8_t buffer[RMEM_SLOT_SIZE] = {};
+        uint8_t buffer[RMEM_SLOT_SIZE_MAX] = {};
         memcpy(buffer, &header, sizeof(header));
         if (payloadLen > 0 && payload) {
             memcpy(buffer + sizeof(header), payload, payloadLen);
@@ -816,7 +828,7 @@ SeResult Tropic01Element::rmemReadWithHeader(uint16_t slot, RMemHeader* headerOu
     if (!acquireBus()) return SeResult::ERROR;
 
     SeResult result;
-    uint8_t buffer[RMEM_SLOT_SIZE] = {};
+    uint8_t buffer[RMEM_SLOT_SIZE_MAX] = {};
     uint16_t actualLen = 0;
     SeResult res = rmemRead_unlocked(slot, buffer, sizeof(buffer), &actualLen);
     if (res != SeResult::OK) {
@@ -828,7 +840,7 @@ SeResult Tropic01Element::rmemReadWithHeader(uint16_t slot, RMemHeader* headerOu
         memcpy(&header, buffer, sizeof(header));
         if (!validateHeader(header)) {
             result = SeResult::ERROR;
-        } else if (header.payloadLen > (RMEM_SLOT_SIZE - sizeof(RMemHeader))) {
+        } else if (header.payloadLen > (rmemSlotSize_ - sizeof(RMemHeader))) {
             result = SeResult::ERROR;
         } else if (actualLen < static_cast<uint16_t>(sizeof(RMemHeader) + header.payloadLen)) {
             result = SeResult::ERROR;
