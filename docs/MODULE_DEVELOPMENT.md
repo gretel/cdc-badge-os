@@ -489,15 +489,21 @@ The TROPIC01 secure element has two storage types:
 
 | Slots | Reserved For |
 |-------|--------------|
-| 0 | System (PIN, Config) |
-| 1-31 | Reserved (ECC key metadata) |
+| 0 | System (PinManager: PIN hashes + ECDSA attestation signature) |
+| 1-3 | mod_gpg (paired with ECC 1-3: SIG / DEC / AUT companion slots) |
+| 4-31 | Available for other privileged modules whose ECC range falls here |
 | 32-131 | mod_totp (100 accounts) |
 | 132-158 | mod_fido2 (27 credentials) |
-| 159-511 | mod_password (353 entries) |
+| 159-500 | mod_password (342 entries) |
+| 501 | mod_homeassistant |
+| 502-511 | Available for future modules |
 
 **Rules:**
-- Slot 0 is always reserved (both ECC and RMEM)
-- RMEM allocation must start at slot 32 or higher
+- Slot 0 is always reserved for PinManager (both ECC and RMEM)
+- R-Memory slots 1-31 follow the ECC-companion convention: RMEM slot N is the
+  metadata / software-wrap slot for ECC slot N and may only be used by the
+  module that owns the matching ECC range.
+- Module-driven allocations not tied to ECC slots use slot 32 or higher.
 - Ranges must not overlap
 - Module IDs must be unique (0-254, 255 = reserved)
 

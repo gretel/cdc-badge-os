@@ -4,10 +4,6 @@ Modular firmware for the CDC Badge v1.0/v1.1 hardware security key featuring TRO
 
 ![CDC Badge Demo](docs/demo.jpg)
 
-> **Early Alpha** - This firmware is in active development and **not production ready**. Security hardening is incomplete. Do not use for protecting critical accounts. See [SECURITY.md](SECURITY.md) for hardening steps required before production use.
-
-> **Rewrite** - This is a complete rewrite of the original firmware to create a cleaner, more maintainable codebase with modular architecture.
-
 ## Features
 
 | Feature | Status | Description |
@@ -17,7 +13,7 @@ Modular firmware for the CDC Badge v1.0/v1.1 hardware security key featuring TRO
 | **U2F** | Working | Legacy two-factor authentication |
 | **TOTP Authenticator** | Working | Time-based OTP (100 accounts, Google Authenticator compatible) |
 | **Password Vault** | Working | Secure password storage (353 entries) |
-| **GPG/CCID** | WIP | OpenPGP smartcard via USB CCID with TROPIC01 key storage |
+| **GPG/CCID** | Working (UI WIP) | OpenPGP smartcard via USB CCID, sign / encrypt / decrypt / SSH end-to-end with GnuPG |
 | **BLE vCard** | WIP | Badge-to-badge contact exchange via BLE |
 | **BLE HID** | WIP | Bluetooth keyboard for auto-type |
 | **WiFi + NTP** | Working | Time synchronization over WiFi |

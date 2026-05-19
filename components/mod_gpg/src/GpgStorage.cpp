@@ -19,11 +19,15 @@
 
 static const char* TAG = "GPGStorage";
 
-/** \brief R-Memory slot offset (relative) for the DEC private key payload. */
-static constexpr uint16_t RMEM_SLOT_DEC_KEY = 0;
+// Relative offsets within the mod_gpg R-Memory range. Each offset is the
+// metadata slot for the matching ECC key slot (RMEM slot N pairs with ECC
+// slot N). The range starts at slot 1 (= ECC slot 1 = SIG), which is
+// hardware-only and needs no software metadata, so offset 0 is unused.
+/** \brief R-Memory slot offset for the DEC private key payload (= ECC slot 2). */
+static constexpr uint16_t RMEM_SLOT_DEC_KEY = 1;
 
-/** \brief R-Memory slot offset (relative) for the symmetric AES key payload. */
-static constexpr uint16_t RMEM_SLOT_AES_KEY = 1;
+/** \brief R-Memory slot offset for the symmetric AES key payload (= ECC slot 3). */
+static constexpr uint16_t RMEM_SLOT_AES_KEY = 2;
 
 /** \brief Magic marker for encrypted DEC private key records. */
 static constexpr uint8_t DEC_KEY_MAGIC[4] = {'E', 'C', 'D', 'H'};

@@ -80,19 +80,30 @@ The host can switch SIG/AUT between Ed25519 and P-256 ECDSA via `PUT DATA C1`/`C
 ## Storage map
 
 ```
-TROPIC01 R-Memory:
-  Slot 0       : PIN payload + ECDSA attestation signature (PinManager)
-  Slot 1–3     : reserved for legacy GPG metadata
-  Slot 502     : DEC privkey, AES-256-GCM wrapped (4 magic + 12 nonce + 32 ct + 16 tag = 64 B)
-  Slot 503     : AES symmetric key for PSO:ENCIPHER/DECIPHER (optional, same wrap)
-  Slot 504–511 : reserved for GPG growth
+TROPIC01 ECC slots:
+  Slot 0  : attestation key (system / PinManager)
+  Slot 1  : SIG (signature key, Ed25519 or P-256, hardware-only)
+  Slot 2  : DEC (placeholder; the actual ECDH private key lives in R-Mem 2)
+  Slot 3  : AUT (authentication key, Ed25519 or P-256, hardware-only)
+
+TROPIC01 R-Memory (slots 1-31 follow the convention: RMEM N is the metadata /
+companion slot for ECC slot N):
+  Slot 0  : PIN payload + ECDSA attestation signature (PinManager)
+  Slot 1  : reserved (ECC 1 SIG companion - unused; SIG needs no software metadata)
+  Slot 2  : DEC privkey, AES-256-GCM wrapped
+            (4 magic "ECDH" + 12 nonce + 32 ciphertext + 16 GCM tag = 64 B)
+  Slot 3  : AES symmetric key for PSO:ENCIPHER / PSO:DECIPHER 0x02
+            (same wrap construction, optional)
 
 ESP32 NVS namespace "openpgp":
-  Key "state"  : OpenpgpNvsState payload + 64-byte ECDSA signature
-                 Holds fingerprints, gen-times, signature counter, cardholder data,
-                 RC salt + hash + retry counter. Signature is produced with the
-                 TROPIC01 attestation slot; a tampered blob is detected on boot
-                 and triggers re-initialisation to defaults.
+  Key "state"  : OpenpgpNvsState payload + 64-byte ECDSA signature.
+                 Holds fingerprints, gen-times, signature counter, cardholder
+                 data, RC salt + hash + retry counter. Signed with the TROPIC01
+                 attestation slot; a tampered blob is detected on boot and
+                 triggers re-initialisation to defaults.
+
+  Future: public keys received from other badges (cross-signing) belong in
+  this namespace too - they are not secret and do not need TROPIC01 R-Memory.
 ```
 
 ## End-to-end usage

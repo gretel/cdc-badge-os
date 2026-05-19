@@ -23,7 +23,7 @@ static constexpr uint8_t ECC_SLOT_RESERVED = 0;
 static constexpr uint16_t RMEM_SLOT_MIN = 0;
 static constexpr uint16_t RMEM_SLOT_MAX = 511;
 static constexpr uint16_t RMEM_SLOT_RESERVED = 0;
-static constexpr uint16_t RMEM_SLOT_MIN_ALLOC = 32;
+static constexpr uint16_t RMEM_SLOT_MIN_ALLOC = 1;
 
 // Module IDs (must be unique, 0-254). 255 is reserved for UNKNOWN.
 // MODULE_ID values are permanent on-device identifiers; never reassign them.
@@ -54,8 +54,8 @@ static constexpr uint16_t RMEM_SLOT_MIN_ALLOC = 32;
 #define RMEM_SLOT_MOD_PASSWORD_END 500
 #define RMEM_SLOT_MOD_HOMEASSISTANT_START 501
 #define RMEM_SLOT_MOD_HOMEASSISTANT_END 501
-#define RMEM_SLOT_MOD_GPG_START 502
-#define RMEM_SLOT_MOD_GPG_END 511
+#define RMEM_SLOT_MOD_GPG_START 1
+#define RMEM_SLOT_MOD_GPG_END 3
 
 // Slot map entries (do not include reserved slots)
 #define TROPIC_ECC_SLOT_MAP(X) \
@@ -64,10 +64,10 @@ static constexpr uint16_t RMEM_SLOT_MIN_ALLOC = 32;
     X("mod_fido2", MODULE_ID_MOD_FIDO2, ECC_SLOT_MOD_FIDO2_START, ECC_SLOT_MOD_FIDO2_END)
 
 #define TROPIC_RMEM_SLOT_MAP(X) \
+    X("mod_gpg", MODULE_ID_MOD_GPG, RMEM_SLOT_MOD_GPG_START, RMEM_SLOT_MOD_GPG_END) \
     X("mod_totp", MODULE_ID_MOD_TOTP, RMEM_SLOT_MOD_TOTP_START, RMEM_SLOT_MOD_TOTP_END) \
     X("mod_fido2", MODULE_ID_MOD_FIDO2, RMEM_SLOT_MOD_FIDO2_START, RMEM_SLOT_MOD_FIDO2_END) \
     X("mod_password", MODULE_ID_MOD_PASSWORD, RMEM_SLOT_MOD_PASSWORD_START, RMEM_SLOT_MOD_PASSWORD_END) \
-    X("mod_homeassistant", MODULE_ID_MOD_HOMEASSISTANT, RMEM_SLOT_MOD_HOMEASSISTANT_START, RMEM_SLOT_MOD_HOMEASSISTANT_END) \
-    X("mod_gpg", MODULE_ID_MOD_GPG, RMEM_SLOT_MOD_GPG_START, RMEM_SLOT_MOD_GPG_END)
+    X("mod_homeassistant", MODULE_ID_MOD_HOMEASSISTANT, RMEM_SLOT_MOD_HOMEASSISTANT_START, RMEM_SLOT_MOD_HOMEASSISTANT_END)
 
 } // namespace cdc::tropic_map
