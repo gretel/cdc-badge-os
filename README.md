@@ -156,8 +156,6 @@ python tools/flash_firmware.py --release latest --port /dev/cu.usbmodem1101
 python tools/flash_firmware.py --release latest --erase-nvs
 ```
 
-If the device is not detected, hold **BOOT** while pressing **RESET** to enter download mode.
-
 ### Build from Source
 
 Requires [PlatformIO](https://platformio.org/) with ESP-IDF framework.
@@ -169,7 +167,7 @@ git submodule update --init --recursive
 # Build
 ~/.platformio/penv/bin/pio run
 
-# Flash
+# Flash (badge must be in download mode: serial BOOTLOADER or BOOT+RESET)
 ~/.platformio/penv/bin/pio run -t upload
 
 # Monitor (115200 baud)
@@ -199,6 +197,21 @@ Or via Kconfig menuconfig:
 ~/.platformio/penv/bin/pio run -t menuconfig
 ```
 
+### Flash from Source
+
+#### Enable Bootloader
+
+1. Hold **BOOT** while pressing **RESET** to enter download mode.
+
+**or** via serial interface:
+
+1. `AUTH <pin>`  authenticates; `BOOTLOADER` reboots into USB download mode.
+
+> Note: The ESP32-S3 USB-serial/JTAG port changes enumeration suffix between app mode and download mode.
+
+#### Upload firmware
+
+2. `pio run -t upload` — PlatformIO auto-detects the port, uploads firmware and triggers reset via `esptool`.
 ### Factory Reset on Flag Change
 
 Switching `DEBUG_MODE` or `FEATURE_SECURE_SERIAL` between builds and reflashing

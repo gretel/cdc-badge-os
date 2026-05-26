@@ -34,6 +34,7 @@ Home Assistant module surface, and the factory-wipe commands.
 | `ERROR_LOG` | Show error log |
 | `ERROR_LOG CLEAR` | Clear error log |
 | `REBOOT` | Restart the device `[AUTH]` |
+| `BOOTLOADER` | Reboot into USB download mode `[AUTH]` |
 
 ## Time
 

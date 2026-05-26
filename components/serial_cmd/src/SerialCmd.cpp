@@ -20,6 +20,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_memory_utils.h"
+#include "soc/rtc_cntl_reg.h"
 #include <cstring>
 #include <cctype>
 #include <cstdlib>
@@ -560,6 +561,19 @@ static void cmdReboot(const char* args) {
     Console::printf("Rebooting...\r\n");
     Console::flush();
     vTaskDelay(pdMS_TO_TICKS(100));
+    esp_restart();
+}
+
+/**
+ * \brief Reboots the device into USB download (bootloader) mode.
+ * \param args Unused command arguments.
+ */
+static void cmdBootloader(const char* args) {
+    (void)args;
+    Console::printf("Rebooting into download mode...\r\n");
+    Console::flush();
+    vTaskDelay(pdMS_TO_TICKS(100));
+    REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
     esp_restart();
 }
 
@@ -1656,6 +1670,7 @@ void SerialCmd::registerBuiltinCommands() {
     reg.registerCommand({"MEMINFO", "Show detailed memory + task info", cmdMemInfo, "system", false});
     reg.registerCommand({"ERROR_LOG", "Show error log (CLEAR to reset)", cmdErrorLog, "system", false});
     reg.registerCommand({"REBOOT", "Restart the device", cmdReboot, "system", true});
+    reg.registerCommand({"BOOTLOADER", "Reboot into USB download mode", cmdBootloader, "system", true});
 
     // NVS commands
     reg.registerCommand({"NVS_LIST", "List NVS entries [namespace]", cmdNvsList, "nvs", false});

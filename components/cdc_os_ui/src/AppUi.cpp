@@ -45,6 +45,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_timer.h"
+#include "soc/rtc_cntl_reg.h"
 
 namespace cdc::ui {
 
@@ -52,7 +53,7 @@ namespace cdc::ui {
 
 static constexpr uint8_t MAIN_MENU_MAX_ITEMS = 16;
 static constexpr uint8_t MAIN_MENU_FIXED_COUNT = 2;  // Tools + Settings
-static constexpr uint8_t TOOLS_FIXED_COUNT = 4;       // Modules, WiFi, Bluetooth, Expert
+static constexpr uint8_t TOOLS_FIXED_COUNT = 5;       // Modules, WiFi, Bluetooth, Expert, Bootloader
 static constexpr uint8_t TOOLS_MAX_ITEMS = 16;
 
 static constexpr uint32_t INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
@@ -379,6 +380,7 @@ void rebuildToolsMenu() {
     auto* ble = hal::getBluetoothControllerInstance();
     s_toolsItems[2] = {tr(StringId::BLUETOOTH), static_cast<uint8_t>(ble && ble->isEnabled() ? '*' : 0), false, nullptr};
     s_toolsItems[3] = {tr(StringId::EXPERT), 0, false, nullptr};
+    s_toolsItems[4] = {tr(StringId::BOOTLOADER), 0, false, nullptr};
 
     auto& moduleReg = core::ModuleRegistry::instance();
     s_toolsModuleCount = moduleReg.getMenuItems(
@@ -456,6 +458,10 @@ static void onToolsSelect(uint16_t index, void* userData) {
         case 1: showWifiMainMenu(); return;
         case 2: showBluetoothMenu(); return;
         case 3: showExpertMenu(); return;
+        case 4:  // Bootloader
+            REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+            esp_restart();
+            return;
     }
 
     uint8_t moduleIdx = index - TOOLS_FIXED_COUNT;

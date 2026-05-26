@@ -189,6 +189,9 @@ enum class StringId : uint16_t {
     QR_ERROR,
     NO_DATA,
 
+    // === Bootloader ===
+    BOOTLOADER,
+
     // Core string count - modules start from here
     CORE_COUNT
 };

@@ -319,6 +319,7 @@ void I18n::initCoreStrings() {
     REG(TR01_CACHE_CLEANUP, "TR01 Cache Cleanup",   "TR01 Cache aufraeumen");
     REG(EXPERT,             "Expert",               "Experte");
     REG(EXPERT_WARNING,     "Caution",              "Vorsicht");
+    REG(BOOTLOADER,         "Bootloader",           "Bootloader");
     REG(TASK_WORKING,       "Please wait",          "Bitte warten");
     REG(USB_REPLUG_REQUIRED,"USB replug may be needed", "USB replug ggf. noetig");
     REG(SLEEP,              "Sleep",                "Schlafmodus");
