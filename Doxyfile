@@ -23,7 +23,7 @@ INPUT                  = components/cdc_core \
                          components/mod_sao \
                          components/mod_totp \
                          components/mod_vcard \
-                         components/grove_led \
+                         components/plugin_manager \
                          main
 RECURSIVE              = YES
 FILE_PATTERNS          = *.h *.hpp *.cpp *.c
