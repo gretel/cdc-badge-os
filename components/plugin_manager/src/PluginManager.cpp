@@ -272,6 +272,7 @@ StartResult PluginManager::startPlugin(const std::string& id_ref)
               failed_name.c_str(), id.c_str());
     }
 
+    static cdc::ui::ToastView s_loading_toast;
     char loading_msg[80];
     {
         const auto& meta = plugin->manifest().i18n_meta;
@@ -283,11 +284,19 @@ StartResult PluginManager::startPlugin(const std::string& id_ref)
         std::snprintf(loading_msg, sizeof(loading_msg), "%s\n%s",
                       cdc::ui::tr("core.plugin_loading"), display);
     }
-    cdc::ui::showToastTask(loading_msg, 0);
+    s_loading_toast.init(loading_msg, cdc::ui::ToastView::Icon::TASK, 0, true);
+    cdc::ui::ViewStack::instance().showModal(&s_loading_toast);
+
+    auto hide_loading_if_top = []() {
+        auto& vs = cdc::ui::ViewStack::instance();
+        if (vs.getModal() == &s_loading_toast) {
+            vs.hideModal();
+        }
+    };
 
     int32_t enter_rc = 0;
     if (!plugin->callI("plugin_on_enter", {}, &enter_rc)) {
-        cdc::ui::ViewStack::instance().hideModal();
+        hide_loading_if_top();
         if (plugin->hasExport("plugin_on_enter")) {
             LOG_E(TAG, "plugin_on_enter trapped for %s", id.c_str());
         } else {
@@ -298,7 +307,7 @@ StartResult PluginManager::startPlugin(const std::string& id_ref)
         plugin->unload();
         return StartResult::PluginOnEnterFailed;
     }
-    cdc::ui::ViewStack::instance().hideModal();
+    hide_loading_if_top();
     if (enter_rc != 0) {
         LOG_W(TAG, "plugin_on_enter returned %ld for %s",
               static_cast<long>(enter_rc), id.c_str());

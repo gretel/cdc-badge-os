@@ -36,12 +36,30 @@ Modular firmware for the CDC Badge v1.0/v1.1 hardware security key featuring TRO
 | **12-Button Keypad** | Working | Phone-style T9 input |
 | **Multi-Language** | Working | English and German UI |
 | **Secure Serial** | Working | PIN authentication for serial commands |
-| **WASM Plugin Runtime** | WIP | Sandboxed third-party plugins via WebAssembly (WAMR Fast Interpreter). Host API exposes 80+ symbols under module `"cdc"`, including a Canvas view for plugin-drawn UIs. See [cdc-badge-plugins](https://github.com/krim404/cdc-badge-plugins) for SDK + examples (Home Assistant controller, news feed, Grove LED strip). |
+| **WASM Plugin Runtime** | WIP | Sandboxed third-party plugins via WebAssembly (WAMR Fast Interpreter). Host API exposes 80+ symbols under module `"cdc"`, including a Canvas view for plugin-drawn UIs. |
 
 ### Planned
 
 - [ ] Certificate Authority (CA) module
 - [ ] TROPIC01 firmware updater
+
+## Plugins
+
+Third-party functionality (Home Assistant controller, RSS reader, Grove LED
+driver, etc.) ships as sandboxed WebAssembly plugins instead of being
+compiled into the firmware. Plugins live in a separate 2&nbsp;MB FAT-FS
+partition and can be installed / updated without re-flashing.
+
+| Resource | Where |
+|----------|-------|
+| Web installer | [krim404.github.io/cdc-badge-plugins](https://krim404.github.io/cdc-badge-plugins/) |
+| SDK + examples + source | [github.com/krim404/cdc-badge-plugins](https://github.com/krim404/cdc-badge-plugins) |
+
+The plugin host API surface (80+ functions: NVS, i18n, HTTP, WiFi, GPIO,
+ADC, I2C, Pixel-Strip, BLE, SecureElement, Crypto, UI views, Canvas, RGB
+Color Picker, …) is defined canonically in
+[`components/plugin_manager/include/plugin_manager/host_api.h`](components/plugin_manager/include/plugin_manager/host_api.h)
+and mirrored byte-identical into the SDK repo.
 
 ## Architecture
 
