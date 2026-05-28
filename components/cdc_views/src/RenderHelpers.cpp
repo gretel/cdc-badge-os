@@ -7,6 +7,7 @@
 #include "cdc_views/RenderHelpers.h"
 #include <goodisplay/gdey029T94.h>
 #include <algorithm>
+#include <cstring>
 
 namespace cdc::ui::render {
 
@@ -20,6 +21,45 @@ namespace cdc::ui::render {
  * \param underlineOffset Vertical offset for underline.
  * \return void
  */
+void printTruncated(Gdey029T94* gfx, const char* text, int maxWidthPx) {
+    if (!gfx || !text || maxWidthPx <= 0) return;
+
+    int16_t x1, y1;
+    uint16_t w, h;
+    gfx->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+    if (static_cast<int>(w) <= maxWidthPx) {
+        gfx->print(text);
+        return;
+    }
+
+    constexpr char ELLIPSIS[] = "...";
+    uint16_t ew, eh;
+    int16_t ex1, ey1;
+    gfx->getTextBounds(ELLIPSIS, 0, 0, &ex1, &ey1, &ew, &eh);
+
+    const int budget = maxWidthPx - static_cast<int>(ew);
+    if (budget <= 0) {
+        gfx->print(ELLIPSIS);
+        return;
+    }
+
+    char buf[128];
+    size_t len = std::strlen(text);
+    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+    std::memcpy(buf, text, len);
+    buf[len] = '\0';
+
+    while (len > 0) {
+        buf[len] = '\0';
+        gfx->getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
+        if (static_cast<int>(w) <= budget) break;
+        --len;
+    }
+
+    gfx->print(buf);
+    gfx->print(ELLIPSIS);
+}
+
 void drawHeaderLeft(Gdey029T94* gfx, const char* title, int x, int y,
                     uint16_t width, int underlineOffset) {
     if (!gfx) return;
@@ -223,6 +263,112 @@ uint8_t unicodeToCp437(uint32_t cp) {
     }
 }
 
+namespace {
+
+struct NamedEntity { const char* name; uint32_t cp; };
+
+constexpr NamedEntity kNamedEntities[] = {
+    {"amp",    '&'},    {"lt",     '<'},    {"gt",     '>'},
+    {"quot",   '"'},    {"apos",   '\''},   {"nbsp",   0x00A0},
+    {"auml",   0x00E4}, {"Auml",   0x00C4},
+    {"ouml",   0x00F6}, {"Ouml",   0x00D6},
+    {"uuml",   0x00FC}, {"Uuml",   0x00DC},
+    {"szlig",  0x00DF}, {"ssharp", 0x00DF},
+    {"aacute", 0x00E1}, {"Aacute", 0x00C1},
+    {"eacute", 0x00E9}, {"Eacute", 0x00C9},
+    {"iacute", 0x00ED}, {"Iacute", 0x00CD},
+    {"oacute", 0x00F3}, {"Oacute", 0x00D3},
+    {"uacute", 0x00FA}, {"Uacute", 0x00DA},
+    {"agrave", 0x00E0}, {"Agrave", 0x00C0},
+    {"egrave", 0x00E8}, {"Egrave", 0x00C8},
+    {"igrave", 0x00EC}, {"Igrave", 0x00CC},
+    {"ograve", 0x00F2}, {"Ograve", 0x00D2},
+    {"ugrave", 0x00F9}, {"Ugrave", 0x00D9},
+    {"acirc",  0x00E2}, {"Acirc",  0x00C2},
+    {"ecirc",  0x00EA}, {"Ecirc",  0x00CA},
+    {"icirc",  0x00EE}, {"Icirc",  0x00CE},
+    {"ocirc",  0x00F4}, {"Ocirc",  0x00D4},
+    {"ucirc",  0x00FB}, {"Ucirc",  0x00DB},
+    {"atilde", 0x00E3}, {"Atilde", 0x00C3},
+    {"ntilde", 0x00F1}, {"Ntilde", 0x00D1},
+    {"otilde", 0x00F5}, {"Otilde", 0x00D5},
+    {"ccedil", 0x00E7}, {"Ccedil", 0x00C7},
+    {"aring",  0x00E5}, {"Aring",  0x00C5},
+    {"aelig",  0x00E6}, {"AElig",  0x00C6},
+    {"oslash", 0x00F8}, {"Oslash", 0x00D8},
+    {"yuml",   0x00FF}, {"Yuml",   0x0178},
+    {"copy",   0x00A9}, {"reg",    0x00AE}, {"trade",  0x2122},
+    {"deg",    0x00B0}, {"plusmn", 0x00B1}, {"para",   0x00B6},
+    {"sect",   0x00A7}, {"micro",  0x00B5}, {"middot", 0x00B7},
+    {"laquo",  0x00AB}, {"raquo",  0x00BB},
+    {"iexcl",  0x00A1}, {"iquest", 0x00BF},
+    {"cent",   0x00A2}, {"pound",  0x00A3}, {"yen",    0x00A5},
+    {"euro",   0x20AC},
+    {"hellip", 0x2026}, {"mdash",  0x2014}, {"ndash",  0x2013},
+    {"lsquo",  0x2018}, {"rsquo",  0x2019},
+    {"ldquo",  0x201C}, {"rdquo",  0x201D},
+    {"bull",   0x2022},
+};
+
+void appendUtf8(char*& w, char* end, uint32_t cp) {
+    if (cp < 0x80) {
+        if (w < end) *w++ = static_cast<char>(cp);
+    } else if (cp < 0x800) {
+        if (w + 2 <= end) {
+            *w++ = static_cast<char>(0xC0 | (cp >> 6));
+            *w++ = static_cast<char>(0x80 | (cp & 0x3F));
+        }
+    } else if (cp < 0x10000) {
+        if (w + 3 <= end) {
+            *w++ = static_cast<char>(0xE0 | (cp >> 12));
+            *w++ = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+            *w++ = static_cast<char>(0x80 | (cp & 0x3F));
+        }
+    } else if (w + 4 <= end) {
+        *w++ = static_cast<char>(0xF0 | (cp >> 18));
+        *w++ = static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+        *w++ = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        *w++ = static_cast<char>(0x80 | (cp & 0x3F));
+    }
+}
+
+bool parseEntity(const char* p, uint32_t* cp_out, const char** after) {
+    if (*p != '&') return false;
+    const char* q = p + 1;
+    uint32_t cp = 0;
+    if (*q == '#') {
+        ++q;
+        bool hex = (*q == 'x' || *q == 'X');
+        if (hex) ++q;
+        const char* digits = q;
+        while (*q && *q != ';') {
+            int d;
+            char c = *q;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (hex && c >= 'a' && c <= 'f') d = c - 'a' + 10;
+            else if (hex && c >= 'A' && c <= 'F') d = c - 'A' + 10;
+            else return false;
+            cp = cp * (hex ? 16u : 10u) + static_cast<uint32_t>(d);
+            ++q;
+        }
+        if (*q != ';' || q == digits) return false;
+        *cp_out = cp;
+        *after  = q + 1;
+        return true;
+    }
+    for (const auto& e : kNamedEntities) {
+        size_t nl = std::strlen(e.name);
+        if (std::strncmp(q, e.name, nl) == 0 && q[nl] == ';') {
+            *cp_out = e.cp;
+            *after  = q + nl + 1;
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 void utf8ToCp437Inplace(char* buf) {
     if (!buf) return;
     uint8_t* r = reinterpret_cast<uint8_t*>(buf);
@@ -250,11 +396,102 @@ void utf8ToCp437Inplace(char* buf) {
     *w = '\0';
 }
 
+namespace {
+
+void utf8ToLatin1Inplace(char* buf) {
+    if (!buf) return;
+    uint8_t* r = reinterpret_cast<uint8_t*>(buf);
+    uint8_t* w = r;
+    while (*r) {
+        uint8_t c = *r;
+        uint32_t cp = 0;
+        uint8_t cont = 0;
+        if ((c & 0x80) == 0) { *w++ = c; ++r; continue; }
+        else if ((c & 0xE0) == 0xC0) { cp = c & 0x1F; cont = 1; }
+        else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F; cont = 2; }
+        else if ((c & 0xF8) == 0xF0) { cp = c & 0x07; cont = 3; }
+        else { ++r; continue; }
+        ++r;
+        bool ok = true;
+        for (uint8_t i = 0; i < cont; i++) {
+            if ((*r & 0xC0) != 0x80) { ok = false; break; }
+            cp = (cp << 6) | (*r & 0x3F);
+            ++r;
+        }
+        if (!ok) continue;
+        if (cp < 0x100) {
+            *w++ = static_cast<uint8_t>(cp);
+        }
+    }
+    *w = '\0';
+}
+
+}  // namespace
+
+void decodeWebText(const char* in, char* out, size_t out_size,
+                   DisplayTarget target) {
+    if (!in || !out || out_size == 0) return;
+    char* w = out;
+    char* end = out + out_size - 1;
+    const char* r = in;
+    while (*r && w < end) {
+        if (*r == '&') {
+            uint32_t cp;
+            const char* after;
+            if (parseEntity(r, &cp, &after)) {
+                appendUtf8(w, end, cp);
+                r = after;
+                continue;
+            }
+        }
+        *w++ = *r++;
+    }
+    *w = '\0';
+    if (target == DisplayTarget::Latin1) {
+        utf8ToLatin1Inplace(out);
+    } else {
+        utf8ToCp437Inplace(out);
+    }
+}
+
 void drawCp437Text(Gdey029T94* gfx, const char* text) {
     if (!gfx || !text) return;
     for (const uint8_t* p = reinterpret_cast<const uint8_t*>(text); *p; ++p) {
         gfx->write(cp437ToLatin1(*p));
     }
+}
+
+const GFXfont* pickFontThatFits(Gdey029T94* gfx,
+                                const char* text,
+                                int maxWidthPx,
+                                const GFXfont* const* candidates,
+                                size_t count,
+                                bool cp437) {
+    if (count == 0) return nullptr;
+    if (!gfx || !text || !candidates || maxWidthPx <= 0) {
+        return candidates[count - 1];
+    }
+
+    const GFXfont* selected = candidates[count - 1];
+    for (size_t i = 0; i < count; ++i) {
+        const GFXfont* f = candidates[i];
+        gfx->setFont(f);
+        gfx->setTextSize(1);
+        int16_t x1, y1;
+        uint16_t w = 0, h = 0;
+        if (cp437) {
+            measureCp437Text(gfx, text, 0, 0, &x1, &y1, &w, &h);
+        } else {
+            gfx->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+        }
+        if (static_cast<int>(w) <= maxWidthPx) {
+            selected = f;
+            break;
+        }
+    }
+    gfx->setFont(selected);
+    gfx->setTextSize(1);
+    return selected;
 }
 
 void measureCp437Text(Gdey029T94* gfx, const char* text, int16_t x0, int16_t y0,

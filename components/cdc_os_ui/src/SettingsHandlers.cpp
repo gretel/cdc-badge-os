@@ -209,17 +209,17 @@ static void showBadgeTextStep(uint8_t step) {
 
     switch (step) {
         case BADGE_STEP_NAME:
-            title = tr(StringId::NAME);
+            title = ui::tr("core.name");
             initial = s_lockScreen->getDisplayName();
             cb = onBadgeNameSave;
             break;
         case BADGE_STEP_INFO:
-            title = tr(StringId::INFO);
+            title = ui::tr("core.info");
             initial = s_lockScreen->getInfo();
             cb = onBadgeInfoSave;
             break;
         case BADGE_STEP_INFO2:
-            title = tr(StringId::INFO2);
+            title = ui::tr("core.info2");
             initial = s_lockScreen->getInfo2();
             cb = onBadgeInfo2Save;
             break;

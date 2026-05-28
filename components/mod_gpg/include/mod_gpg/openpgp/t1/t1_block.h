@@ -21,9 +21,7 @@
  * t1_state.h.
  */
 
-#ifndef MOD_GPG_OPENPGP_T1_T1_BLOCK_H
-#define MOD_GPG_OPENPGP_T1_T1_BLOCK_H
-
+#pragma once
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -184,4 +182,3 @@ t1_status_t t1_block_decode(const uint8_t *buf, size_t buf_len, bool use_crc,
 }
 #endif
 
-#endif  // MOD_GPG_OPENPGP_T1_T1_BLOCK_H

@@ -9,3 +9,6 @@
 [submodule "components/Adafruit-GFX"]
 	path = components/Adafruit-GFX
 	url = https://github.com/martinberlin/Adafruit-GFX-Library-ESP-IDF
+[submodule "components/wamr_runtime/wasm-micro-runtime"]
+	path = components/wamr_runtime/wasm-micro-runtime
+	url = https://github.com/bytecodealliance/wasm-micro-runtime.git

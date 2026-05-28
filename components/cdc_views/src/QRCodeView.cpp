@@ -11,6 +11,8 @@
 #include "cdc_hal/IDisplay.h"
 #include "cdc_log.h"
 #include "qrcode.h"
+#include "cdc_views/Fonts.h"
+#include "cdc_views/RenderHelpers.h"
 #include <goodisplay/gdey029T94.h>
 #include <Fonts/FreeMonoBold9pt7b.h>
 #include <cstring>
@@ -117,7 +119,7 @@ const char* QRCodeView::getFooterHint() const {
     if (customHint_) {
         return customHint_;
     }
-    return tr(StringId::HINT_BACK);
+    return ui::tr("core.hint_back");
 }
 
 /**
@@ -199,7 +201,7 @@ void QRCodeView::renderQrCode() {
         LOG_E(TAG, "QR render failed: %s", esp_err_to_name(err));
         gfx->setFont(nullptr);
         gfx->setCursor(10, 64);
-        gfx->print(tr(StringId::QR_ERROR));
+        gfx->print(ui::tr("core.qr_error"));
     }
 }
 
@@ -221,20 +223,31 @@ void QRCodeView::renderText() {
     int textAreaX = QR_AREA_WIDTH + 4;
     int textAreaWidth = DISPLAY_WIDTH - textAreaX - 2;
 
-    // Draw title on right side (top)
+    // Draw title on right side (top). Picks the largest preset font in which
+    // the full title fits; falls back to the 5x7 built-in for long titles,
+    // which still wraps in up to two lines.
     int y = 14;
     if (title_ && title_[0]) {
-        gfx->setFont(&FreeMonoBold9pt7b);
+        using cdc::ui::FontId;
+        static const GFXfont* const TITLE_FONTS[] = {
+            &FreeMonoBold9pt7b,
+            cdc::ui::getGfxFont(FontId::Builtin),
+        };
+        const GFXfont* chosen = cdc::ui::render::pickFontThatFits(
+            gfx, title_, textAreaWidth, TITLE_FONTS, std::size(TITLE_FONTS), false);
 
-        // Word wrap title into text area
+        const bool bold9pt = (chosen == &FreeMonoBold9pt7b);
+        const int charW    = bold9pt ? 7 : 6;
+        const int lineH    = bold9pt ? 16 : 10;
+        const int maxYStop = 80;
+        int maxChars       = textAreaWidth / charW;
+        if (maxChars > 31) maxChars = 31;
+
         const char* p = title_;
         char line[32];
-        int maxChars = textAreaWidth / 7;  // Approx char width at 9pt
-
-        while (*p && y < 80) {
-            // Copy up to maxChars or until end
+        while (*p && y < maxYStop) {
             int len = 0;
-            while (p[len] && len < maxChars && len < 31) {
+            while (p[len] && len < maxChars) {
                 line[len] = p[len];
                 len++;
             }
@@ -244,7 +257,7 @@ void QRCodeView::renderText() {
             gfx->print(line);
 
             p += len;
-            y += 16;
+            y += lineH;
         }
     }
 
@@ -303,7 +316,7 @@ void QRCodeView::render(bool partial) {
     if (!data_) {
         gfx->setFont(nullptr);
         gfx->setCursor(10, 64);
-        gfx->print(tr(StringId::NO_DATA));
+        gfx->print(ui::tr("core.no_data"));
         dirty_ = false;
         return;
     }

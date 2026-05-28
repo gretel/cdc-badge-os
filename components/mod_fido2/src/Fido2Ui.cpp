@@ -4,11 +4,13 @@
  */
 
 #include "mod_fido2/Fido2Ui.h"
+#include "mod_fido2/ctap2.h"
 #include "mod_fido2/ctaphid.h"
 #include "mod_fido2/fido2.h"
 #include "mod_fido2/fido2_storage.h"
 #include "cdc_core/KeyFingerprint.h"
 #include "cdc_core/PinManager.h"
+#include "cdc_core/Raii.h"
 #include "cdc_hal/IDisplay.h"
 #include "cdc_log.h"
 #include "cdc_ui/I18n.h"
@@ -30,63 +32,21 @@ static const char* TAG = "FIDO2_UI";
 
 namespace cdc::mod_fido2 {
 
-/** \brief Module-specific i18n string offsets. */
-static uint16_t s_strIdBase = 0;
-static constexpr uint16_t STR_WEB_AUTHN = 0;
-static constexpr uint16_t STR_DETAILS = 1;
-static constexpr uint16_t STR_FIDO2_KEY = 2;
-static constexpr uint16_t STR_SIGN_IN_TO = 3;
-static constexpr uint16_t STR_REGISTER_KEY = 4;
-static constexpr uint16_t STR_SIGN_IN = 5;
-static constexpr uint16_t STR_USE_DEVICE = 6;
-static constexpr uint16_t STR_NO_ENTRIES = 7;
-static constexpr uint16_t STR_OVERWRITE_KEY = 8;
-static constexpr uint16_t STR_OVERWRITE_WARNING = 9;
-static constexpr uint16_t STR_COUNT = 10;
+constexpr ui::I18nEntry kStrings[] = {
+    {"mod_fido2.title",              "WebAuthn"},
+    {"mod_fido2.details",            "Details"},
+    {"mod_fido2.fido2_key",          "FIDO2 Key"},
+    {"mod_fido2.sign_in_to",         "Sign in to"},
+    {"mod_fido2.register_key",       "Register Key"},
+    {"mod_fido2.sign_in",            "Sign In"},
+    {"mod_fido2.use_device",         "Use this device?"},
+    {"mod_fido2.no_entries",         "No entries"},
+    {"mod_fido2.overwrite_key",      "OVERWRITE KEY!"},
+    {"mod_fido2.overwrite_warning",  "Overwrite existing key?"},
+};
 
-/**
- * \brief Resolves module-localized string by offset.
- * \param offset Module string-table offset.
- * \return Translated string pointer.
- */
-static const char* mstr(uint16_t offset) {
-    return ui::tr(s_strIdBase + offset);
-}
-
-/**
- * \brief Registers FIDO2 UI translations.
- */
 static void registerStrings() {
-    auto& i18n = ui::I18n::instance();
-    s_strIdBase = i18n.registerModule("mod_fido2", STR_COUNT);
-    if (s_strIdBase == 0) {
-        LOG_E(TAG, "Failed to register i18n strings");
-        return;
-    }
-
-    // English
-    i18n.registerTranslation(s_strIdBase + STR_WEB_AUTHN, ui::Language::EN, "WebAuthn");
-    i18n.registerTranslation(s_strIdBase + STR_DETAILS, ui::Language::EN, "Details");
-    i18n.registerTranslation(s_strIdBase + STR_FIDO2_KEY, ui::Language::EN, "FIDO2 Key");
-    i18n.registerTranslation(s_strIdBase + STR_SIGN_IN_TO, ui::Language::EN, "Sign in to");
-    i18n.registerTranslation(s_strIdBase + STR_REGISTER_KEY, ui::Language::EN, "Register Key");
-    i18n.registerTranslation(s_strIdBase + STR_SIGN_IN, ui::Language::EN, "Sign In");
-    i18n.registerTranslation(s_strIdBase + STR_USE_DEVICE, ui::Language::EN, "Use this device?");
-    i18n.registerTranslation(s_strIdBase + STR_NO_ENTRIES, ui::Language::EN, "No entries");
-    i18n.registerTranslation(s_strIdBase + STR_OVERWRITE_KEY, ui::Language::EN, "OVERWRITE KEY!");
-    i18n.registerTranslation(s_strIdBase + STR_OVERWRITE_WARNING, ui::Language::EN, "Overwrite existing key?");
-
-    // German (ASCII)
-    i18n.registerTranslation(s_strIdBase + STR_WEB_AUTHN, ui::Language::DE, "WebAuthn");
-    i18n.registerTranslation(s_strIdBase + STR_DETAILS, ui::Language::DE, "Details");
-    i18n.registerTranslation(s_strIdBase + STR_FIDO2_KEY, ui::Language::DE, "FIDO2 Key");
-    i18n.registerTranslation(s_strIdBase + STR_SIGN_IN_TO, ui::Language::DE, "Anmelden bei");
-    i18n.registerTranslation(s_strIdBase + STR_REGISTER_KEY, ui::Language::DE, "Schluessel registrieren");
-    i18n.registerTranslation(s_strIdBase + STR_SIGN_IN, ui::Language::DE, "Anmelden");
-    i18n.registerTranslation(s_strIdBase + STR_USE_DEVICE, ui::Language::DE, "Dieses Geraet nutzen?");
-    i18n.registerTranslation(s_strIdBase + STR_NO_ENTRIES, ui::Language::DE, "Keine Eintraege");
-    i18n.registerTranslation(s_strIdBase + STR_OVERWRITE_KEY, ui::Language::DE, "SCHLUESSEL UEBERSCHREIBEN!");
-    i18n.registerTranslation(s_strIdBase + STR_OVERWRITE_WARNING, ui::Language::DE, "Schluessel ueberschreiben?");
+    ui::I18n::instance().registerEnglishTable(kStrings, std::size(kStrings));
 }
 
 /** \brief FIDO2 UI view and list state. */
@@ -102,6 +62,7 @@ static uint8_t s_listCount = 0;
 
 /** \brief User-presence prompt state shared across callback and UI flow. */
 static SemaphoreHandle_t s_promptSem = nullptr;
+static SemaphoreHandle_t s_promptMutex = nullptr;
 static volatile fido2_user_presence_result_t s_promptResult = FIDO2_UP_PENDING;
 static char s_promptRpId[FIDO2_RP_ID_MAX_LEN] = {};
 static fido2_action_t s_promptAction = FIDO2_ACTION_AUTHENTICATE;
@@ -109,7 +70,13 @@ static uint8_t s_promptReturnDepth = 0;
 static ui::IView* s_promptReturnView = nullptr;
 static bool s_promptWasLocked = false;
 static bool s_promptBacklightWasOn = false;
-static volatile bool s_promptActive = false;  // Race condition guard
+static volatile bool s_promptActive = false;
+
+static void ensurePromptMutex() {
+    if (!s_promptMutex) {
+        s_promptMutex = xSemaphoreCreateMutex();
+    }
+}
 
 /** \brief Pre-confirm modal state for overwrite warning. */
 static SemaphoreHandle_t s_overwriteSem = nullptr;
@@ -145,13 +112,13 @@ static void rebuildList() {
     uint8_t count = fido2_get_credential_count();
     if (count == 0) {
         // Show "No entries" placeholder
-        s_listItems[0].label = mstr(STR_NO_ENTRIES);
+        s_listItems[0].label = ui::tr("mod_fido2.no_entries");
         s_listItems[0].userData = nullptr;
         s_listItems[0].icon = 0;
         s_listItems[0].iconDisabled = true;
         if (s_listView) {
-            s_listView->init(mstr(STR_WEB_AUTHN), s_listItems, 1);
-            s_listView->setHint(ui::tr(ui::StringId::HINT_BACK));
+            s_listView->init(ui::tr("mod_fido2.title"), s_listItems, 1);
+            s_listView->setHint(ui::tr("core.hint_back"));
         }
         return;
     }
@@ -186,8 +153,8 @@ static void rebuildList() {
     }
 
     if (s_listView) {
-        s_listView->init(mstr(STR_WEB_AUTHN), s_listItems, s_listCount);
-        s_listView->setHint(ui::tr(ui::StringId::HINT_LIST_MENU));
+        s_listView->init(ui::tr("mod_fido2.title"), s_listItems, s_listCount);
+        s_listView->setHint(ui::tr("core.hint_list_menu"));
     }
 }
 
@@ -233,14 +200,14 @@ static void showDetail(uint16_t display_index) {
              strlen(info.user_name) > 0 ? info.user_name : "(none)",
              slot_phys,
              info.sign_count,
-             info.resident_key ? ui::tr(ui::StringId::YES) : ui::tr(ui::StringId::NO),
+             info.resident_key ? ui::tr("core.yes") : ui::tr("core.no"),
              fingerprint,
-             ui::tr(ui::StringId::HINT_BACK));
+             ui::tr("core.hint_back"));
 
     if (!s_detailView) {
         s_detailView = new ui::InfoView();
     }
-    s_detailView->init(mstr(STR_FIDO2_KEY), detail_text);
+    s_detailView->init(ui::tr("mod_fido2.fido2_key"), detail_text);
     ui::ViewStack::instance().push(s_detailView);
 }
 
@@ -261,8 +228,8 @@ static void handleDelete(uint16_t display_index) {
     if (fido2_delete_credential(info.slot)) {
         rebuildList();
         if (s_listView) {
-            s_listView->init(mstr(STR_WEB_AUTHN), s_listItems, s_listCount);
-            s_listView->setHint(ui::tr(ui::StringId::HINT_LIST_MENU));
+            s_listView->init(ui::tr("mod_fido2.title"), s_listItems, s_listCount);
+            s_listView->setHint(ui::tr("core.hint_list_menu"));
         }
     }
 }
@@ -291,9 +258,9 @@ static void onListMenu(uint16_t index, void* userData) {
     if (sel >= s_listCount) {
         sel = 0;
     }
-    items[0] = {mstr(STR_DETAILS), []() { showDetail(s_listView ? s_listView->getSelection() : 0); }};
-    items[1] = {ui::tr(ui::StringId::DELETE), []() { handleDelete(s_listView ? s_listView->getSelection() : 0); }};
-    items[2] = {ui::tr(ui::StringId::CANCEL), []() {}};
+    items[0] = {ui::tr("mod_fido2.details"), []() { showDetail(s_listView ? s_listView->getSelection() : 0); }};
+    items[1] = {ui::tr("core.delete"), []() { handleDelete(s_listView ? s_listView->getSelection() : 0); }};
+    items[2] = {ui::tr("core.cancel"), []() {}};
     static char s_contextTitle[FIDO2_RP_ID_MAX_LEN] = {};
     const uint8_t store_idx = s_sortMap[sel];
     fido2_credential_info_t info = {};
@@ -324,9 +291,9 @@ static void promptComplete(fido2_user_presence_result_t result) {
     s_promptActive = false;
 
     if (result == FIDO2_UP_APPROVED) {
-        ui::showToastSuccess(ui::tr(ui::StringId::OK), 2000);
+        ui::showToastSuccess(ui::tr("core.ok"), 2000);
     } else {
-        ui::showToastError(ui::tr(ui::StringId::FAILED), 2000);
+        ui::showToastError(ui::tr("core.failed"), 2000);
     }
 
     auto& stack = ui::ViewStack::instance();
@@ -388,13 +355,13 @@ static void onPinCancel() {
  */
 static void onPinFailure(bool lockedOut) {
     if (lockedOut) {
-        ui::showToastError(ui::tr(ui::StringId::TOO_MANY_ATTEMPTS), 2000);
+        ui::showToastError(ui::tr("core.too_many_attempts"), 2000);
         auto& stack = ui::ViewStack::instance();
         stack.releaseExclusive(s_pinEntry);
         stack.acquireExclusive(s_promptView);
         promptComplete(FIDO2_UP_DENIED);
     } else {
-        ui::showToastError(ui::tr(ui::StringId::WRONG_PIN), 1000);
+        ui::showToastError(ui::tr("core.wrong_pin"), 1000);
     }
 }
 
@@ -412,7 +379,7 @@ static void onPromptApprove(void* userData) {
     if (s_promptWasLocked && cdc::core::PinManager::instance().isPinSet()) {
         if (!s_pinEntry) {
             s_pinEntry = new ui::PinEntryView();
-            s_pinEntry->init(ui::tr(ui::StringId::ENTER_PIN),
+            s_pinEntry->init(ui::tr("core.enter_pin"),
                              cdc::core::PinManager::BADGE_PIN_MAX, 3);
             s_pinEntry->setMinLength(cdc::core::PinManager::BADGE_PIN_MIN);
             s_pinEntry->setOnVerify(onPinVerify);
@@ -421,7 +388,7 @@ static void onPromptApprove(void* userData) {
             s_pinEntry->setOnFailure(onPinFailure);
             s_pinEntry->setShowMessages(false);
         } else {
-            s_pinEntry->init(ui::tr(ui::StringId::ENTER_PIN),
+            s_pinEntry->init(ui::tr("core.enter_pin"),
                              cdc::core::PinManager::BADGE_PIN_MAX, 3);
             s_pinEntry->setMinLength(cdc::core::PinManager::BADGE_PIN_MIN);
             s_pinEntry->setShowMessages(false);
@@ -482,7 +449,7 @@ cdc::ui::IView* fido2_ui_get_list_view() {
  * \return Label string.
  */
 const char* fido2_ui_get_label() {
-    return mstr(STR_WEB_AUTHN);
+    return ui::tr("mod_fido2.title");
 }
 
 /**
@@ -502,8 +469,8 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
     const char* actionStr = (action == FIDO2_ACTION_SELECT) ? "SELECT" :
                             (action == FIDO2_ACTION_REGISTER) ? "REGISTER" :
                             (action == FIDO2_ACTION_OVERWRITE) ? "OVERWRITE" : "AUTH";
-    LOG_I(TAG, "User presence: action=%s, rp='%s', strBase=%u, promptActive=%d",
-          actionStr, rp_id ? rp_id : "(null)", s_strIdBase, s_promptActive ? 1 : 0);
+    LOG_I(TAG, "User presence: action=%s, rp='%s', promptActive=%d",
+          actionStr, rp_id ? rp_id : "(null)", s_promptActive ? 1 : 0);
 
     // Browser-discovery probes never touch the UI: they are protocol-only
     // pings to ask "is a device there?" and must not influence presence state.
@@ -513,20 +480,14 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
         return FIDO2_UP_APPROVED;
     }
 
-    // A new presence request while another prompt is already active is rejected.
-    // The currently displayed prompt continues to await its own decision; the
-    // new request is denied so that no implicit approval can occur.
+    ensurePromptMutex();
+
     if (s_promptActive) {
-        LOG_W(TAG, "Presence request while prompt active (action=%s rp='%s') -> deny new",
-              actionStr, rp_id ? rp_id : "(null)");
-        return FIDO2_UP_DENIED;
+        LOG_W(TAG, "Presence request supersedes active prompt -> cancel old");
+        fido2_ui_abort_prompt();
     }
 
-    // Ensure strings are registered (safety check)
-    if (s_strIdBase == 0) {
-        LOG_W(TAG, "Strings not registered, registering now");
-        registerStrings();
-    }
+    cdc::core::MutexGuard prompt_lock(s_promptMutex);
 
     if (!s_promptSem) {
         s_promptSem = xSemaphoreCreateBinary();
@@ -550,7 +511,7 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
             display->backlightOn();
         }
 
-        const char* confirm_msg = mstr(STR_OVERWRITE_WARNING);
+        const char* confirm_msg = ui::tr("mod_fido2.overwrite_warning");
 
         s_overwriteApproved = false;
         ui::showConfirm(confirm_msg, onOverwriteConfirm, onOverwriteCancel,
@@ -620,13 +581,13 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
 
     const char* headline = nullptr;
     if (action == FIDO2_ACTION_SELECT) {
-        headline = mstr(STR_USE_DEVICE);
+        headline = ui::tr("mod_fido2.use_device");
     } else if (action == FIDO2_ACTION_REGISTER) {
-        headline = mstr(STR_REGISTER_KEY);
+        headline = ui::tr("mod_fido2.register_key");
     } else if (action == FIDO2_ACTION_OVERWRITE) {
-        headline = mstr(STR_OVERWRITE_KEY);
+        headline = ui::tr("mod_fido2.overwrite_key");
     } else {
-        headline = mstr(STR_SIGN_IN);
+        headline = ui::tr("mod_fido2.sign_in");
     }
 
     static char prompt_text[260];
@@ -634,23 +595,23 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
         snprintf(prompt_text, sizeof(prompt_text),
                  "%s\n\n%s",
                  headline,
-                 ui::tr(ui::StringId::HINT_APPROVE_DENY));
+                 ui::tr("core.hint_approve_deny"));
     } else if (action == FIDO2_ACTION_OVERWRITE) {
         snprintf(prompt_text, sizeof(prompt_text),
                  "!!! %s !!!\n\n%s\n\n%s\n\n%s",
                  headline,
                  s_promptRpId,
-                 mstr(STR_OVERWRITE_WARNING),
-                 ui::tr(ui::StringId::HINT_APPROVE_DENY));
+                 ui::tr("mod_fido2.overwrite_warning"),
+                 ui::tr("core.hint_approve_deny"));
     } else {
         snprintf(prompt_text, sizeof(prompt_text),
                  "%s\n\n%s\n\n%s",
                  headline,
                  s_promptRpId,
-                 ui::tr(ui::StringId::HINT_APPROVE_DENY));
+                 ui::tr("core.hint_approve_deny"));
     }
 
-    const char* title = mstr(STR_WEB_AUTHN);
+    const char* title = ui::tr("mod_fido2.title");
     LOG_I(TAG, "Prompt title='%s', text='%.50s...'", title ? title : "(null)", prompt_text);
 
     s_promptView->init(title, prompt_text);
@@ -660,14 +621,21 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
     stack.resetInactivityTimer();
     stack.render();
 
+    ctap2_clear_cancel();
+
     const uint32_t up_cid = ctaphid_get_current_cid();
     const TickType_t up_poll = pdMS_TO_TICKS(100);
     TickType_t up_remaining = pdMS_TO_TICKS(30000);
     bool up_done = false;
+    bool up_cancelled = false;
     while (up_remaining > 0) {
         TickType_t wait = up_remaining < up_poll ? up_remaining : up_poll;
         if (xSemaphoreTake(s_promptSem, wait) == pdTRUE) {
             up_done = true;
+            break;
+        }
+        if (ctap2_is_cancelled()) {
+            up_cancelled = true;
             break;
         }
         ctaphid_send_keepalive(up_cid, CTAPHID_STATUS_UPNEEDED);
@@ -683,7 +651,11 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
         return result;
     }
 
-    LOG_W(TAG, "User presence timeout");
+    if (up_cancelled) {
+        LOG_W(TAG, "User presence cancelled by CTAP host");
+    } else {
+        LOG_W(TAG, "User presence timeout");
+    }
     s_promptActive = false;
     stack.releaseExclusive(s_promptView);
     restoreView();
@@ -693,7 +665,7 @@ fido2_user_presence_result_t fido2_ui_user_presence_callback(
     }
 
     stack.render();
-    return FIDO2_UP_TIMEOUT;
+    return up_cancelled ? FIDO2_UP_DENIED : FIDO2_UP_TIMEOUT;
 }
 
 bool fido2_ui_abort_prompt() {

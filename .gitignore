@@ -22,6 +22,7 @@ docs/plans/
 
 # Patch marker files
 components/*/.patched
+components/wamr_runtime/wasm-micro-runtime/.patched
 
 # Backup/temp files
 *.bak
@@ -32,7 +33,7 @@ components/*/.patched
 *.log
 
 # Core dumps
-coredump.bin
+coredump*.bin
 
 # Legacy code
 legacy/

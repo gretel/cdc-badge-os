@@ -37,8 +37,33 @@ namespace cdc::ui {
  * \param text Body text content.
  * \return void
  */
+namespace {
+
+constexpr uint16_t WRAP_COLS = 44;
+
+void wrapInPlace(char* buf, uint16_t maxCols) {
+    if (!buf || maxCols == 0) return;
+    uint16_t col = 0;
+    char* lastSpace = nullptr;
+    for (char* p = buf; *p; ++p) {
+        if (*p == '\n') {
+            col = 0;
+            lastSpace = nullptr;
+            continue;
+        }
+        if (col >= maxCols && lastSpace) {
+            *lastSpace = '\n';
+            col = static_cast<uint16_t>(p - lastSpace - 1);
+            lastSpace = nullptr;
+        }
+        if (*p == ' ') lastSpace = p;
+        ++col;
+    }
+}
+
+}  // namespace
+
 void InfoView::init(const char* title, const char* text) {
-    // Copy title to internal buffer
     if (title) {
         strncpy(titleBuf_, title, MAX_TITLE_LEN - 1);
         titleBuf_[MAX_TITLE_LEN - 1] = '\0';
@@ -46,13 +71,14 @@ void InfoView::init(const char* title, const char* text) {
         titleBuf_[0] = '\0';
     }
 
-    // Copy text to internal buffer
     if (text) {
         strncpy(textBuf_, text, MAX_TEXT_LEN - 1);
         textBuf_[MAX_TEXT_LEN - 1] = '\0';
     } else {
         textBuf_[0] = '\0';
     }
+
+    wrapInPlace(textBuf_, WRAP_COLS);
 
     scrollLine_ = 0;
     totalLines_ = countLines();
@@ -146,7 +172,7 @@ const char* InfoView::getFooterHint() const {
     if (customHint_) {
         return customHint_;
     }
-    return tr(StringId::HINT_SCROLL_BACK);
+    return ui::tr("core.hint_scroll_back");
 }
 
 /**

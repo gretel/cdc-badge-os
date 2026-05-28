@@ -1,0 +1,532 @@
+#include "plugin_manager/PluginUiState.h"
+#include "plugin_manager/PluginManager.h"
+#include "cdc_ui/ViewStack.h"
+
+#include <cstring>
+
+extern "C" void* plg_get_active_plugin(void);
+
+namespace cdc::plugin_manager {
+
+namespace {
+
+cdc::ui::ConfirmView::Icon toConfirmIcon(uint8_t icon)
+{
+    switch (icon) {
+        case UI_ICON_ERROR: return cdc::ui::ConfirmView::Icon::ERROR;
+        case UI_ICON_ALERT: return cdc::ui::ConfirmView::Icon::WARNING;
+        default:            return cdc::ui::ConfirmView::Icon::QUESTION;
+    }
+}
+
+}  // namespace
+
+PluginUiState& PluginUiState::instance() noexcept
+{
+    static PluginUiState s;
+    return s;
+}
+
+// --- View-callback trampolines ---------------------------------------------
+
+void PluginUiState::onListSelect(uint16_t index, void* userData)
+{
+    auto* state = static_cast<ListState*>(userData);
+    if (!state) {
+        auto& s = instance();
+        state = s.list_.get();
+    }
+    if (!state) return;
+    uint32_t item_id = (index < state->count && state->item_ids)
+                       ? state->item_ids[index] : 0;
+    uint32_t action  = state->select_action_id;
+    PluginManager::instance().dispatchAction(action, index, item_id);
+}
+
+int PluginUiState::setViewEmpty(const char* text)
+{
+    if (!list_ || !list_->view) return HOST_ERR_NOT_FOUND;
+    if (!text || *text == '\0') {
+        list_->view->setEmptyText(nullptr);
+        list_->empty_buf.reset();
+        return HOST_OK;
+    }
+    size_t len = std::strlen(text);
+    auto buf = psramAlloc<char>(len + 1);
+    if (!buf) return HOST_ERR_NO_MEMORY;
+    std::memcpy(buf.get(), text, len + 1);
+    list_->view->setEmptyText(buf.get());
+    list_->empty_buf = std::move(buf);
+    return HOST_OK;
+}
+
+int PluginUiState::setViewFooter(const char* hint)
+{
+    auto* top = cdc::ui::ViewStack::instance().current();
+    if (!top) return HOST_ERR_NOT_FOUND;
+
+    PsramUniquePtr<char>* slot = nullptr;
+    if (list_ && list_->view && top == list_->view.get())        slot = &list_->footer_buf;
+    else if (confirm_.view && top == confirm_.view.get())        slot = &confirm_.footer_buf;
+    else if (input_.t9_view && top == input_.t9_view.get())      slot = &input_.footer_buf;
+    else if (input_.pin_view && top == input_.pin_view.get())    slot = &input_.footer_buf;
+    else if (input_.slider_view && top == input_.slider_view.get()) slot = &input_.footer_buf;
+    else if (input_.date_view && top == input_.date_view.get())  slot = &input_.footer_buf;
+    else if (input_.time_view && top == input_.time_view.get())  slot = &input_.footer_buf;
+    else if (input_.color_view && top == input_.color_view.get()) slot = &input_.footer_buf;
+    else if (canvas_.view && top == canvas_.view.get())          slot = &canvas_.footer_buf;
+    if (!slot) return HOST_ERR_NOT_FOUND;
+
+    if (!hint || *hint == '\0') {
+        top->setFooterHint(nullptr);
+        slot->reset();
+        return HOST_OK;
+    }
+    size_t len = std::strlen(hint);
+    auto buf = psramAlloc<char>(len + 1);
+    if (!buf) return HOST_ERR_NO_MEMORY;
+    std::memcpy(buf.get(), hint, len + 1);
+    top->setFooterHint(buf.get());
+    *slot = std::move(buf);
+    return HOST_OK;
+}
+
+void PluginUiState::resetForPluginStop()
+{
+    list_.reset();
+    list_graveyard_.clear();
+    ctxmenu_           = ContextMenuState{};
+    confirm_           = ConfirmState{};
+    input_             = InputState{};
+    canvas_            = CanvasState{};
+    exclusive_token_   = nullptr;
+    inactivity_action_ = 0;
+}
+
+void PluginUiState::onListMenu(uint16_t index, void* userData)
+{
+    auto* state = static_cast<ListState*>(userData);
+    if (!state) {
+        auto& s = instance();
+        state = s.list_.get();
+    }
+    if (!state || state->menu_action_id == 0) return;
+    uint32_t item_id = (index < state->count && state->item_ids)
+                       ? state->item_ids[index] : 0;
+    PluginManager::instance().dispatchAction(state->menu_action_id, index, item_id);
+}
+
+void PluginUiState::onConfirmYes(void*)
+{
+    auto& s = instance();
+    uint32_t action = s.confirm_.action_id;
+    s.confirm_.action_id = 0;
+    PluginManager::instance().dispatchAction(action, 1, 0);
+}
+
+void PluginUiState::onConfirmNo(void*)
+{
+    auto& s = instance();
+    uint32_t action = s.confirm_.action_id;
+    s.confirm_.action_id = 0;
+    PluginManager::instance().dispatchAction(action, 0, 0);
+}
+
+void PluginUiState::onT9Save(const char* text)
+{
+    auto& s = instance();
+    s.input_.last_text = text ? text : "";
+    uint32_t action = s.input_.action_id;
+    auto len = static_cast<uint32_t>(s.input_.last_text.size());
+    s.input_.action_id = 0;
+    PluginManager::instance().dispatchAction(action, len, 1);
+}
+
+bool PluginUiState::onPinVerify(const char* pin)
+{
+    auto& s = instance();
+    s.input_.last_text = pin ? pin : "";
+    uint32_t action = s.input_.action_id;
+    auto len = static_cast<uint32_t>(s.input_.last_text.size());
+    s.input_.action_id = 0;
+    PluginManager::instance().dispatchAction(action, len, 1);
+    return true;
+}
+
+void PluginUiState::onSliderSave(uint16_t value)
+{
+    auto& s = instance();
+    s.input_.last_int = static_cast<int32_t>(value);
+    uint32_t action = s.input_.action_id;
+    s.input_.action_id = 0;
+    PluginManager::instance().dispatchAction(action, value, 1);
+}
+
+void PluginUiState::onDateSave(uint8_t day, uint8_t month, uint16_t year)
+{
+    auto& s = instance();
+    s.input_.last_date = (static_cast<uint32_t>(year)  << 16) |
+                        (static_cast<uint32_t>(month) <<  8) |
+                         static_cast<uint32_t>(day);
+    uint32_t action = s.input_.action_id;
+    s.input_.action_id = 0;
+    PluginManager::instance().dispatchAction(action, s.input_.last_date, 1);
+}
+
+void PluginUiState::onTimeSave(uint8_t hour, uint8_t minute)
+{
+    auto& s = instance();
+    s.input_.last_time = static_cast<uint16_t>((hour << 8) | minute);
+    uint32_t action = s.input_.action_id;
+    s.input_.action_id = 0;
+    PluginManager::instance().dispatchAction(action, s.input_.last_time, 1);
+}
+
+void PluginUiState::onColorSave(uint8_t r, uint8_t g, uint8_t b)
+{
+    auto& s = instance();
+    uint32_t packed = (static_cast<uint32_t>(r) << 16)
+                    | (static_cast<uint32_t>(g) << 8)
+                    |  static_cast<uint32_t>(b);
+    s.input_.last_int = static_cast<int32_t>(packed);
+    uint32_t action = s.input_.action_id;
+    s.input_.action_id = 0;
+    PluginManager::instance().dispatchAction(action, packed, 1);
+}
+
+void PluginUiState::onInactivity()
+{
+    uint32_t action = instance().inactivity_action_;
+    if (action) PluginManager::instance().dispatchAction(action, 0, 0);
+}
+
+void PluginUiState::onCanvasKey(char key, uint32_t focused_widget)
+{
+    uint32_t action = instance().canvas_.key_action_id;
+    if (action) {
+        PluginManager::instance().dispatchAction(
+            action, static_cast<uint32_t>(static_cast<unsigned char>(key)), focused_widget);
+    }
+}
+
+void PluginUiState::onCanvasWidget(uint32_t widget_id, cdc::ui::CanvasView::WidgetEvent event)
+{
+    uint32_t action = instance().canvas_.widget_action_id;
+    if (action) {
+        PluginManager::instance().dispatchAction(
+            action, widget_id, static_cast<uint32_t>(event));
+    }
+}
+
+// --- View push API ----------------------------------------------------------
+
+namespace {
+
+void ctxCb0() { PluginUiState::instance().dispatchContextSelect(0); }
+void ctxCb1() { PluginUiState::instance().dispatchContextSelect(1); }
+void ctxCb2() { PluginUiState::instance().dispatchContextSelect(2); }
+void ctxCb3() { PluginUiState::instance().dispatchContextSelect(3); }
+void ctxCb4() { PluginUiState::instance().dispatchContextSelect(4); }
+void ctxCb5() { PluginUiState::instance().dispatchContextSelect(5); }
+void ctxCb6() { PluginUiState::instance().dispatchContextSelect(6); }
+void ctxCb7() { PluginUiState::instance().dispatchContextSelect(7); }
+
+constexpr void (*kCtxCallbacks[cdc::ui::ContextMenuView::MAX_ITEMS])() = {
+    &ctxCb0, &ctxCb1, &ctxCb2, &ctxCb3,
+    &ctxCb4, &ctxCb5, &ctxCb6, &ctxCb7,
+};
+
+}  // namespace
+
+void PluginUiState::dispatchContextSelect(uint8_t idx)
+{
+    if (idx >= ctxmenu_.count) return;
+    uint32_t item_id = ctxmenu_.item_ids ? ctxmenu_.item_ids[idx] : 0;
+    uint32_t action  = ctxmenu_.select_action_id;
+    PluginManager::instance().dispatchAction(action, idx, item_id);
+}
+
+int PluginUiState::pushContextMenu(const char* title, const ui_item_t* items, uint16_t count,
+                                    uint32_t select_action_id)
+{
+    if (count == 0 || !items) return HOST_ERR_INVALID_ARG;
+    uint16_t cap = cdc::ui::ContextMenuView::MAX_ITEMS;
+    if (count > cap) count = cap;
+
+    ContextMenuState next;
+    size_t pool_bytes = 0;
+    for (uint16_t i = 0; i < count; ++i) {
+        if (items[i].label) pool_bytes += std::strlen(items[i].label) + 1;
+    }
+    next.items       = psramAlloc<cdc::ui::ContextMenuItem>(count);
+    next.string_pool = psramAlloc<char>(pool_bytes + 1);
+    next.item_ids    = psramAlloc<uint32_t>(count);
+    if (!next.items || !next.string_pool || !next.item_ids) {
+        return HOST_ERR_NO_MEMORY;
+    }
+
+    char* dst = next.string_pool.get();
+    for (uint16_t i = 0; i < count; ++i) {
+        const char* src = items[i].label ? items[i].label : "";
+        size_t n = std::strlen(src);
+        std::memcpy(dst, src, n);
+        dst[n] = '\0';
+        next.items[i].label    = dst;
+        next.items[i].callback = kCtxCallbacks[i];
+        next.item_ids[i]       = items[i].item_id;
+        dst += n + 1;
+    }
+    next.count = count;
+    next.select_action_id = select_action_id;
+    if (title && *title) {
+        size_t tlen = std::strlen(title);
+        next.title_buf = psramAlloc<char>(tlen + 1);
+        if (!next.title_buf) return HOST_ERR_NO_MEMORY;
+        std::memcpy(next.title_buf.get(), title, tlen + 1);
+    }
+    next.view = std::make_unique<cdc::ui::ContextMenuView>();
+    next.view->init(next.title_buf ? next.title_buf.get() : "",
+                    next.items.get(), static_cast<uint8_t>(count));
+
+    cdc::ui::ViewStack::instance().showModal(next.view.get());
+    ctxmenu_ = std::move(next);
+    return HOST_OK;
+}
+
+int PluginUiState::pushList(const char* title, const ui_item_t* items, uint16_t count,
+                            uint32_t select_action_id, uint32_t menu_action_id,
+                            bool replace_top)
+{
+    if (!title || (!items && count > 0)) return HOST_ERR_INVALID_ARG;
+
+    auto next = std::make_unique<ListState>();
+    size_t pool_bytes = 0;
+    for (uint16_t i = 0; i < count; ++i) {
+        if (items[i].label) pool_bytes += std::strlen(items[i].label) + 1;
+    }
+
+    if (count > 0) {
+        next->items    = psramAlloc<cdc::ui::ListItem>(count);
+        next->item_ids = psramAlloc<uint32_t>(count);
+        if (!next->items || !next->item_ids) {
+            return HOST_ERR_NO_MEMORY;
+        }
+    }
+    next->string_pool = psramAlloc<char>(pool_bytes + 1);
+    if (!next->string_pool) {
+        return HOST_ERR_NO_MEMORY;
+    }
+
+    char* dst = next->string_pool.get();
+    for (uint16_t i = 0; i < count; ++i) {
+        const char* src = items[i].label ? items[i].label : "";
+        size_t n = std::strlen(src);
+        std::memcpy(dst, src, n);
+        dst[n] = '\0';
+        next->items[i].label        = dst;
+        next->items[i].icon         = items[i].icon;
+        next->items[i].iconDisabled = items[i].icon_disabled;
+        next->items[i].userData     = next.get();
+        next->item_ids[i]           = items[i].item_id;
+        dst += n + 1;
+    }
+    next->count            = count;
+    next->select_action_id = select_action_id;
+    next->menu_action_id   = menu_action_id;
+    size_t title_len = std::strlen(title);
+    next->title_buf  = psramAlloc<char>(title_len + 1);
+    if (!next->title_buf) return HOST_ERR_NO_MEMORY;
+    std::memcpy(next->title_buf.get(), title, title_len + 1);
+    next->view = std::make_unique<cdc::ui::ListView>();
+    next->view->init(next->title_buf.get(), next->items.get(), count);
+    next->view->setOnSelect(&PluginUiState::onListSelect);
+    if (menu_action_id != 0) next->view->setOnMenu(&PluginUiState::onListMenu);
+
+    auto& stack = cdc::ui::ViewStack::instance();
+    const bool can_replace = (list_ && list_->view && stack.current() == list_->view.get());
+    if (can_replace && replace_top) {
+        stack.replace(next->view.get());
+    } else {
+        stack.push(next->view.get());
+    }
+    if (list_) {
+        list_graveyard_.push_back(std::move(list_));
+    }
+    list_ = std::move(next);
+    return HOST_OK;
+}
+
+int PluginUiState::pushConfirm(const char* text, uint8_t icon, uint32_t action_id)
+{
+    if (!text) return HOST_ERR_INVALID_ARG;
+    confirm_           = ConfirmState{};
+    confirm_.view      = std::make_unique<cdc::ui::ConfirmView>();
+    confirm_.action_id = action_id;
+    confirm_.view->init(text, toConfirmIcon(icon));
+    confirm_.view->setOnConfirm(&PluginUiState::onConfirmYes, nullptr);
+    confirm_.view->setOnCancel (&PluginUiState::onConfirmNo,  nullptr);
+    cdc::ui::ViewStack::instance().showModal(confirm_.view.get());
+    return HOST_OK;
+}
+
+int PluginUiState::pushT9(const char* title, const char* initial,
+                          uint16_t max_len, uint32_t action_id)
+{
+    if (!title || max_len == 0) return HOST_ERR_INVALID_ARG;
+    input_           = InputState{};
+    input_.action_id = action_id;
+    size_t tlen = std::strlen(title);
+    input_.title_buf = psramAlloc<char>(tlen + 1);
+    if (!input_.title_buf) return HOST_ERR_NO_MEMORY;
+    std::memcpy(input_.title_buf.get(), title, tlen + 1);
+    input_.t9_view   = std::make_unique<cdc::ui::T9InputView>();
+    input_.t9_view->init(input_.title_buf.get(), initial, max_len);
+    input_.t9_view->setOnSave(&PluginUiState::onT9Save);
+    cdc::ui::ViewStack::instance().push(input_.t9_view.get());
+    return HOST_OK;
+}
+
+int PluginUiState::pushPin(const char* title, uint8_t max_len, uint8_t max_attempts,
+                           uint32_t action_id)
+{
+    if (!title || max_len == 0) return HOST_ERR_INVALID_ARG;
+    input_           = InputState{};
+    input_.action_id = action_id;
+    input_.pin_view  = std::make_unique<cdc::ui::PinEntryView>();
+    input_.pin_view->init(title, max_len, max_attempts);
+    input_.pin_view->setOnVerify(&PluginUiState::onPinVerify);
+    cdc::ui::ViewStack::instance().push(input_.pin_view.get());
+    return HOST_OK;
+}
+
+int PluginUiState::pushSlider(const char* title, int32_t min, int32_t max, int32_t init,
+                              int32_t step, const char* unit, uint32_t action_id)
+{
+    if (!title || min >= max) return HOST_ERR_INVALID_ARG;
+    input_             = InputState{};
+    input_.action_id   = action_id;
+    size_t tlen = std::strlen(title);
+    input_.title_buf = psramAlloc<char>(tlen + 1);
+    if (!input_.title_buf) return HOST_ERR_NO_MEMORY;
+    std::memcpy(input_.title_buf.get(), title, tlen + 1);
+    const char* unit_safe = unit ? unit : "";
+    size_t ulen = std::strlen(unit_safe);
+    input_.unit_buf = psramAlloc<char>(ulen + 1);
+    if (!input_.unit_buf) return HOST_ERR_NO_MEMORY;
+    std::memcpy(input_.unit_buf.get(), unit_safe, ulen + 1);
+    input_.slider_view = std::make_unique<cdc::ui::SliderView>();
+    input_.slider_view->init(input_.title_buf.get(), min, max, init, step, input_.unit_buf.get());
+    input_.slider_view->setOnSave(&PluginUiState::onSliderSave);
+    cdc::ui::ViewStack::instance().push(input_.slider_view.get());
+    return HOST_OK;
+}
+
+int PluginUiState::pushDate(const char* title, uint8_t d, uint8_t m, uint16_t y,
+                            uint32_t action_id)
+{
+    if (!title) return HOST_ERR_INVALID_ARG;
+    input_           = InputState{};
+    input_.action_id = action_id;
+    input_.date_view = std::make_unique<cdc::ui::DateInputView>();
+    input_.date_view->init(title, d, m, y);
+    input_.date_view->setOnConfirm(&PluginUiState::onDateSave);
+    cdc::ui::ViewStack::instance().push(input_.date_view.get());
+    return HOST_OK;
+}
+
+int PluginUiState::pushTime(const char* title, uint8_t h, uint8_t m, uint32_t action_id)
+{
+    if (!title) return HOST_ERR_INVALID_ARG;
+    input_           = InputState{};
+    input_.action_id = action_id;
+    input_.time_view = std::make_unique<cdc::ui::TimeInputView>();
+    input_.time_view->init(title, h, m);
+    input_.time_view->setOnConfirm(&PluginUiState::onTimeSave);
+    cdc::ui::ViewStack::instance().push(input_.time_view.get());
+    return HOST_OK;
+}
+
+int PluginUiState::pushColorPicker(uint8_t r, uint8_t g, uint8_t b, uint32_t action_id)
+{
+    input_            = InputState{};
+    input_.action_id  = action_id;
+    input_.color_view = std::make_unique<cdc::ui::ColorPickerView>();
+    input_.color_view->init(r, g, b);
+    input_.color_view->setOnSave(&PluginUiState::onColorSave);
+    cdc::ui::ViewStack::instance().push(input_.color_view.get());
+    return HOST_OK;
+}
+
+int PluginUiState::pushCanvas(const char* title, uint32_t key_action_id,
+                               uint32_t widget_action_id)
+{
+    canvas_ = CanvasState{};
+
+    if (title && *title) {
+        size_t n = std::strlen(title);
+        canvas_.title_buf = psramAlloc<char>(n + 1);
+        if (!canvas_.title_buf) return HOST_ERR_NO_MEMORY;
+        std::memcpy(canvas_.title_buf.get(), title, n + 1);
+    }
+
+    canvas_.key_action_id    = key_action_id;
+    canvas_.widget_action_id = widget_action_id;
+    canvas_.view             = std::make_unique<cdc::ui::CanvasView>();
+    canvas_.view->init(canvas_.title_buf.get());
+    canvas_.view->setKeyCallback(&PluginUiState::onCanvasKey);
+    canvas_.view->setWidgetCallback(&PluginUiState::onCanvasWidget);
+
+    cdc::ui::ViewStack::instance().push(canvas_.view.get());
+    return HOST_OK;
+}
+
+cdc::ui::CanvasView* PluginUiState::canvasView()
+{
+    return canvas_.view.get();
+}
+
+int PluginUiState::acquireExclusive()
+{
+    void* plugin = plg_get_active_plugin();
+    if (!plugin) return HOST_ERR_NO_CAPABILITY;
+    exclusive_token_ = plugin;
+    return cdc::ui::ViewStack::instance().acquireExclusive(plugin) ? HOST_OK : HOST_ERR_BUSY;
+}
+
+int PluginUiState::releaseExclusive()
+{
+    if (!exclusive_token_) return HOST_ERR_NOT_FOUND;
+    bool ok = cdc::ui::ViewStack::instance().releaseExclusive(exclusive_token_);
+    exclusive_token_ = nullptr;
+    return ok ? HOST_OK : HOST_ERR_GENERIC;
+}
+
+int PluginUiState::setInactivity(uint32_t timeout_ms, uint32_t action_id)
+{
+    inactivity_action_ = action_id;
+    cdc::ui::ViewStack::instance().setInactivityTimeout(
+        action_id ? &PluginUiState::onInactivity : nullptr,
+        action_id ? timeout_ms : 0);
+    return HOST_OK;
+}
+
+int PluginUiState::consumeInputText(char* out, size_t out_size)
+{
+    if (!out || out_size == 0) return HOST_ERR_INVALID_ARG;
+    size_t n = input_.last_text.size();
+    if (n >= out_size) n = out_size - 1;
+    std::memcpy(out, input_.last_text.data(), n);
+    out[n] = '\0';
+    input_.last_text.clear();
+    return static_cast<int>(n);
+}
+
+int PluginUiState::consumeInputInt(int32_t* out)
+{
+    if (!out) return HOST_ERR_INVALID_ARG;
+    *out = input_.last_int;
+    input_.last_int = 0;
+    return HOST_OK;
+}
+
+}  // namespace cdc::plugin_manager

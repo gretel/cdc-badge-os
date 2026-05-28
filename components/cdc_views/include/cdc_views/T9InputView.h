@@ -19,7 +19,7 @@ namespace cdc::ui {
  */
 class T9InputView : public ViewBase {
 public:
-    static constexpr uint16_t MAX_TEXT_LEN = 128;
+    static constexpr uint16_t MAX_TEXT_LEN = 320;
     static constexpr uint32_t TIMEOUT_MS = 2000;  // Time before character is committed (match legacy)
 
     /**
@@ -66,6 +66,12 @@ public:
      */
     void forceDigit(char key);
 
+    /**
+     * Append a raw string to the buffer (used by `T9_PASTE` serial command).
+     * Truncates at `maxLen_`. Returns number of bytes actually appended.
+     */
+    uint16_t appendRaw(const char* text);
+
     // IView implementation
     void render(bool partial) override;
     InputResult onKey(char key) override;
@@ -75,6 +81,8 @@ public:
     const char* getFooterHint() const override;
 
 protected:
+    static constexpr uint16_t TITLE_MAX_LEN = 48;
+    char titleBuf_[TITLE_MAX_LEN + 1] = {0};
     const char* title_ = nullptr;
     const char* placeholder_ = nullptr;
     const char* hintOverride_ = nullptr;

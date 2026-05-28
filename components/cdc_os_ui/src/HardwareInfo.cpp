@@ -42,82 +42,82 @@ static void buildHardwareInfoText(char* buf, size_t bufSize) {
         }
     };
 
-    const char* okText = tr(StringId::OK);
-    const char* failText = tr(StringId::FAILED);
-    const char* naText = tr(StringId::HW_NOT_AVAILABLE);
+    const char* okText = ui::tr("core.ok");
+    const char* failText = ui::tr("core.failed");
+    const char* naText = ui::tr("core.hw_not_available");
 
-    append("=== %s ===\n", tr(StringId::HARDWARE_INFO));
+    append("=== %s ===\n", ui::tr("core.hardware_info"));
 
     // I2C Bus (use bus 0 as primary)
     auto* i2c = hal::getI2cBus0();
     bool i2cOk = i2c && (i2c->getState() == core::ServiceState::INITIALIZED ||
                          i2c->getState() == core::ServiceState::STARTED);
-    append("%s: %s\n", tr(StringId::HW_I2C_BUS), i2cOk ? okText : failText);
+    append("%s: %s\n", ui::tr("core.hw_i2c_bus"), i2cOk ? okText : failText);
 
     // Power Management
     auto* power = hal::getPowerManagerInstance();
     bool powerOk = power && (power->getState() == core::ServiceState::INITIALIZED ||
                              power->getState() == core::ServiceState::STARTED);
-    append("%s: %s\n", tr(StringId::HW_BQ25895), powerOk ? okText : failText);
+    append("%s: %s\n", ui::tr("core.hw_bq25895"), powerOk ? okText : failText);
 
     // Keypad
     auto* keypad = hal::getKeypadInstance();
     bool keypadOk = keypad && (keypad->getState() == core::ServiceState::INITIALIZED ||
                                keypad->getState() == core::ServiceState::STARTED);
-    append("%s: %s\n", tr(StringId::HW_TCA9535), keypadOk ? okText : failText);
+    append("%s: %s\n", ui::tr("core.hw_tca9535"), keypadOk ? okText : failText);
 
     // Display
     auto* display = hal::getDisplayInstance();
     bool displayOk = display && (display->getState() == core::ServiceState::INITIALIZED ||
                                   display->getState() == core::ServiceState::STARTED);
-    append("%s: %s\n", tr(StringId::HW_DISPLAY), displayOk ? okText : failText);
+    append("%s: %s\n", ui::tr("core.hw_display"), displayOk ? okText : failText);
 
     // TROPIC01
     auto* se = hal::getSecureElementInstance();
     bool seOk = se && (se->getState() == core::ServiceState::INITIALIZED ||
                        se->getState() == core::ServiceState::STARTED);
-    append("%s: %s\n", tr(StringId::HW_TROPIC01), seOk ? okText : failText);
-    append("%s: %s\n", tr(StringId::HW_TR01_SESSION),
+    append("%s: %s\n", ui::tr("core.hw_tropic01"), seOk ? okText : failText);
+    append("%s: %s\n", ui::tr("core.hw_tr01_session"),
            (se && se->isSessionActive()) ? okText : naText);
 
     if (seOk) {
         uint8_t riscvVer[4] = {0};
         uint8_t spectVer[4] = {0};
         if (se->getFwVersion(riscvVer, spectVer)) {
-            append("%s: %u.%u.%u.%u\n", tr(StringId::HW_TR01_RISCV_FW),
+            append("%s: %u.%u.%u.%u\n", ui::tr("core.hw_tr01_riscv_fw"),
                    riscvVer[3], riscvVer[2], riscvVer[1], riscvVer[0]);
-            append("%s: %u.%u.%u.%u\n", tr(StringId::HW_TR01_SPECT_FW),
+            append("%s: %u.%u.%u.%u\n", ui::tr("core.hw_tr01_spect_fw"),
                    spectVer[3], spectVer[2], spectVer[1], spectVer[0]);
         } else {
-            append("%s: %s\n", tr(StringId::HW_TR01_RISCV_FW), naText);
-            append("%s: %s\n", tr(StringId::HW_TR01_SPECT_FW), naText);
+            append("%s: %s\n", ui::tr("core.hw_tr01_riscv_fw"), naText);
+            append("%s: %s\n", ui::tr("core.hw_tr01_spect_fw"), naText);
         }
-        append("%s: %u B\n", tr(StringId::HW_TR01_RMEM_SLOT), se->getRmemSlotSize());
+        append("%s: %u B\n", ui::tr("core.hw_tr01_rmem_slot"), se->getRmemSlotSize());
     } else {
-        append("%s: %s\n", tr(StringId::HW_TR01_RISCV_FW), naText);
-        append("%s: %s\n", tr(StringId::HW_TR01_SPECT_FW), naText);
-        append("%s: %s\n", tr(StringId::HW_TR01_RMEM_SLOT), naText);
+        append("%s: %s\n", ui::tr("core.hw_tr01_riscv_fw"), naText);
+        append("%s: %s\n", ui::tr("core.hw_tr01_spect_fw"), naText);
+        append("%s: %s\n", ui::tr("core.hw_tr01_rmem_slot"), naText);
     }
 
     // WiFi
     auto* wifi = hal::getWifiControllerInstance();
     bool wifiOk = wifi && (wifi->getState() == core::ServiceState::INITIALIZED ||
                            wifi->getState() == core::ServiceState::STARTED);
-    append("%s: %s\n", tr(StringId::HW_WIFI), wifiOk ? okText : naText);
+    append("%s: %s\n", ui::tr("core.hw_wifi"), wifiOk ? okText : naText);
 
     // Bluetooth
     auto* ble = hal::getBluetoothControllerInstance();
     bool bleOk = ble && (ble->getState() == core::ServiceState::INITIALIZED ||
                          ble->getState() == core::ServiceState::STARTED);
-    append("%s: %s\n", tr(StringId::HW_BLE), bleOk ? okText : naText);
+    append("%s: %s\n", ui::tr("core.hw_ble"), bleOk ? okText : naText);
 
-    append("\n--- %s ---\n", tr(StringId::HW_SECTION_MEMORY));
+    append("\n--- %s ---\n", ui::tr("core.hw_section_memory"));
 
     size_t freeHeap = esp_get_free_heap_size();
     size_t totalHeap = heap_caps_get_total_size(MALLOC_CAP_DEFAULT);
     size_t usedHeap = (totalHeap > freeHeap) ? (totalHeap - freeHeap) : 0;
     append("%s: %lu/%lu KB\n",
-           tr(StringId::HW_HEAP),
+           ui::tr("core.hw_heap"),
            (unsigned long)(usedHeap / 1024),
            (unsigned long)(totalHeap / 1024));
 
@@ -139,41 +139,41 @@ static void buildHardwareInfoText(char* buf, size_t bufSize) {
     size_t psramTotal = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
     size_t psramUsed = (psramTotal > psramFree) ? (psramTotal - psramFree) : 0;
     append("%s: %lu/%lu KB\n",
-           tr(StringId::HW_PSRAM),
+           ui::tr("core.hw_psram"),
            (unsigned long)(psramUsed / 1024),
            (unsigned long)(psramTotal / 1024));
 
     nvs_stats_t nvsStats;
     if (nvs_get_stats(nullptr, &nvsStats) == ESP_OK) {
         append("%s: %lu/%lu %s\n",
-               tr(StringId::HW_NVS),
+               ui::tr("core.hw_nvs"),
                (unsigned long)nvsStats.used_entries,
                (unsigned long)nvsStats.total_entries,
-               tr(StringId::HW_ENTRIES));
+               ui::tr("core.hw_entries"));
     }
 
-    append("\n--- %s ---\n", tr(StringId::HW_SECTION_RUNTIME));
+    append("\n--- %s ---\n", ui::tr("core.hw_section_runtime"));
 
     if (power) {
         const char* chg = (power->getChargeStatus() == hal::ChargeStatus::FAST_CHARGE ||
                            power->getChargeStatus() == hal::ChargeStatus::PRE_CHARGE)
-                              ? tr(StringId::HW_CHARGING_SUFFIX)
+                              ? ui::tr("core.hw_charging_suffix")
                               : "";
-        append("%s: %u%%%s\n", tr(StringId::HW_BATTERY), power->getBatteryPercent(), chg);
+        append("%s: %u%%%s\n", ui::tr("core.hw_battery"), power->getBatteryPercent(), chg);
     } else {
-        append("%s: %s\n", tr(StringId::HW_BATTERY), naText);
+        append("%s: %s\n", ui::tr("core.hw_battery"), naText);
     }
 
     float tempC = 0.0f;
     auto* espHw = hal::getEspHardwareInstance();
     if (espHw && espHw->getTemperatureC(&tempC)) {
-        append("%s: %.1f C\n", tr(StringId::HW_TEMP), tempC);
+        append("%s: %.1f C\n", ui::tr("core.hw_temp"), tempC);
     } else {
-        append("%s: %s\n", tr(StringId::HW_TEMP), naText);
+        append("%s: %s\n", ui::tr("core.hw_temp"), naText);
     }
 
     uint64_t uptimeS = esp_timer_get_time() / 1000000ULL;
-    append("%s: %llu s\n", tr(StringId::HW_UPTIME), (unsigned long long)uptimeS);
+    append("%s: %llu s\n", ui::tr("core.hw_uptime"), (unsigned long long)uptimeS);
 }
 
 /**
@@ -183,7 +183,7 @@ static void buildHardwareInfoText(char* buf, size_t bufSize) {
 void showHardwareInfo() {
     static char hwInfo[512];
     buildHardwareInfoText(hwInfo, sizeof(hwInfo));
-    showInfo(tr(StringId::HARDWARE_INFO), hwInfo);
+    showInfo(ui::tr("core.hardware_info"), hwInfo);
 }
 
 } // namespace cdc::ui

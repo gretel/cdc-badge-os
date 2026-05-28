@@ -204,16 +204,16 @@ void rebuildWifiMainMenu() {
     bool hasConfig = wifiHandlers.config().valid;
 
     if (connected) {
-        s_wifiMainItems[WIFI_IDX_CONNECT] = {tr(StringId::WIFI_DISCONNECT), '*', false, nullptr};
+        s_wifiMainItems[WIFI_IDX_CONNECT] = {ui::tr("core.wifi_disconnect"), '*', false, nullptr};
     } else if (hasConfig) {
-        s_wifiMainItems[WIFI_IDX_CONNECT] = {tr(StringId::WIFI_CONNECT), 0, false, nullptr};
+        s_wifiMainItems[WIFI_IDX_CONNECT] = {ui::tr("core.wifi_connect"), 0, false, nullptr};
     } else {
-        s_wifiMainItems[WIFI_IDX_CONNECT] = {tr(StringId::WIFI_NO_CONFIG), 0, true, nullptr};
+        s_wifiMainItems[WIFI_IDX_CONNECT] = {ui::tr("core.wifi_no_config"), 0, true, nullptr};
     }
 
-    s_wifiMainItems[WIFI_IDX_SETUP] = {tr(StringId::WIFI_SETUP), 0, false, nullptr};
-    s_wifiMainItems[WIFI_IDX_DETAILS] = {tr(StringId::WIFI_DETAILS), 0, false, nullptr};
-    s_wifiMainItems[WIFI_IDX_NTP_SYNC] = {tr(StringId::NTP_SYNC), 0, !connected && !hasConfig, nullptr};
+    s_wifiMainItems[WIFI_IDX_SETUP] = {ui::tr("core.wifi_setup"), 0, false, nullptr};
+    s_wifiMainItems[WIFI_IDX_DETAILS] = {ui::tr("core.wifi_details"), 0, false, nullptr};
+    s_wifiMainItems[WIFI_IDX_NTP_SYNC] = {ui::tr("core.ntp_sync"), 0, !connected && !hasConfig, nullptr};
 
     auto& moduleReg = core::ModuleRegistry::instance();
     s_wifiModuleCount = moduleReg.getMenuItems(
@@ -227,7 +227,7 @@ void rebuildWifiMainMenu() {
     }
 
     if (s_wifiMainMenu) {
-        s_wifiMainMenu->init(tr(StringId::WIFI_MENU), s_wifiMainItems, WIFI_MENU_FIXED_COUNT + s_wifiModuleCount);
+        s_wifiMainMenu->init(ui::tr("core.wifi_menu"), s_wifiMainItems, WIFI_MENU_FIXED_COUNT + s_wifiModuleCount);
     }
 }
 
@@ -295,12 +295,12 @@ static void wifiConnect() {
     auto& wifiHandlers = WifiHandlers::instance();
 
     if (!wifiHandlers.config().valid) {
-        showToastError(tr(StringId::WIFI_NO_CONFIG));
+        showToastError(ui::tr("core.wifi_no_config"));
         return;
     }
 
     char msg[96];
-    snprintf(msg, sizeof(msg), "%s\n%s", tr(StringId::WIFI_CONNECTING), wifiHandlers.config().ssid);
+    snprintf(msg, sizeof(msg), "%s\n%s", ui::tr("core.wifi_connecting"), wifiHandlers.config().ssid);
     showToastInfo(msg, 0);
 
     bool connected = wifiHandlers.connect();
@@ -310,10 +310,10 @@ static void wifiConnect() {
         auto* wifi = hal::getWifiControllerInstance();
         char ipBuf[20] = {};
         if (wifi) wifi->getIpAddress(ipBuf, sizeof(ipBuf));
-        snprintf(msg, sizeof(msg), "%s (IP: %s)", tr(StringId::WIFI_CONNECTED), ipBuf);
+        snprintf(msg, sizeof(msg), "%s (IP: %s)", ui::tr("core.wifi_connected"), ipBuf);
         showToastSuccess(msg, TOAST_DURATION_LONG_MS);
     } else {
-        snprintf(msg, sizeof(msg), "%s: %s", tr(StringId::WIFI_FAILED), wifiHandlers.getLastError());
+        snprintf(msg, sizeof(msg), "%s: %s", ui::tr("core.wifi_failed"), wifiHandlers.getLastError());
         showToastError(msg, TOAST_DURATION_LONG_MS);
     }
 
@@ -325,7 +325,7 @@ static void wifiConnect() {
  */
 static void wifiDisconnect() {
     WifiHandlers::instance().disconnect();
-    showToastInfo(tr(StringId::WIFI_DISCONNECTED));
+    showToastInfo(ui::tr("core.wifi_disconnected"));
     rebuildWifiMainMenu();
 }
 
@@ -359,7 +359,7 @@ static void sortWifiScanResults() {
 static void wifiStartScan() {
     auto* wifi = hal::getWifiControllerInstance();
     if (!wifi) {
-        showToastError(tr(StringId::HW_NOT_AVAILABLE));
+        showToastError(ui::tr("core.hw_not_available"));
         return;
     }
 
@@ -367,7 +367,7 @@ static void wifiStartScan() {
         wifi->enable(hal::WifiMode::STA);
     }
 
-    showToastInfo(tr(StringId::WIFI_SCANNING), 0);
+    showToastInfo(ui::tr("core.wifi_scanning"), 0);
 
     s_wifiScanCount = 0;
     if (wifi->startScan()) {
@@ -415,7 +415,7 @@ static void wifiStartScan() {
         s_wifiScanView->setItemRenderer(renderWifiRow, nullptr);
     }
 
-    snprintf(s_wifiManualLabel, sizeof(s_wifiManualLabel), "+ %s", tr(StringId::WIFI_ADD_MANUAL));
+    snprintf(s_wifiManualLabel, sizeof(s_wifiManualLabel), "+ %s", ui::tr("core.wifi_add_manual"));
     s_wifiScanItems[0] = {s_wifiManualLabel, 0, false, nullptr};
 
     uint8_t itemCount = s_wifiScanCount + 1;
@@ -423,8 +423,8 @@ static void wifiStartScan() {
         s_wifiScanItems[i + 1] = {s_wifiScanResults[i].ssid, 0, false, &s_wifiScanResults[i]};
     }
 
-    s_wifiScanView->init(tr(StringId::WIFI_SETUP), s_wifiScanItems, itemCount);
-    s_wifiScanView->setHint(tr(StringId::HINT_SELECT));
+    s_wifiScanView->init(ui::tr("core.wifi_setup"), s_wifiScanItems, itemCount);
+    s_wifiScanView->setHint(ui::tr("core.hint_select"));
     ViewStack::instance().push(s_wifiScanView);
 }
 
@@ -439,7 +439,7 @@ static void onWifiScanSelect(uint16_t index, void* userData) {
 
     if (index == 0 || item == nullptr) {
         wizard.fromScan = false;
-        showT9Input(tr(StringId::WIFI_SSID), "", [](const char* ssid) {
+        showT9Input(ui::tr("core.wifi_ssid"), "", [](const char* ssid) {
             strncpy(WifiHandlers::instance().wizard().ssid, ssid,
                     sizeof(WifiHandlers::instance().wizard().ssid) - 1);
             wifiShowAuthMenu();
@@ -472,7 +472,7 @@ static void wifiShowAuthMenu() {
         }
     }
 
-    s_wifiAuthMenu->init(tr(StringId::WIFI_ENCRYPTION), s_wifiAuthItems, WIFI_AUTH_COUNT);
+    s_wifiAuthMenu->init(ui::tr("core.wifi_encryption"), s_wifiAuthItems, WIFI_AUTH_COUNT);
     ViewStack::instance().push(s_wifiAuthMenu);
 }
 
@@ -506,7 +506,7 @@ static void onWifiAuthSelect(uint16_t index, void* userData) {
  * \brief Opens password input view for non-open Wi-Fi networks.
  */
 static void wifiShowPasswordInput() {
-    showT9Input(tr(StringId::WIFI_PASSWORD), "", onWifiPasswordEntered, 64);
+    showT9Input(ui::tr("core.wifi_password"), "", onWifiPasswordEntered, 64);
 }
 
 /**
@@ -528,10 +528,10 @@ static void wifiShowIpModeMenu() {
         s_wifiIpMenu->setOnSelect(onWifiIpModeSelect);
     }
 
-    s_wifiIpItems[WIFI_IP_DHCP] = {tr(StringId::WIFI_DHCP), 0, false, nullptr};
-    s_wifiIpItems[WIFI_IP_STATIC] = {tr(StringId::WIFI_STATIC), 0, false, nullptr};
+    s_wifiIpItems[WIFI_IP_DHCP] = {ui::tr("core.wifi_dhcp"), 0, false, nullptr};
+    s_wifiIpItems[WIFI_IP_STATIC] = {ui::tr("core.wifi_static"), 0, false, nullptr};
 
-    s_wifiIpMenu->init(tr(StringId::WIFI_IP_MODE), s_wifiIpItems, WIFI_IP_COUNT);
+    s_wifiIpMenu->init(ui::tr("core.wifi_ip_mode"), s_wifiIpItems, WIFI_IP_COUNT);
     ViewStack::instance().push(s_wifiIpMenu);
 }
 
@@ -578,7 +578,7 @@ static void onWifiStaticIpEntered(const char* ip) {
         return;
     }
     strncpy(wizard.staticIp, ip, sizeof(wizard.staticIp) - 1);
-    wifiShowIpInputField(tr(StringId::WIFI_GATEWAY), wizard.gateway, sizeof(wizard.gateway), onWifiGatewayEntered);
+    wifiShowIpInputField(ui::tr("core.wifi_gateway"), wizard.gateway, sizeof(wizard.gateway), onWifiGatewayEntered);
 }
 
 /**
@@ -589,11 +589,11 @@ static void onWifiGatewayEntered(const char* gateway) {
     auto& wizard = WifiHandlers::instance().wizard();
     if (!WifiHandlers::isValidIpAddress(gateway)) {
         showToastError("Invalid IP", TOAST_DURATION_MEDIUM_MS);
-        wifiShowIpInputField(tr(StringId::WIFI_GATEWAY), wizard.gateway, sizeof(wizard.gateway), onWifiGatewayEntered);
+        wifiShowIpInputField(ui::tr("core.wifi_gateway"), wizard.gateway, sizeof(wizard.gateway), onWifiGatewayEntered);
         return;
     }
     strncpy(wizard.gateway, gateway, sizeof(wizard.gateway) - 1);
-    wifiShowIpInputField(tr(StringId::WIFI_NETMASK), wizard.netmask, sizeof(wizard.netmask), onWifiNetmaskEntered);
+    wifiShowIpInputField(ui::tr("core.wifi_netmask"), wizard.netmask, sizeof(wizard.netmask), onWifiNetmaskEntered);
 }
 
 /**
@@ -604,7 +604,7 @@ static void onWifiNetmaskEntered(const char* netmask) {
     auto& wizard = WifiHandlers::instance().wizard();
     if (!WifiHandlers::isValidIpAddress(netmask)) {
         showToastError("Invalid IP", TOAST_DURATION_MEDIUM_MS);
-        wifiShowIpInputField(tr(StringId::WIFI_NETMASK), wizard.netmask, sizeof(wizard.netmask), onWifiNetmaskEntered);
+        wifiShowIpInputField(ui::tr("core.wifi_netmask"), wizard.netmask, sizeof(wizard.netmask), onWifiNetmaskEntered);
         return;
     }
     strncpy(wizard.netmask, netmask, sizeof(wizard.netmask) - 1);
@@ -651,7 +651,7 @@ static void wifiShowDetails() {
         char ipBuf[20] = {};
         uint8_t mac[6] = {};
 
-        append("Status: %s\n\n", tr(StringId::WIFI_CONNECTED));
+        append("Status: %s\n\n", ui::tr("core.wifi_connected"));
         append("SSID: %s\n", wifi->getCurrentSsid());
 
         if (wifi->getMacAddress(mac)) {
@@ -663,18 +663,18 @@ static void wifiShowDetails() {
             append("IP: %s\n", ipBuf);
         }
 
-        append("%s: %d dBm\n", tr(StringId::WIFI_SIGNAL), wifi->getRssi());
+        append("%s: %d dBm\n", ui::tr("core.wifi_signal"), wifi->getRssi());
 
     } else if (wifiHandlers.config().valid) {
-        append("Status: %s\n\n", tr(StringId::WIFI_DISCONNECTED));
-        append("=== %s ===\n", tr(StringId::WIFI_SAVED_CONFIG));
+        append("Status: %s\n\n", ui::tr("core.wifi_disconnected"));
+        append("=== %s ===\n", ui::tr("core.wifi_saved_config"));
         append("SSID: %s\n", wifiHandlers.config().ssid);
         append("IP: %s\n", wifiHandlers.config().useDhcp ? "DHCP" : "Static");
     } else {
-        append("%s", tr(StringId::WIFI_NO_CONFIG));
+        append("%s", ui::tr("core.wifi_no_config"));
     }
 
-    showInfo(tr(StringId::WIFI_DETAILS), info);
+    showInfo(ui::tr("core.wifi_details"), info);
 }
 
 /**
@@ -684,31 +684,31 @@ static void wifiNtpSync() {
     auto& wifiHandlers = WifiHandlers::instance();
 
     if (!wifiHandlers.config().valid && !wifiHandlers.isConnected()) {
-        showToastError(tr(StringId::WIFI_NO_CONFIG));
+        showToastError(ui::tr("core.wifi_no_config"));
         return;
     }
 
     bool wasConnected = wifiHandlers.isConnected();
 
     if (!wasConnected) {
-        showToastTask(tr(StringId::WIFI_CONNECTING), 0);
+        showToastTask(ui::tr("core.wifi_connecting"), 0);
         if (!wifiHandlers.connect()) {
             ViewStack::instance().hideModal();
-            showToastError(tr(StringId::WIFI_FAILED));
+            showToastError(ui::tr("core.wifi_failed"));
             return;
         }
         ViewStack::instance().hideModal();
     }
 
-    showToastTask(tr(StringId::NTP_SYNCING), 0);
+    showToastTask(ui::tr("core.ntp_syncing"), 0);
 
     bool synced = wifiHandlers.syncNtp();
     ViewStack::instance().hideModal();
 
     if (synced) {
-        showToastSuccess(tr(StringId::NTP_SUCCESS));
+        showToastSuccess(ui::tr("core.ntp_success"));
     } else {
-        showToastError(tr(StringId::NTP_TIMEOUT));
+        showToastError(ui::tr("core.ntp_timeout"));
     }
 }
 

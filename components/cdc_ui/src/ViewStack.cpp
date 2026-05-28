@@ -12,6 +12,7 @@
  */
 
 #include "cdc_ui/ViewStack.h"
+#include "cdc_core/EventBus.h"
 #include "cdc_hal/IDisplay.h"
 #include "cdc_log.h"
 #include <cstring>
@@ -124,6 +125,7 @@ void ViewStack::hideModal_unlocked() {
 
         IView* view = (depth_ == 0) ? nullptr : stack_[depth_ - 1];
         if (view) {
+            view->onResume();
             view->markDirty();
         }
     }
@@ -202,6 +204,8 @@ IView* ViewStack::at(uint8_t idx) const {
 }
 
 void ViewStack::dispatchKey(char key) {
+    cdc::core::EventBus::instance().publish(cdc::core::EventType::KEY_PRESSED,
+                                            static_cast<uint8_t>(key));
     StackLock lock(mutex_);
     resetInactivityTimer();
 
@@ -280,6 +284,7 @@ void ViewStack::render() {
             return;
         }
         modal_->render(true);
+        modal_->clearDirty();
         if (display) {
             hal::RefreshMode mode = needsFullRefresh_ ? hal::RefreshMode::FULL
                                                       : hal::RefreshMode::PARTIAL;
@@ -293,6 +298,7 @@ void ViewStack::render() {
         return;
     }
     view->render(false);
+    view->clearDirty();
 
     hal::RefreshMode mode = needsFullRefresh_ ? hal::RefreshMode::FULL : hal::RefreshMode::PARTIAL;
     if (display) {

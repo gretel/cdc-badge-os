@@ -1,0 +1,1222 @@
+/**
+ * \file host_api.h
+ * \brief CDC Badge OS plugin host API - canonical C ABI contract.
+ *
+ * Mirrored from cdc-badge-os/components/plugin_manager/include/plugin_manager/host_api.h.
+ * A CI job in both repositories detects drift between the two copies.
+ *
+ * All host functions are imported by the WASM plugin from the `cdc` module.
+ * Plugin lifecycle exports (plugin_init, plugin_on_enter, ...) are declared
+ * in plugin_lifecycle.h.
+ */
+
+#ifndef CDC_BADGE_HOST_API_H
+#define CDC_BADGE_HOST_API_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ------------------------------------------------------------------------- */
+/* API Level                                                                 */
+/* ------------------------------------------------------------------------- */
+
+#define HOST_API_LEVEL_MAJOR  0
+#define HOST_API_LEVEL_MINOR  5
+#define HOST_API_LEVEL_STR    "0.5"
+#define HOST_API_LEVEL_PACKED (((uint32_t)HOST_API_LEVEL_MAJOR << 16) | HOST_API_LEVEL_MINOR)
+
+/* ------------------------------------------------------------------------- */
+/* Return Codes                                                              */
+/* ------------------------------------------------------------------------- */
+
+#define HOST_OK                  0
+#define HOST_ERR_GENERIC        -1
+#define HOST_ERR_INVALID_ARG    -2
+#define HOST_ERR_NO_CAPABILITY  -3
+#define HOST_ERR_NOT_FOUND      -4
+#define HOST_ERR_TIMEOUT        -5
+#define HOST_ERR_NO_MEMORY      -6
+#define HOST_ERR_BUSY           -7
+#define HOST_ERR_NOT_SUPPORTED  -8
+#define HOST_ERR_RMEM_FULL      -9
+
+/**
+ * \defgroup logging Logging
+ * \brief Write structured log lines to the badge serial console.
+ *
+ * Output is routed through the firmware's cdc_log facility so it shows up
+ * on the USB-CDC serial monitor. Use these instead of any platform-native
+ * logging primitive.
+ * \{
+ */
+
+#define LOG_LEVEL_ERROR   0
+#define LOG_LEVEL_WARN    1
+#define LOG_LEVEL_INFO    2
+#define LOG_LEVEL_DEBUG   3
+#define LOG_LEVEL_VERBOSE 4
+
+/// \brief Write a single log line at the given level.
+void host_log    (uint8_t level, const char* tag, const char* msg);
+
+/// \brief Write a labelled hex dump of a binary buffer at debug level.
+void host_log_hex(const char* tag, const char* label, const uint8_t* data, size_t len);
+
+/** \} */
+
+/**
+ * \defgroup time Time / RTC
+ * \brief Access monotonic uptime and the badge real-time clock.
+ *
+ * Use \ref host_uptime_ms for elapsed-time measurements; use the wall-clock
+ * helpers (\ref host_unix_time, \ref host_local_time) only after checking
+ * \ref host_is_time_set.
+ * \{
+ */
+
+struct host_tm {
+    uint16_t year;        /* 1900-3000 */
+    uint8_t  month;       /* 1-12 */
+    uint8_t  day;         /* 1-31 */
+    uint8_t  hour;        /* 0-23 */
+    uint8_t  minute;      /* 0-59 */
+    uint8_t  second;      /* 0-59 */
+    uint8_t  weekday;     /* 0=Sunday */
+};
+
+/// \brief Monotonic milliseconds since boot.
+uint64_t host_uptime_ms        (void);
+
+/// \brief Current Unix timestamp in seconds, or 0 if RTC not set.
+int64_t  host_unix_time        (void);
+
+/// \brief Fill `out` with the current local time broken into fields.
+int      host_local_time       (struct host_tm* out);
+
+/// \brief Configured timezone offset from UTC in seconds.
+int32_t  host_timezone_offset  (void);
+
+/// \brief True when the RTC has been synchronised at least once.
+bool     host_is_time_set      (void);
+
+/** \} */
+
+/**
+ * \defgroup power Power
+ * \brief Battery state, USB connection and charger status.
+ * \{
+ */
+
+#define POWER_SRC_UNKNOWN  0
+#define POWER_SRC_BATTERY  1
+#define POWER_SRC_USB      2
+
+#define CHARGE_NOT_CHARGING 0
+#define CHARGE_PRE_CHARGE   1
+#define CHARGE_FAST         2
+#define CHARGE_DONE         3
+#define CHARGE_FAULT        4
+
+/// \brief Battery voltage in millivolts.
+uint16_t host_battery_mv         (void);
+
+/// \brief Battery state of charge as 0..100 percent.
+uint8_t  host_battery_pct        (void);
+
+/// \brief True when USB VBUS is detected.
+bool     host_is_usb_connected   (void);
+
+/// \brief Active power source - one of POWER_SRC_*.
+uint8_t  host_power_source       (void);
+
+/// \brief Charger state machine value - one of CHARGE_*.
+uint8_t  host_charge_status      (void);
+
+/// \brief True when battery has crossed the low-warning threshold.
+bool     host_is_battery_low     (void);
+
+/// \brief True when battery has crossed the critical-shutdown threshold.
+bool     host_is_battery_critical(void);
+
+/** \} */
+
+/**
+ * \defgroup crypto Crypto
+ * \brief Software crypto primitives and binary-to-text codecs.
+ *
+ * Hashing, AEAD and RNG. Asymmetric key operations live in the
+ * \ref secure_element group instead (they live in TROPIC01).
+ * \{
+ */
+
+/// \brief Fill `buf` with hardware-RNG bytes; may fall back to PRNG.
+int host_random        (uint8_t* buf, size_t len);
+
+/// \brief Fill `buf` with hardware-RNG bytes only; fails without TRNG.
+int host_random_strict (uint8_t* buf, size_t len);
+
+/// \brief SHA-256 hash of `data` into the 32-byte `out`.
+int host_sha256        (const uint8_t* data, size_t len, uint8_t out[32]);
+
+/// \brief HMAC-SHA-256 of `data` under `key` into the 32-byte `out`.
+int host_hmac_sha256   (const uint8_t* key, size_t klen,
+                        const uint8_t* data, size_t dlen, uint8_t out[32]);
+
+/**
+ * \brief AES-256-GCM encrypt.
+ * \param key 32-byte key.
+ * \param iv 12-byte nonce.
+ * \param aad Additional authenticated data (may be NULL when aad_len == 0).
+ * \param pt Plaintext input of pt_len bytes.
+ * \param ct Ciphertext output buffer of at least pt_len bytes.
+ * \param tag 16-byte authentication tag output.
+ */
+int host_aes_gcm_encrypt(const uint8_t* key, const uint8_t* iv,
+                         const uint8_t* aad, size_t aad_len,
+                         const uint8_t* pt, size_t pt_len,
+                         uint8_t* ct, uint8_t tag[16]);
+
+/**
+ * \brief AES-256-GCM decrypt and verify.
+ * \param key 32-byte key.
+ * \param iv 12-byte nonce.
+ * \param aad Additional authenticated data (may be NULL when aad_len == 0).
+ * \param ct Ciphertext input of ct_len bytes.
+ * \param tag 16-byte tag to verify.
+ * \param pt Plaintext output buffer of at least ct_len bytes.
+ */
+int host_aes_gcm_decrypt(const uint8_t* key, const uint8_t* iv,
+                         const uint8_t* aad, size_t aad_len,
+                         const uint8_t* ct, size_t ct_len,
+                         const uint8_t tag[16], uint8_t* pt);
+
+/// \brief Base32-encode `in` into NUL-terminated `out`.
+int host_base32_encode(const uint8_t* in, size_t in_len, char* out, size_t out_size);
+
+/// \brief Base32-decode `in` into raw bytes in `out`.
+int host_base32_decode(const char* in, size_t in_len, uint8_t* out, size_t out_size);
+
+/// \brief Base64-encode `in` into NUL-terminated `out`.
+int host_base64_encode(const uint8_t* in, size_t in_len, char* out, size_t out_size);
+
+/// \brief Base64-decode `in` into raw bytes in `out`.
+int host_base64_decode(const char* in, size_t in_len, uint8_t* out, size_t out_size);
+
+/// \brief Lowercase-hex-encode `in` into NUL-terminated `out`.
+int host_hex_encode   (const uint8_t* in, size_t in_len, char* out, size_t out_size);
+
+/// \brief Hex-decode `in` (case-insensitive) into raw bytes in `out`.
+int host_hex_decode   (const char* in, size_t in_len, uint8_t* out, size_t out_size);
+
+/** \} */
+
+/**
+ * \defgroup secure_element SecureElement / TROPIC01
+ * \brief ECC key slots and retained-memory storage on the TROPIC01.
+ *
+ * ECC slots hold private keys that never leave the chip. Retained-memory
+ * (rmem) slots offer persistent named storage shared across reboots and
+ * plugin reinstalls; declare names in the plugin manifest under
+ * `capabilities.rmem`.
+ * \{
+ */
+
+#define ECC_CURVE_P256    0
+#define ECC_CURVE_ED25519 1
+
+/*
+ * Retained memory (rmem) is allocated by name from a shared plugin pool.
+ * Slots persist across reboot, plugin uninstall, and plugin reinstall as
+ * long as the name remains declared in some installed plugin's
+ * `capabilities.rmem`. Plugins declaring the same name share the same
+ * physical slot (intentional, common scope).
+ *
+ * Name length: max 15 bytes excluding the trailing NUL.
+ */
+
+#define HOST_RMEM_NAME_MAX 15
+
+/**
+ * \brief Read a named retained-memory slot.
+ * \param name NUL-terminated name, max HOST_RMEM_NAME_MAX bytes.
+ * \param buf Output buffer.
+ * \param len In: capacity of buf; out: bytes actually read.
+ */
+int      host_rmem_read_named  (const char* name, uint8_t* buf, size_t* len);
+
+/// \brief Write up to host_rmem_slot_size() bytes into a named rmem slot.
+int      host_rmem_write_named (const char* name, const uint8_t* buf, size_t len);
+
+/// \brief Erase the contents of a named rmem slot.
+int      host_rmem_erase_named (const char* name);
+
+/// \brief True if the named rmem slot currently holds data.
+bool     host_rmem_name_used   (const char* name);
+
+/// \brief Maximum payload bytes per rmem slot.
+uint16_t host_rmem_slot_size   (void);
+
+/// \brief Generate a fresh ECC key on the chip into the given slot.
+int      host_ecc_generate (uint8_t slot, uint8_t curve);
+
+/// \brief Import an externally-generated private key into an ECC slot.
+int      host_ecc_import   (uint8_t slot, const uint8_t* priv, uint8_t curve);
+
+/// \brief Export the public key for the key in `slot`.
+int      host_ecc_pubkey   (uint8_t slot, uint8_t* pub, uint8_t curve);
+
+/// \brief Erase an ECC slot.
+int      host_ecc_delete   (uint8_t slot);
+
+/// \brief True when the ECC slot currently holds a key.
+bool     host_ecc_slot_used(uint8_t slot);
+
+/// \brief ECDSA-sign `msg` with the P-256 key in `slot`; writes 64-byte raw sig.
+int      host_ecdsa_sign   (uint8_t slot, const uint8_t* msg, size_t len, uint8_t sig[64]);
+
+/// \brief Ed25519-sign `msg` with the key in `slot`; writes 64-byte signature.
+int      host_eddsa_sign   (uint8_t slot, const uint8_t* msg, size_t len, uint8_t sig[64]);
+
+/**
+ * \brief Read the TROPIC01 chip serial / identity blob.
+ * \param serial Output buffer.
+ * \param len In: capacity; out: bytes written.
+ */
+int      host_se_chip_id   (uint8_t* serial, size_t* len);
+
+/// \brief Read TROPIC01 firmware versions for the RISC-V CPU and SPECT core.
+int      host_se_fw_version(uint8_t* riscv, uint8_t* spect);
+
+/** \} */
+
+/**
+ * \defgroup http HTTP (streamed)
+ * \brief Make outbound HTTP/HTTPS requests with streaming response reads.
+ *
+ * Opens a handle, lets you stage headers/body, performs the request, then
+ * streams the response in chunks. Always close the handle when done, even
+ * after errors. Requires manifest capability "http".
+ * \{
+ */
+
+#define HTTP_GET    0
+#define HTTP_POST   1
+#define HTTP_PUT    2
+#define HTTP_DELETE 3
+
+/**
+ * \brief Open an HTTP request.
+ * \param method One of HTTP_GET/POST/PUT/DELETE.
+ * \param url Absolute URL including scheme.
+ * \param timeout_ms Connect + response timeout.
+ * \return Handle > 0 on success, negative HostError on failure.
+ */
+int    host_http_open          (uint8_t method, const char* url, uint32_t timeout_ms);
+
+/// \brief Add a request header before perform().
+int    host_http_set_header    (int handle, const char* key, const char* value);
+
+/// \brief Stage a request body before perform().
+int    host_http_set_body      (int handle, const uint8_t* body, size_t len);
+
+/// \brief Send the request and read response headers.
+int    host_http_perform       (int handle);
+
+/// \brief HTTP response status code, or negative on error.
+int    host_http_status        (int handle);
+
+/**
+ * \brief Stream one response chunk into `buf`.
+ * \param out_len Bytes actually read; 0 indicates end of response.
+ */
+int    host_http_read_chunk    (int handle, uint8_t* buf, size_t buf_size, size_t* out_len);
+
+/// \brief Response Content-Length, or 0 when unknown / chunked.
+size_t host_http_content_length(int handle);
+
+/// \brief Release a request handle.
+int    host_http_close         (int handle);
+
+/** \} */
+
+/**
+ * \defgroup wifi WiFi
+ * \brief Request WiFi STA mode and inspect connection state.
+ *
+ * The WiFi radio is shared - acquire it with \ref host_wifi_request before
+ * use and release it as early as possible. Requires manifest capability
+ * "wifi".
+ * \{
+ */
+
+typedef struct {
+    char    ssid[33];
+    uint8_t bssid[6];
+    int8_t  rssi;
+    uint8_t channel;
+    uint8_t auth_mode;
+} wifi_scan_result_t;
+
+/// \brief Request the shared WiFi radio and wait up to `timeout_ms` for join.
+int     host_wifi_request    (uint32_t timeout_ms);
+
+/// \brief Release the WiFi radio held by this plugin.
+int     host_wifi_release    (void);
+
+/// \brief True when WiFi STA is associated and has an IP.
+bool    host_wifi_is_connected(void);
+
+/// \brief Copy the currently joined SSID into `out`.
+int     host_wifi_ssid       (char* out, size_t out_size);
+
+/// \brief Copy the current IPv4 address as dotted decimal into `out`.
+int     host_wifi_ip         (char* out, size_t out_size);
+
+/// \brief Current AP signal strength in dBm.
+int8_t  host_wifi_rssi       (void);
+
+/// \brief Read the station MAC address.
+int     host_wifi_mac        (uint8_t out[6]);
+
+/// \brief Start an asynchronous WiFi scan.
+int     host_wifi_start_scan (void);
+
+/// \brief True when the scan started by host_wifi_start_scan has finished.
+bool    host_wifi_scan_done  (void);
+
+/**
+ * \brief Read results from the last completed scan.
+ * \param count In: capacity of `out`; out: number of entries written.
+ */
+int     host_wifi_scan_results(wifi_scan_result_t* out, size_t* count);
+
+/** \} */
+
+/**
+ * \defgroup ble BLE
+ * \brief Bluetooth Low Energy peripheral and central operations.
+ *
+ * Plugins can publish GATT services as a peripheral and, with the
+ * appropriate capability, scan and talk to remote devices as a central.
+ * \{
+ */
+
+typedef struct {
+    uint8_t  uuid[16];
+    uint8_t  is_primary;
+    uint8_t  reserved[2];
+    uint16_t handle;
+} ble_service_def_t;
+
+typedef struct {
+    uint8_t addr[6];
+    int8_t  rssi;
+    char    name[32];
+} ble_scan_result_t;
+
+/// \brief True when the BLE stack is initialised and advertising or connectable.
+bool    host_ble_is_enabled       (void);
+
+/// \brief Read the local BLE MAC address.
+int     host_ble_mac              (uint8_t out[6]);
+
+/// \brief Copy the local BLE device name into `out`.
+int     host_ble_device_name      (char* out, size_t out_size);
+
+/// \brief Signal strength of the active BLE link in dBm, or 0 when idle.
+int8_t  host_ble_rssi             (void);
+
+/**
+ * \brief Register a GATT service definition for the peripheral role.
+ * \param service_handle_out Receives the assigned service handle.
+ */
+int     host_ble_register_service (const ble_service_def_t* def, uint32_t* service_handle_out);
+
+/// \brief Send a GATT notification on a previously registered characteristic.
+int     host_ble_send_notification(uint32_t char_handle, const uint8_t* data, size_t len);
+
+/// \brief Send a GATT indication (acknowledged notification).
+int     host_ble_send_indication  (uint32_t char_handle, const uint8_t* data, size_t len);
+
+/// \brief Tear down a previously registered GATT service.
+int     host_ble_unregister_service(uint32_t service_handle);
+
+/// \brief Start an asynchronous BLE central scan.
+int     host_ble_scan_start       (void);
+
+/**
+ * \brief Read results from the last BLE central scan.
+ * \param count In: capacity of `out`; out: entries written.
+ */
+int     host_ble_scan_results     (ble_scan_result_t* out, size_t* count);
+
+/// \brief Initiate a BLE central connection to `addr`.
+int     host_ble_connect          (const uint8_t addr[6]);
+
+/**
+ * \brief Read a characteristic value from a connected peer.
+ * \param len In: capacity of `buf`; out: bytes actually read.
+ */
+int     host_ble_read_char        (uint32_t conn, const uint8_t uuid[16],
+                                   uint8_t* buf, size_t* len);
+
+/// \brief Write a characteristic value on a connected peer.
+int     host_ble_write_char       (uint32_t conn, const uint8_t uuid[16],
+                                   const uint8_t* data, size_t len);
+
+/**
+ * \brief Subscribe to notifications/indications on a peer characteristic.
+ * \param action_id Plugin action id fired on each incoming notification.
+ */
+int     host_ble_subscribe        (uint32_t conn, const uint8_t uuid[16], uint32_t action_id);
+
+/// \brief Tear down a BLE central connection.
+int     host_ble_disconnect       (uint32_t conn);
+
+/** \} */
+
+/**
+ * \defgroup nvs NVS (plugin-namespaced)
+ * \brief Persistent key/value storage scoped to the calling plugin.
+ *
+ * Keys live in an NVS namespace derived from the plugin id, so different
+ * plugins cannot collide. Erasing the plugin wipes its namespace.
+ * \{
+ */
+
+/**
+ * \brief Read a binary blob from NVS.
+ * \param len In: capacity of `buf`; out: bytes actually read.
+ */
+int host_nvs_get_blob (const char* key, uint8_t* buf, size_t* len);
+
+/// \brief Write a binary blob to NVS.
+int host_nvs_set_blob (const char* key, const uint8_t* buf, size_t len);
+
+/// \brief Read a uint32 value.
+int host_nvs_get_u32  (const char* key, uint32_t* out);
+
+/// \brief Write a uint32 value.
+int host_nvs_set_u32  (const char* key, uint32_t value);
+
+/// \brief Read a NUL-terminated string.
+int host_nvs_get_str  (const char* key, char* buf, size_t buf_size);
+
+/// \brief Write a NUL-terminated string.
+int host_nvs_set_str  (const char* key, const char* value);
+
+/// \brief Delete a single key.
+int host_nvs_erase    (const char* key);
+
+/// \brief Erase every key in the plugin's namespace.
+int host_nvs_erase_all(void);
+
+/**
+ * \brief Enumerate the keys in the plugin's namespace.
+ * \param out_len In: capacity of `out`; out: bytes written (NUL-separated list).
+ */
+int host_nvs_list_keys(char* out, size_t* out_len);
+
+/** \} */
+
+/**
+ * \defgroup ui_views UI - Views
+ * \brief Push prebuilt UI views onto the system view stack.
+ *
+ * Plugins drive the UI by pushing high-level views (toasts, lists, T9
+ * inputs, sliders, ...) and reacting to action callbacks. Input results
+ * are read back with \ref host_ui_consume_input_text or
+ * \ref host_ui_consume_input_int.
+ * \{
+ */
+
+typedef struct {
+    const char* label;
+    uint8_t     icon;
+    bool        icon_disabled;
+    uint32_t    item_id;
+} ui_item_t;
+
+/* CP437 glyph codes routed straight to Adafruit-GFX. cdc_log + plugin SDKs
+ * mirror these. UI_ICON_NONE renders a default bullet point. */
+#define UI_ICON_NONE            0
+#define UI_ICON_SUCCESS         1    /* smiley                             */
+#define UI_ICON_ERROR           2    /* dark smiley                        */
+#define UI_ICON_HEART           3    /* favorite                           */
+#define UI_ICON_DIAMOND         4
+#define UI_ICON_CLUB            5
+#define UI_ICON_SPADE           6
+#define UI_ICON_BULLET          7
+#define UI_ICON_INVERSE_BULLET  8    /* remove / delete                    */
+#define UI_ICON_CIRCLE          9    /* info / hollow circle               */
+#define UI_ICON_INVERSE_CIRCLE  0x0A
+#define UI_ICON_MALE            0x0B
+#define UI_ICON_FEMALE          0x0C
+#define UI_ICON_MUSIC           0x0D
+#define UI_ICON_NOTES           0x0E /* scene / playlist                   */
+#define UI_ICON_SUN             0x0F /* brightness / light                 */
+#define UI_ICON_PLAY            0x10 /* action / switch / submenu          */
+#define UI_ICON_REVERSE_PLAY    0x11 /* back                               */
+#define UI_ICON_UPDOWN          0x12 /* cover / vertical adjust            */
+#define UI_ICON_ALERT           0x13 /* double exclamation                 */
+#define UI_ICON_PARAGRAPH       0x14
+#define UI_ICON_SECTION         0x15
+#define UI_ICON_BAR             0x16 /* sensor / list / count              */
+#define UI_ICON_UPDOWN_BAR      0x17
+#define UI_ICON_ARROW_UP        0x18
+#define UI_ICON_ARROW_DOWN      0x19
+#define UI_ICON_ARROW_RIGHT     0x1A
+#define UI_ICON_ARROW_LEFT      0x1B
+#define UI_ICON_ANGLE           0x1C
+#define UI_ICON_LEFTRIGHT       0x1D
+#define UI_ICON_TRIANGLE_UP     0x1E
+#define UI_ICON_TRIANGLE_DOWN   0x1F
+
+/* Semantic aliases. Plugins are free to use either the CP437 name or
+ * a semantic one - they map to the same byte. */
+#define UI_ICON_INFO    UI_ICON_CIRCLE
+#define UI_ICON_TASK    UI_ICON_PLAY
+#define UI_ICON_REMOVE  UI_ICON_INVERSE_BULLET
+#define UI_ICON_LIGHT   UI_ICON_SUN
+#define UI_ICON_COVER   UI_ICON_UPDOWN
+#define UI_ICON_SENSOR  UI_ICON_BAR
+#define UI_ICON_SWITCH  UI_ICON_PLAY
+#define UI_ICON_SCENE   UI_ICON_NOTES
+#define UI_ICON_BACK    UI_ICON_REVERSE_PLAY
+
+/// \brief Show a transient toast overlay.
+int host_ui_push_toast      (const char* text, uint8_t icon, uint16_t duration_ms);
+
+/// \brief Show a blocking message view that auto-dismisses after `duration_ms`.
+int host_ui_push_message    (const char* text, uint8_t icon, uint32_t duration_ms);
+
+/**
+ * \brief Show a Y/N confirmation.
+ * \param action_id Fired with idx = 1 on Y, idx = 0 on N.
+ */
+int host_ui_push_confirm    (const char* text, uint8_t icon, uint32_t action_id);
+
+/// \brief Show a scrollable info screen with title and body.
+int host_ui_push_info       (const char* title, const char* body);
+
+/**
+ * \brief Show a context menu.
+ * \param select_action_id Fired with idx = items[i].item_id on selection.
+ */
+int host_ui_push_context_menu(const char* title, const ui_item_t* items, uint16_t count,
+                              uint32_t select_action_id);
+
+/**
+ * \brief Show a T9-style text entry.
+ * \param initial Pre-filled text, or NULL/empty for blank.
+ * \param action_id Fired on commit; consume the value via host_ui_consume_input_text.
+ */
+int host_ui_push_t9_input   (const char* title, const char* initial,
+                             uint16_t max_len, uint32_t action_id);
+
+/**
+ * \brief Show a password entry (masked T9).
+ * \param initial Pre-filled text, or NULL/empty for blank.
+ */
+int host_ui_push_password   (const char* title, const char* initial,
+                             uint16_t max_len, uint32_t action_id);
+
+/**
+ * \brief Show a numeric PIN entry.
+ * \param max_attempts 0 for unlimited.
+ */
+int host_ui_push_pin_entry  (const char* title, uint8_t max_len, uint8_t max_attempts,
+                             uint32_t action_id);
+
+/// \brief Show an integer slider; consume the picked value via host_ui_consume_input_int.
+int host_ui_push_slider     (const char* title, int32_t min, int32_t max, int32_t init,
+                             int32_t step, const char* unit, uint32_t action_id);
+
+/* RGB color picker. On Y the host fires action_id with idx = packed RGB
+ * (0xRRGGBB) and user_data = 1. On N the action_id is not fired (view pops).
+ * Read the packed value via host_ui_consume_input_int(). */
+/// \brief Show an RGB color picker.
+int host_ui_push_color_picker(uint8_t initial_r, uint8_t initial_g, uint8_t initial_b,
+                              uint32_t action_id);
+
+/// \brief Show a date picker.
+int host_ui_push_date       (const char* title, uint8_t d, uint8_t m, uint16_t y,
+                             uint32_t action_id);
+
+/// \brief Show a time-of-day picker.
+int host_ui_push_time       (const char* title, uint8_t h, uint8_t m, uint32_t action_id);
+
+/**
+ * \brief Show a list view.
+ * \param select_action_id Fired on item select with idx = items[i].item_id.
+ * \param menu_action_id Fired when the user opens the per-item context menu; 0 to disable.
+ */
+int host_ui_push_list       (const char* title, const ui_item_t* items, uint16_t count,
+                             uint32_t select_action_id, uint32_t menu_action_id);
+
+/* Replace the plugin's currently-top list view with a fresh one. Falls back
+ * to a plain push when the plugin has no list on top (e.g. on first call).
+ * Use this for "refresh after toggle" patterns so the view stack does not
+ * grow on every action. */
+/// \brief Replace the plugin's top list view in place; falls back to push when none.
+int host_ui_replace_list    (const char* title, const ui_item_t* items, uint16_t count,
+                             uint32_t select_action_id, uint32_t menu_action_id);
+
+/* Override the footer hint for the plugin's current top view (list, confirm,
+ * T9, pin, slider, date or time). Pass NULL or an empty string to fall back
+ * to the view's default hint. The text is copied internally so the caller
+ * can free it after the call returns. Returns HOST_ERR_NOT_FOUND if the top
+ * view is not owned by the plugin runtime. */
+/// \brief Override the footer hint of the plugin's current top view.
+int host_ui_set_view_footer (const char* hint);
+
+/// \brief Override the empty-state text shown by an empty list view.
+int host_ui_set_view_empty  (const char* text);
+
+/// \brief Pop the topmost view.
+int host_ui_pop                (void);
+
+/// \brief Pop views until the plugin's first view is on top.
+int host_ui_pop_to_plugin      (void);
+
+/// \brief Force a repaint of the current view.
+int host_ui_repaint            (void);
+
+/// \brief Read text input committed by the most recent input view.
+int host_ui_consume_input_text (char* out, size_t out_size);
+
+/// \brief Read integer input committed by the most recent input view.
+int host_ui_consume_input_int  (int32_t* out);
+
+/// \brief Claim exclusive UI ownership (block other plugins from pushing views).
+int host_ui_acquire_exclusive  (void);
+
+/// \brief Release a previously acquired exclusive UI lock.
+int host_ui_release_exclusive  (void);
+
+/**
+ * \brief Arm an inactivity timer for the plugin's current view.
+ * \param action_id Fired when no input arrives within `timeout_ms`.
+ */
+int host_ui_set_inactivity     (uint32_t timeout_ms, uint32_t action_id);
+
+/*
+ * Blink the badge backlight as a visual "look at me" signal. Count is clamped
+ * to 1..10, period_ms (each off- and on-phase) to 50..1000. Use 0 for either
+ * argument to take the default (2 cycles, 150 ms). Blocks the calling task
+ * for `2 * count * period_ms` milliseconds; the underlying LEDC PWM is
+ * thread-safe so no framebuffer ordering is involved.
+ */
+/**
+ * \brief Blink the backlight as a visual identification signal.
+ * \param count Number of on/off cycles, clamped to 1..10 (0 = default 2).
+ * \param period_ms Duration of each phase, clamped to 50..1000 (0 = default 150).
+ */
+int host_ui_wink               (uint8_t count, uint16_t period_ms);
+
+/** \} */
+
+/**
+ * \defgroup ui_canvas UI - Canvas view
+ * \brief Plugin-drawn custom views with inline interactive widgets.
+ *
+ * Push one canvas, then issue draw commands and add widgets that the host
+ * routes key events to. Commit when ready to refresh the display.
+ * \{
+ */
+
+/* Canvas widget event subtypes used as the user_data on the widget callback. */
+#define CANVAS_WIDGET_CHANGED   1
+#define CANVAS_WIDGET_COMMITTED 2
+#define CANVAS_WIDGET_CANCELLED 3
+
+/**
+ * \brief Push a new canvas view.
+ * \param key_action_id Fired on raw key events not consumed by a focused widget.
+ * \param widget_action_id Fired for widget interaction events (see CANVAS_WIDGET_*).
+ */
+int host_view_canvas_push          (const char* title, uint32_t key_action_id,
+                                    uint32_t widget_action_id);
+
+/// \brief Read the drawable body region (excluding header/footer).
+int host_view_canvas_get_body_size (uint16_t* w, uint16_t* h);
+
+/// \brief Override the footer hint of the canvas.
+int host_view_canvas_set_footer    (const char* hint);
+
+/// \brief Clear all draw state and widgets.
+int host_view_canvas_clear         (void);
+
+/// \brief Set text size multiplier (Adafruit-GFX semantics).
+int host_view_canvas_set_text_size (uint8_t size);
+
+#define HOST_FONT_BUILTIN   0  ///< Adafruit-GFX 6x8; CP437 codepoints for umlauts.
+#define HOST_FONT_BOLD_9PT  1  ///< FreeMonoBold 9pt; Latin-1 indexed.
+#define HOST_FONT_BOLD_12PT 2  ///< FreeMonoBold 12pt; Latin-1 indexed.
+#define HOST_FONT_BOLD_18PT 3  ///< FreeMonoBold 18pt; ASCII only.
+#define HOST_FONT_BOLD_24PT 4  ///< FreeMonoBold 24pt; ASCII only.
+#define HOST_FONT_COUNT     5  ///< Number of defined font ids.
+
+/**
+ * \brief Switch the canvas font to one of the canonical HOST_FONT_* ids.
+ *
+ * Persists across draw calls until the next \ref host_view_canvas_clear or
+ * a further set_font call. The 8b custom fonts (HOST_FONT_BOLD_9PT/12PT)
+ * are Latin-1 indexed; pass Latin-1 bytes if you need umlauts. The builtin
+ * 6x8 font (HOST_FONT_BUILTIN) holds umlauts at their CP437 codepoints.
+ *
+ * \param font_id One of HOST_FONT_*.
+ * \return HOST_OK on success, HOST_ERR_INVALID_ARG for out-of-range ids.
+ */
+int host_view_canvas_set_font      (uint8_t font_id);
+
+/**
+ * \brief Pick the largest HOST_FONT_* whose rendered \p text fits within
+ *        \p max_width_px. Candidates are evaluated in array order; sort
+ *        them from largest to smallest. Falls back to the last entry when
+ *        nothing fits.
+ *
+ * Pure measurement; does not change canvas state. Pair with
+ * \ref host_view_canvas_set_font to apply the picked font.
+ *
+ * \param text Null-terminated string to measure.
+ * \param max_width_px Pixel budget.
+ * \param candidates Array of HOST_FONT_* ids.
+ * \param count Number of entries in \p candidates.
+ * \param out_font_id Receives the chosen font id.
+ * \return HOST_OK on success, HOST_ERR_INVALID_ARG for empty input.
+ */
+int host_text_pick_font_that_fits  (const char* text, int16_t max_width_px,
+                                    const uint8_t* candidates, uint32_t count,
+                                    uint8_t* out_font_id);
+
+/// \brief Switch between normal and inverted (white on black) text.
+int host_view_canvas_set_text_color(bool inverted);
+
+/// \brief Draw text at (x, y) using the current text size/colour.
+int host_view_canvas_draw_text     (int16_t x, int16_t y, const char* text);
+
+/**
+ * \brief Draw text within a horizontal box.
+ * \param align 0 = left, 1 = center, 2 = right.
+ */
+int host_view_canvas_draw_text_aligned(int16_t x, int16_t y, int16_t w,
+                                       const char* text, uint8_t align);
+
+/// \brief Draw a rectangle outline or filled rectangle.
+int host_view_canvas_draw_rect     (int16_t x, int16_t y, int16_t w, int16_t h, bool filled);
+
+/// \brief Invert all pixels inside the rectangle.
+int host_view_canvas_invert_rect   (int16_t x, int16_t y, int16_t w, int16_t h);
+
+/// \brief Draw a horizontal line.
+int host_view_canvas_hline         (int16_t x, int16_t y, int16_t w);
+
+/// \brief Draw a vertical line.
+int host_view_canvas_vline         (int16_t x, int16_t y, int16_t h);
+
+/**
+ * \brief Flush draw state to the panel.
+ * \param full_refresh true to force a full e-paper refresh, false for partial.
+ */
+int host_view_canvas_commit        (bool full_refresh);
+
+/// \brief Add an integer slider widget bound to `widget_id`.
+int host_view_canvas_add_slider    (uint32_t widget_id, int32_t min, int32_t max,
+                                    int32_t initial, int32_t step);
+
+/// \brief Add a T9 text input widget bound to `widget_id`.
+int host_view_canvas_add_text      (uint32_t widget_id, uint16_t max_len, const char* initial);
+
+/// \brief Add a focusable button widget bound to `widget_id`.
+int host_view_canvas_add_button    (uint32_t widget_id);
+
+/// \brief Remove a widget previously added to the canvas.
+int host_view_canvas_remove_widget (uint32_t widget_id);
+
+/// \brief Set the integer value of a slider widget.
+int host_view_canvas_set_value     (uint32_t widget_id, int32_t value);
+
+/// \brief Read the integer value of a slider widget.
+int host_view_canvas_get_value     (uint32_t widget_id, int32_t* out);
+
+/// \brief Set the text of a text-input widget.
+int host_view_canvas_set_text      (uint32_t widget_id, const char* text);
+
+/// \brief Read the text of a text-input widget.
+int host_view_canvas_get_text      (uint32_t widget_id, char* out, size_t cap);
+
+/// \brief Move keyboard focus to the given widget.
+int host_view_canvas_set_focus     (uint32_t widget_id);
+
+/// \brief Read the currently focused widget id, 0 if none.
+int host_view_canvas_get_focus     (uint32_t* out);
+
+/**
+ * \brief Configure key auto-repeat timing for the canvas.
+ * \param initial_ms Delay before the first repeat.
+ * \param repeat_ms Period between subsequent repeats.
+ */
+int host_view_canvas_set_key_repeat(uint16_t initial_ms, uint16_t repeat_ms);
+
+/** \} */
+
+/**
+ * \defgroup ui_lowlevel UI - Low-Level GFX
+ * \brief Direct framebuffer drawing for advanced plugins.
+ *
+ * Opt-in via the manifest capability "display_lowlevel". Bypasses the view
+ * system entirely; call \ref host_display_flush to push pixels to the panel.
+ * \{
+ */
+
+/// \brief Display width in pixels.
+uint16_t host_display_width    (void);
+
+/// \brief Display height in pixels.
+uint16_t host_display_height   (void);
+
+/// \brief Clear the framebuffer to background.
+int      host_display_clear    (void);
+
+/// \brief Set a single pixel.
+int      host_display_draw_pixel(int16_t x, int16_t y, uint16_t color);
+
+/// \brief Draw a line between two points.
+int      host_display_draw_line (int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+                                 uint16_t color);
+
+/// \brief Draw a rectangle outline.
+int      host_display_draw_rect (int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
+
+/// \brief Draw a filled rectangle.
+int      host_display_fill_rect (int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
+
+/// \brief Draw text using the default GFX font.
+int      host_display_draw_text (int16_t x, int16_t y, const char* text, uint8_t size,
+                                 uint16_t color);
+
+/// \brief Push the framebuffer to the panel using the given refresh mode.
+int      host_display_flush     (uint8_t refresh_mode);
+
+/// \brief True while the panel is processing a previous refresh.
+bool     host_display_is_busy   (void);
+
+/** \} */
+
+/**
+ * \defgroup i18n I18n
+ * \brief Look up translated strings.
+ *
+ * Plugins ship per-language tables in their manifest; \ref host_i18n_tr_key
+ * resolves keys against the plugin table, and \ref host_i18n_tr_core
+ * resolves against the firmware's core string table.
+ * \{
+ */
+
+#define HOST_LANG_EN 0
+#define HOST_LANG_DE 1
+
+/**
+ * \brief Translate a plugin-local key into the current language.
+ * \param out_cap Capacity of `out`; the result is NUL-terminated.
+ */
+int      host_i18n_tr_key          (const char* key,   char* out, uint32_t out_cap);
+
+/// \brief Read a metadata field (name, description, ...) from the plugin manifest.
+int      host_i18n_tr_meta         (const char* field, char* out, uint32_t out_cap);
+
+/// \brief Translate a `core.*` key from the firmware string table.
+int      host_i18n_tr_core         (const char* key,   char* out, uint32_t out_cap);
+
+/// \brief Active language code (HOST_LANG_*).
+uint8_t  host_i18n_current_language(void);
+
+/** \} */
+
+/**
+ * \defgroup events EventBus
+ * \brief Subscribe to system events and publish module events.
+ *
+ * Subscriptions are dispatched as plugin actions. Background-capable
+ * plugins receive events even when not on screen.
+ * \{
+ */
+
+#define EVENT_KEY_PRESSED       (1u <<  0)
+#define EVENT_KEY_RELEASED      (1u <<  1)
+#define EVENT_KEY_LONG_PRESS    (1u <<  2)
+#define EVENT_POWER_USB_CONN    (1u <<  3)
+#define EVENT_POWER_USB_DISCONN (1u <<  4)
+#define EVENT_POWER_CHARGING    (1u <<  5)
+#define EVENT_POWER_BATT_LOW    (1u <<  6)
+#define EVENT_POWER_BATT_CRIT   (1u <<  7)
+#define EVENT_SYSTEM_UNLOCK     (1u <<  8)
+#define EVENT_SYSTEM_LOCK       (1u <<  9)
+#define EVENT_SYSTEM_SLEEP      (1u << 10)
+#define EVENT_SYSTEM_WAKE       (1u << 11)
+#define EVENT_BLE_CONNECTED     (1u << 12)
+#define EVENT_BLE_DISCONNECTED  (1u << 13)
+#define EVENT_TIMER_TICK        (1u << 14)
+#define EVENT_LANGUAGE_CHANGED  (1u << 15)
+#define EVENT_MODULE_EVENT      (1u << 16)
+
+/**
+ * \brief Subscribe to one or more events.
+ * \param event_mask Bitwise OR of EVENT_* flags.
+ * \param action_id Plugin action invoked when any subscribed event fires.
+ * \return Subscription id > 0, or negative HostError.
+ */
+int host_event_subscribe  (uint32_t event_mask, uint32_t action_id);
+
+/// \brief Cancel a subscription returned by host_event_subscribe.
+int host_event_unsubscribe(uint32_t subscription_id);
+
+/// \brief Publish an EVENT_MODULE_EVENT carrying `subtype` and `value`.
+int host_event_publish    (uint32_t module_event_subtype, uint32_t value);
+
+/** \} */
+
+/**
+ * \defgroup keypad Keypad
+ * \brief Direct polling of the 12-button keypad.
+ * \{
+ */
+
+#define KEY_0 0
+#define KEY_1 1
+#define KEY_2 2
+#define KEY_3 3
+#define KEY_4 4
+#define KEY_5 5
+#define KEY_6 6
+#define KEY_7 7
+#define KEY_8 8
+#define KEY_9 9
+#define KEY_Y 10
+#define KEY_N 11
+
+/// \brief True while `key` is currently held down.
+bool host_key_pressed     (uint8_t key);
+
+/**
+ * \brief Pop the next queued key press, if any.
+ * \param out_key Receives the KEY_* code on success.
+ * \return HOST_OK when a key was returned, HOST_ERR_NOT_FOUND when the queue was empty.
+ */
+int  host_key_consume_next(uint8_t* out_key);
+
+/** \} */
+
+/**
+ * \defgroup usb_cdc USB CDC
+ * \brief Write raw bytes to the USB CDC serial endpoint.
+ * \{
+ */
+
+/// \brief Write raw bytes to the USB-CDC TX stream.
+int host_usb_cdc_write(const uint8_t* data, size_t len);
+
+/** \} */
+
+/**
+ * \defgroup sysinfo System Info
+ * \brief Query firmware identity and feature gating.
+ * \{
+ */
+
+/// \brief True when the firmware was built with the given feature id enabled.
+bool host_feature_enabled       (uint16_t feature_id);
+
+/// \brief Copy the firmware semver string into `out`.
+int  host_get_firmware_version  (char* out, size_t out_size);
+
+/// \brief Copy the build profile name (e.g. "release", "debug") into `out`.
+int  host_get_build_profile     (char* out, size_t out_size);
+
+/** \} */
+
+/**
+ * \defgroup strings Strings (Display normalisation)
+ * \brief Convert web payloads into single-byte display characters.
+ *
+ * Different display fonts use different codepage layouts:
+ *   - The GFX builtin glcdfont (active after `setFont(nullptr)`) uses
+ *     CP437 - umlauts sit at 0x84/0x94/0x81 (a/o/u), 0xE1 (sz).
+ *   - The FreeMonoBold*pt8b fonts use Latin-1 - the same umlauts sit at
+ *     0xE4/0xF6/0xFC/0xDF.
+ *
+ * Plugins call this on data sourced from the web (RSS bodies, REST JSON,
+ * HA entity names) before handing it to a UI push function. The
+ * `target` parameter picks the right codepage for the rendering context.
+ * Calling it on already-normalised strings is harmless.
+ * \{
+ */
+
+/// Target codepage for host_str_to_display().
+#define HOST_STR_TARGET_CP437   0  /* GFX builtin glcdfont (default after splash) */
+#define HOST_STR_TARGET_LATIN1  1  /* FreeMonoBold*pt8b fonts (Latin-1 indexed)   */
+
+/// \brief Decode HTML entities + UTF-8 in `in` into single-byte display
+///        characters in `out`.
+///
+/// `target` selects the output codepage so the result is valid for the
+/// active GFX font without further conversion. Unknown codepoints are
+/// dropped. Truncates if the result would exceed `out_size - 1` bytes.
+/// Output is always NUL-terminated.
+/// \param in       Source string (UTF-8 with optional HTML entities).
+/// \param out      Destination buffer.
+/// \param out_size Capacity of `out` in bytes (including the NUL).
+/// \param target   One of HOST_STR_TARGET_*.
+/// \return HOST_OK on success, HOST_ERR_INVALID_ARG when inputs are NULL or `out_size==0`.
+int host_str_to_display(const char* in, char* out, size_t out_size, uint32_t target);
+
+/** \} */
+
+/**
+ * \defgroup gpio Hardware: GPIO / PWM / ADC / I2C / SAO
+ * \brief Direct access to user-accessible GPIO, ADC, I2C and the SAO EEPROM.
+ *
+ * Pin usage must be declared in the manifest (`capabilities.gpio_pins`,
+ * `pwm_pins`, `adc_pins`). Conflicting claims fail with HOST_ERR_BUSY.
+ * \{
+ */
+
+#define GPIO_DIR_IN     0
+#define GPIO_DIR_OUT    1
+#define GPIO_DIR_OUT_OD 2
+
+#define GPIO_PULL_NONE  0
+#define GPIO_PULL_UP    1
+#define GPIO_PULL_DOWN  2
+
+/// \brief Configure pin direction (one of GPIO_DIR_*).
+int host_gpio_set_direction(uint8_t pin, uint8_t direction);
+
+/// \brief Configure internal pull resistor (one of GPIO_PULL_*).
+int host_gpio_set_pull     (uint8_t pin, uint8_t pull);
+
+/// \brief Drive a digital output high/low.
+int host_gpio_write        (uint8_t pin, bool level);
+
+/// \brief Sample a digital input.
+int host_gpio_read         (uint8_t pin, bool* level);
+
+/// \brief Release the pin claim so other plugins can use it.
+int host_gpio_release      (uint8_t pin);
+
+/**
+ * \brief Start LEDC PWM on `pin`.
+ * \param duty_per_mille Duty cycle in 0..1000 (per-mille resolution).
+ */
+int host_gpio_pwm_start    (uint8_t pin, uint32_t freq_hz, uint16_t duty_per_mille);
+
+/// \brief Update PWM duty without restarting the timer.
+int host_gpio_pwm_set_duty (uint8_t pin, uint16_t duty_per_mille);
+
+/// \brief Stop PWM and release the LEDC channel.
+int host_gpio_pwm_stop     (uint8_t pin);
+
+/**
+ * \brief Single-shot ADC read.
+ * \param raw Raw ADC count, or NULL to skip.
+ * \param millivolt Calibrated voltage in mV, or NULL to skip.
+ */
+int host_adc_read          (uint8_t pin, uint16_t* raw, uint16_t* millivolt);
+
+/// \brief I2C write transaction.
+int host_i2c_write         (uint8_t bus, uint8_t addr, const uint8_t* data, size_t len);
+
+/// \brief I2C read transaction.
+int host_i2c_read          (uint8_t bus, uint8_t addr, uint8_t* data, size_t len);
+
+/// \brief I2C write-then-read transaction with repeated start.
+int host_i2c_write_read    (uint8_t bus, uint8_t addr,
+                            const uint8_t* wr, size_t wr_len,
+                            uint8_t* rd, size_t rd_len);
+
+/**
+ * \brief Scan the I2C bus for responding addresses.
+ * \param count In: capacity of `found_addrs`; out: number of devices found.
+ */
+int host_i2c_scan          (uint8_t bus, uint8_t* found_addrs, size_t* count);
+
+/// \brief Read from the SAO addon EEPROM at byte `offset`.
+int host_sao_eeprom_read   (uint16_t offset, uint8_t* buf, size_t len);
+
+/// \brief Write to the SAO addon EEPROM at byte `offset`.
+int host_sao_eeprom_write  (uint16_t offset, const uint8_t* buf, size_t len);
+
+/** \} */
+
+/**
+ * \defgroup pixel_strip Addressable pixel strip
+ * \brief WS2811/WS2812/WS2813/SK6812 strip via RMT.
+ *
+ * The host owns one global strip handle keyed to the (gpio_pin, num_pixels,
+ * format) tuple given to the first successful init. Re-init with the same
+ * tuple is a no-op; with a different tuple the previous handle is replaced.
+ * Requires manifest capability "pixel_strip".
+ * \{
+ */
+
+#define PIXEL_FORMAT_GRB  0  /* WS2812/WS2813/SK6812 */
+#define PIXEL_FORMAT_RGB  1
+#define PIXEL_FORMAT_GRBW 2  /* SK6812 RGBW (white byte = 0 for plugin-side use) */
+#define PIXEL_FORMAT_RGBW 3
+
+/// \brief Initialise or reconfigure the global pixel strip.
+int      host_pixel_strip_init    (uint8_t gpio_pin, uint16_t num_pixels, uint8_t format);
+
+/// \brief Tear down the global pixel strip.
+int      host_pixel_strip_deinit  (void);
+
+/// \brief Set one pixel's RGB colour in the strip buffer.
+int      host_pixel_strip_set     (uint16_t index, uint8_t r, uint8_t g, uint8_t b);
+
+/// \brief Fill every pixel with the same RGB colour.
+int      host_pixel_strip_fill    (uint8_t r, uint8_t g, uint8_t b);
+
+/// \brief Clear every pixel to off (0, 0, 0).
+int      host_pixel_strip_clear   (void);
+
+/// \brief Push the strip buffer out over the RMT bus.
+int      host_pixel_strip_refresh (void);
+
+/// \brief Number of pixels the strip was initialised with.
+uint16_t host_pixel_strip_length  (void);
+
+/// \brief True when the strip has been successfully initialised.
+bool     host_pixel_strip_ready   (void);
+
+/** \} */
+
+/**
+ * \defgroup lockscreen Lockscreen quick-action slot
+ * \brief Register a single lockscreen quick-action for background plugins.
+ *
+ * A plugin may register exactly one item that appears in the lockscreen
+ * context menu (opened by KEY_BACK). When the user selects it, the plugin's
+ * `plugin_on_action(action_id, 0, 0)` fires. The label is an i18n key
+ * resolved per-language via \ref host_i18n_tr_key.
+ * \{
+ */
+
+/// \brief Publish (or replace) the plugin's lockscreen quick-action.
+int host_lockscreen_register_action  (const char* label_key, uint32_t action_id);
+
+/// \brief Remove the plugin's lockscreen quick-action.
+int host_lockscreen_unregister_action(void);
+
+/** \} */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* CDC_BADGE_HOST_API_H */

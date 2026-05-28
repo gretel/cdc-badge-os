@@ -8,9 +8,7 @@
  * Uses Gemalto VID/PID for libccid whitelist compatibility
  */
 
-#ifndef CCID_H
-#define CCID_H
-
+#pragma once
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -94,4 +92,3 @@ bool ccid_card_present(void);
 }
 #endif
 
-#endif // CCID_H

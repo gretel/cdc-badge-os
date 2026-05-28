@@ -1,9 +1,7 @@
 // CTAP2 Protocol Implementation (FIDO2)
 // Handles CBOR-encoded CTAP2 commands
 
-#ifndef CTAP2_H
-#define CTAP2_H
-
+#pragma once
 #include <stdint.h>
 #include <stdbool.h>
 #include "fido2.h"
@@ -281,4 +279,3 @@ uint8_t ctap2_selection(uint8_t *response, uint16_t *response_len);
 }
 #endif
 
-#endif // CTAP2_H

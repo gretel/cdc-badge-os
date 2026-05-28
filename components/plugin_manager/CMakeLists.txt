@@ -1,0 +1,60 @@
+# Plugin Manager - loads WASM plugins from the /plugins FAT-FS partition,
+# instantiates them in the WAMR runtime, and routes host API calls.
+
+idf_component_register(
+    SRCS
+        "src/PluginManager.cpp"
+        "src/PluginStorage.cpp"
+        "src/PluginManifest.cpp"
+        "src/CapabilityChecker.cpp"
+        "src/Prerequisites.cpp"
+        "src/PluginListView.cpp"
+        "src/PluginInfoView.cpp"
+        "src/Plugin.cpp"
+        "src/WamrImports.cpp"
+        "src/plugin_log_bridge.cpp"
+        "src/host_api_log.cpp"
+        "src/host_api_time.cpp"
+        "src/host_api_power.cpp"
+        "src/host_api_ui.cpp"
+        "src/host_api_ui_views.cpp"
+        "src/host_api_canvas.cpp"
+        "src/PluginUiState.cpp"
+        "src/host_api_i18n.cpp"
+        "src/host_api_nvs.cpp"
+        "src/host_api_event.cpp"
+        "src/host_api_gpio.cpp"
+        "src/host_api_wifi.cpp"
+        "src/host_api_http.cpp"
+        "src/host_api_crypto.cpp"
+        "src/host_api_se.cpp"
+        "src/host_api_sysinfo.cpp"
+        "src/host_api_ble.cpp"
+        "src/host_api_pixel_strip.cpp"
+        "src/host_api_lockscreen.cpp"
+        "src/host_api_strings.cpp"
+        "src/host_api_stubs.cpp"
+        "src/PluginSerialCommands.cpp"
+        "src/GpioSerialCommands.cpp"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        cdc_core
+        cdc_hal
+        cdc_log
+        cdc_ui
+        cdc_views
+        cdc_os_ui
+        serial_cmd
+        wamr_runtime
+        fatfs
+        nvs_flash
+        json
+        esp_timer
+        driver
+        esp_adc
+        esp_http_client
+        esp-tls
+        mbedtls
+        espressif__led_strip
+)

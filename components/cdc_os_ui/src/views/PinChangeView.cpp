@@ -90,9 +90,9 @@ char* PinChangeView::getCurrentBuffer() {
  */
 const char* PinChangeView::getStepTitle() const {
     switch (step_) {
-        case Step::CURRENT_PIN: return tr(StringId::CURRENT_PIN);
-        case Step::NEW_PIN: return tr(StringId::NEW_PIN);
-        case Step::CONFIRM_PIN: return tr(StringId::CONFIRM_PIN);
+        case Step::CURRENT_PIN: return ui::tr("core.current_pin");
+        case Step::NEW_PIN: return ui::tr("core.new_pin");
+        case Step::CONFIRM_PIN: return ui::tr("core.confirm_pin");
     }
     return "";
 }
@@ -152,7 +152,7 @@ void PinChangeView::confirmStep() {
         case Step::CURRENT_PIN: {
             // Verify current PIN
             if (length_ < minLength_) {
-                showMessage(tr(StringId::PIN_TOO_SHORT));
+                showMessage(ui::tr("core.pin_too_short"));
                 clearBuffer();
                 return;
             }
@@ -161,9 +161,9 @@ void PinChangeView::confirmStep() {
             bool blocked = onBlocked_ ? onBlocked_() : core::PinManager::instance().isBadgeBlocked();
             if (!ok) {
                 if (blocked) {
-                    showMessage(tr(StringId::LOCKED_OUT));
+                    showMessage(ui::tr("core.locked_out"));
                 } else {
-                    showMessage(tr(StringId::WRONG_PIN));
+                    showMessage(ui::tr("core.wrong_pin"));
                 }
                 clearBuffer();
                 return;
@@ -180,7 +180,7 @@ void PinChangeView::confirmStep() {
 
         case Step::NEW_PIN: {
             if (length_ < minLength_) {
-                showMessage(tr(StringId::PIN_TOO_SHORT));
+                showMessage(ui::tr("core.pin_too_short"));
                 clearBuffer();
                 return;
             }
@@ -196,14 +196,14 @@ void PinChangeView::confirmStep() {
 
         case Step::CONFIRM_PIN: {
             if (length_ < minLength_) {
-                showMessage(tr(StringId::PIN_TOO_SHORT));
+                showMessage(ui::tr("core.pin_too_short"));
                 clearBuffer();
                 return;
             }
 
             // Check if PINs match
             if (strcmp(newPin_, confirmPin_) != 0) {
-                showMessage(tr(StringId::PIN_MISMATCH));
+                showMessage(ui::tr("core.pin_mismatch"));
                 // Go back to new PIN step
                 step_ = Step::NEW_PIN;
                 memset(newPin_, 0, sizeof(newPin_));
@@ -218,10 +218,10 @@ void PinChangeView::confirmStep() {
                 : core::PinManager::instance().setBadgePin(newPin_);
             if (changed) {
                 pinChanged_ = true;
-                showMessage(tr(StringId::PIN_CHANGED));
+                showMessage(ui::tr("core.pin_changed"));
                 LOG_I(TAG, "PIN changed successfully");
             } else {
-                showMessage(tr(StringId::ERROR_GENERIC));
+                showMessage(ui::tr("core.error_generic"));
                 LOG_E(TAG, "Failed to set new PIN");
             }
             break;
@@ -306,7 +306,7 @@ InputResult PinChangeView::onKey(char key) {
  * \return Footer hint string.
  */
 const char* PinChangeView::getFooterHint() const {
-    return tr(StringId::HINT_PIN_INPUT);
+    return ui::tr("core.hint_pin_input");
 }
 
 /**
@@ -333,7 +333,7 @@ void PinChangeView::render(bool partial) {
     uint16_t w, h;
 
     gfx->setTextSize(1);
-    const char* title = title_ ? title_ : tr(StringId::CHANGE_PIN);
+    const char* title = title_ ? title_ : ui::tr("core.change_pin");
     render::drawHeaderCentered(gfx, title, TITLE_Y, width);
 
     const char* stepTitle = getStepTitle();
@@ -361,7 +361,7 @@ void PinChangeView::render(bool partial) {
     if (step_ == Step::CURRENT_PIN) {
         uint8_t retries = getRetriesRemaining();
         char retriesStr[24];
-        snprintf(retriesStr, sizeof(retriesStr), "%s: %d", tr(StringId::RETRIES), retries);
+        snprintf(retriesStr, sizeof(retriesStr), "%s: %d", ui::tr("core.retries"), retries);
         gfx->setTextSize(1);
         gfx->getTextBounds(retriesStr, 0, 0, &x1, &y1, &w, &h);
         gfx->setCursor((width - w) / 2, PIN_Y + 25);

@@ -1,4 +1,5 @@
 #include "cdc_core/AttestationKeyService.h"
+#include "cdc_core/Raii.h"
 #include "cdc_log.h"
 #include <mbedtls/sha256.h>
 #include <nvs_flash.h>
@@ -70,13 +71,10 @@ void AttestationKeyService::onTick(uint32_t nowMs) {
  */
 bool AttestationKeyService::loadStoredHash(uint8_t* out, size_t outLen) {
     if (!out || outLen == 0) return false;
-    nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) {
-        return false;
-    }
+    NvsScope nvs(NVS_NAMESPACE, NVS_READONLY);
+    if (!nvs) return false;
     size_t len = outLen;
     esp_err_t err = nvs_get_blob(nvs, NVS_KEY_PUBHASH, out, &len);
-    nvs_close(nvs);
     return err == ESP_OK && len == outLen;
 }
 
@@ -88,15 +86,10 @@ bool AttestationKeyService::loadStoredHash(uint8_t* out, size_t outLen) {
  */
 bool AttestationKeyService::saveStoredHash(const uint8_t* data, size_t len) {
     if (!data || len == 0) return false;
-    nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
-        return false;
-    }
+    NvsScope nvs(NVS_NAMESPACE, NVS_READWRITE);
+    if (!nvs) return false;
     esp_err_t err = nvs_set_blob(nvs, NVS_KEY_PUBHASH, data, len);
-    if (err == ESP_OK) {
-        err = nvs_commit(nvs);
-    }
-    nvs_close(nvs);
+    if (err == ESP_OK) err = nvs.commit();
     return err == ESP_OK;
 }
 

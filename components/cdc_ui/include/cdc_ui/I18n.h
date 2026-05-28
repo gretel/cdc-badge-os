@@ -1,318 +1,182 @@
+/**
+ * \file I18n.h
+ * \brief Internationalization with English fallbacks in code and overlay
+ *        translations loaded at runtime from a VFAT JSON file.
+ *
+ * Architecture:
+ *  - English fallbacks live in code as `I18nEntry` tables registered by each
+ *    module at startup. They sit in rodata and are always available.
+ *  - All other languages live in `/plugins/i18n/lang.json` on the plugins
+ *    FAT partition. The file is parsed at boot into PSRAM-backed key-value
+ *    tables, one per language code.
+ *  - Plugin manifest strings keep their own `i18n_strings` map and are
+ *    queried via `host_i18n_tr_key` - unchanged by this rewrite.
+ *
+ * Key conventions:
+ *  - `core.*`         for firmware-wide strings.
+ *  - `mod_<name>.*`   for module-specific strings.
+ *  - Keys are 7-bit ASCII, snake_case, no spaces.
+ */
+
 #pragma once
 
 #include <cstdint>
 #include <cstddef>
+#include <functional>
+#include <string>
+#include <vector>
 
 namespace cdc::ui {
 
 /**
- * Language enumeration
+ * \brief Single English translation entry.
+ *
+ * Both fields point to rodata literals. Modules declare static constexpr
+ * arrays of these and register them with `I18n::registerEnglishTable()`.
  */
-enum class Language : uint8_t {
-    EN = 0,     // English (default/fallback)
-    DE = 1,     // German
-    COUNT
+struct I18nEntry {
+    const char* key;   ///< Stable string key, e.g. "core.save" or "mod_totp.codes".
+    const char* en;    ///< English translation - rodata literal.
 };
 
 /**
- * Core string IDs (system-wide)
- * Modules register additional strings dynamically
- */
-enum class StringId : uint16_t {
-    // === System ===
-    MAIN_MENU = 0,
-    SETTINGS,
-    HARDWARE,
-    TOOLS,
-    HARDWARE_INFO,
-    NAME,
-    INFO,
-    INFO2,
-    DEFAULT_NAME,
-    DEFAULT_INFO,
-    BACK,
-    OK,
-    CANCEL,
-    SAVE,
-    DELETE,
-    EDIT,
-    VIEW,
-    SELECT,
-    YES,
-    NO,
-    ON,
-    OFF,
-    SAVED,
-    DELETED,
-    FAILED,
-    TIMEOUT,
-    EMPTY,
-
-    // === Lock Screen ===
-    LOCK,
-    UNLOCK,
-    ENTER_PIN,
-    PRESS_ANY_KEY,
-    DEEP_SLEEP,
-    WRONG_PIN,
-    LOCKED_OUT,
-    TOO_MANY_ATTEMPTS,
-
-    // === PIN ===
-    CHANGE_PIN,
-    CURRENT_PIN,
-    NEW_PIN,
-    CONFIRM_PIN,
-    PIN_CHANGED,
-    PINS_DONT_MATCH,
-    PIN_TOO_SHORT,
-    PIN_MISMATCH,
-    RETRIES,
-    ERROR_GENERIC,
-
-    // === Settings ===
-    BRIGHTNESS,
-    LANGUAGE,
-    TIMEZONE,
-    SUMMER_TIME,
-    BADGE_TEXT,
-    AUTO_SLEEP,
-    SET_DATE,
-    SET_TIME,
-    DATE,
-    TIME,
-    DATE_SAVED,
-    TIME_SAVED,
-    MODULES,
-    NEVER,
-    MINUTES,
-
-    // === Hardware ===
-    WIFI_MENU,
-    WIFI_SETUP,
-    WIFI_CONNECT,
-    WIFI_DETAILS,
-    WIFI_DISCONNECT,
-    WIFI_SCANNING,
-    WIFI_NO_NETWORKS,
-    WIFI_CONNECTING,
-    WIFI_CONNECTED,
-    WIFI_DISCONNECTED,
-    WIFI_FAILED,
-    WIFI_NO_CONFIG,
-    WIFI_PASSWORD,
-    WIFI_ADD_MANUAL,
-    WIFI_SSID,
-    WIFI_ENCRYPTION,
-    WIFI_IP_MODE,
-    WIFI_DHCP,
-    WIFI_STATIC,
-    WIFI_GATEWAY,
-    WIFI_NETMASK,
-    WIFI_DNS,
-    WIFI_SAVED_CONFIG,
-    WIFI_SIGNAL,
-    NTP_SYNC,
-    NTP_SYNCING,
-    NTP_SUCCESS,
-    NTP_FAILED,
-    NTP_TIMEOUT,
-    BLUETOOTH,
-    BLUETOOTH_ON,
-    BLUETOOTH_OFF,
-    BLE_STATUS,
-    BLE_SCAN,
-    BLE_SCANNING,
-    BLE_NO_DEVICES,
-    BLE_CONNECTED_TO,
-    BLE_NOT_CONNECTED,
-    BLE_MAC_ADDRESS,
-    BLE_SIGNAL,
-    BLE_PAIRED_DEVICES,
-    SYSTEM_TEST,
-    TR01_CACHE_REBUILD,
-    TR01_CACHE_CLEANUP,
-    EXPERT,
-    EXPERT_WARNING,
-    TASK_WORKING,
-    SLEEP,
-    USB_REPLUG_REQUIRED,
-    MODULE_ERROR_GENERIC,
-    MODULE_RETRY_PROMPT,
-
-    // === Hardware Info ===
-    HW_SECTION_MEMORY,
-    HW_SECTION_RUNTIME,
-    HW_I2C_BUS,
-    HW_BQ25895,
-    HW_TCA9535,
-    HW_DISPLAY,
-    HW_TROPIC01,
-    HW_TR01_SESSION,
-    HW_TR01_RISCV_FW,
-    HW_TR01_SPECT_FW,
-    HW_TR01_RMEM_SLOT,
-    HW_WIFI,
-    HW_BLE,
-    HW_HEAP,
-    HW_PSRAM,
-    HW_NVS,
-    HW_ENTRIES,
-    HW_BATTERY,
-    HW_TEMP,
-    HW_UPTIME,
-    HW_CHARGING_SUFFIX,
-    HW_NOT_AVAILABLE,
-
-    // === Actions ===
-    ACTIONS,
-    LIGHT,
-
-    // === Footer Hints ===
-    HINT_BACK,
-    HINT_SELECT,
-    HINT_OK_BACK,
-    HINT_APPROVE_DENY,
-    HINT_BRIGHTNESS,
-    HINT_PIN_INPUT,
-    HINT_T9_INPUT,
-    T9_FULL,
-    HINT_LIST_MENU,
-    HINT_SCROLL_BACK,
-    HINT_FIELD_NAV,
-    HINT_DATE_INPUT,
-    HINT_TIME_INPUT,
-    HINT_PASSWORD_HIDDEN,
-    HINT_PASSWORD_REVEALED,
-
-    // === QR ===
-    QR_ERROR,
-    NO_DATA,
-
-    // Core string count - modules start from here
-    CORE_COUNT
-};
-
-/**
- * Translation entry for module registration
- */
-struct Translation {
-    uint16_t stringId;      // String ID (core or module-specific)
-    Language lang;          // Language
-    const char* text;       // Translation text
-};
-
-/**
- * I18n Controller Interface
+ * \brief Internationalization singleton.
  *
- * Provides internationalization with:
- * - Core system strings (StringId enum)
- * - Module-registered strings (dynamic IDs)
- * - English fallback when translation missing
+ * Lookup order for `tr(key)`:
+ *   1. If current language is "en" or no overlay loaded: return English fallback.
+ *   2. If overlay has a translation for the current language and key: return it.
+ *   3. Else: fall back to English. Returns "?<key>" if even English is missing.
  *
- * Usage:
- *   auto& i18n = I18n::instance();
- *   const char* text = i18n.str(StringId::SETTINGS);
- *
- * Module registration:
- *   uint16_t baseId = i18n.registerModule("totp", 50);  // Reserve 50 IDs
- *   i18n.registerTranslation(baseId + 0, Language::EN, "TOTP Codes");
- *   i18n.registerTranslation(baseId + 0, Language::DE, "TOTP Codes");
+ * Thread safety: registration is expected to happen single-threaded during
+ * module init. `tr()` is read-only after all modules have registered.
  */
 class I18n {
 public:
-    /**
-     * Get singleton instance
-     */
+    /// Default path to the overlay file on the plugins FAT.
+    static constexpr const char* DEFAULT_OVERLAY_PATH = "/plugins/i18n/lang.json";
+
+    /// Singleton accessor.
     static I18n& instance();
 
     /**
-     * Initialize i18n system (loads language from NVS)
+     * \brief Initialize and load persisted language code from NVS.
+     * \return true on success.
      */
     bool init();
 
     /**
-     * Get/set current language
+     * \brief Load overlay translations from a JSON file at \p path.
+     *
+     * The file format is:
+     * \code
+     * { "version": 1,
+     *   "translations": {
+     *     "de": {"core.save": "Speichern", ...},
+     *     "fr": {"core.save": "Enregistrer", ...}
+     *   }
+     * }
+     * \endcode
+     *
+     * \return true on success, false on missing/invalid file (caller falls back to English).
      */
-    Language getLanguage() const { return currentLang_; }
-    void setLanguage(Language lang);
+    bool loadOverlay(const char* path = DEFAULT_OVERLAY_PATH);
 
     /**
-     * Get language display name
+     * \brief Append English entries to the lookup table.
+     *
+     * Typically called once per module from its `init()`. Entries are stored
+     * by-pointer (no copy); the caller must keep the array alive for the
+     * lifetime of the firmware (rodata is fine).
+     *
+     * \param entries Pointer to the first entry.
+     * \param count   Number of entries.
      */
-    const char* getLanguageName(Language lang) const;
+    void registerEnglishTable(const I18nEntry* entries, std::size_t count);
 
     /**
-     * Get translated string for core string ID
-     * Falls back to English if translation missing
+     * \brief Look up a translation by key.
+     * \param key Stable string key. Must not be null.
+     * \return Pointer to translation text. Never null - returns "?<key>" if no match.
      */
-    const char* str(StringId id) const;
+    const char* tr(const char* key) const;
 
     /**
-     * Get translated string by numeric ID (for module strings)
-     * Falls back to English if translation missing
+     * \brief Overlay-only lookup with no English fallback.
+     *
+     * Returns the translation from the currently active overlay language, or
+     * `nullptr` if the key is missing OR the active language is "en". Useful
+     * for plugin code that wants to try a namespaced key in the central
+     * overlay before falling back to its own English manifest table.
+     *
+     * \param key Stable string key.
+     * \return Pointer into PSRAM overlay storage (stable until the active
+     *         language changes), or `nullptr`.
      */
-    const char* str(uint16_t id) const;
+    const char* overlayTr(const char* key) const;
+
+    /// Current language code (lower-case ISO-639-1, e.g. "en", "de").
+    const std::string& getLanguageCode() const { return currentLang_; }
 
     /**
-     * Register a module and reserve string IDs
-     * @param moduleName Module name for debugging
-     * @param count Number of string IDs to reserve
-     * @return Base string ID for this module, or 0 on failure
+     * \brief Set the active language by code.
+     *
+     * If the overlay does not contain the requested language, the call still
+     * succeeds and persists the choice, but `tr()` will fall back to English
+     * until an overlay covering the language is loaded.
+     *
+     * \param code Language code (e.g. "en", "de"). Empty defaults to "en".
+     * \return true on success.
      */
-    uint16_t registerModule(const char* moduleName, uint16_t count);
+    bool setLanguageCode(const char* code);
+
+    /// List of language codes present in the loaded overlay (does not include "en").
+    const std::vector<std::string>& availableOverlayLanguages() const { return overlayLangs_; }
 
     /**
-     * Register a translation
-     * @param stringId String ID (core or from registerModule)
-     * @param lang Language
-     * @param text Translation text
-     * @return true on success
+     * \brief Callback invoked whenever the active translation table changes.
+     *
+     * Triggered on:
+     *  - successful `loadOverlay()` (initial load or reload)
+     *  - `setLanguageCode()` switching to a different language
+     *
+     * UI code uses this to refresh any cached label pointers - menu items hold
+     * `const char*` into either rodata (English fallback) or the overlay's
+     * PSRAM-backed string storage, both of which are invalidated by a language
+     * change.
      */
-    bool registerTranslation(uint16_t stringId, Language lang, const char* text);
-
-    /**
-     * Batch register translations
-     * @param translations Array of translations (terminated by stringId=0xFFFF)
-     */
-    void registerTranslations(const Translation* translations);
-
-    /**
-     * Get total registered string count
-     */
-    uint16_t getStringCount() const { return nextModuleId_; }
+    using LanguageChangedCallback = std::function<void()>;
+    void setOnLanguageChanged(LanguageChangedCallback cb) { onChanged_ = std::move(cb); }
 
 private:
-    I18n() = default;
+    I18n();
 
-    // Configuration
-    static constexpr uint16_t MAX_STRINGS = 512;
-    static constexpr uint8_t LANG_COUNT = static_cast<uint8_t>(Language::COUNT);
+    void registerCoreEnglishTable();
+    bool sortIfNeeded() const;
+    const char* enLookup(const char* key) const;
+    const char* overlayLookup(const char* key) const;
+    void loadLanguageFromNvs();
+    void saveLanguageToNvs();
 
-    // String storage (pointer arrays)
-    const char* strings_[LANG_COUNT][MAX_STRINGS] = {};
+    mutable std::vector<I18nEntry> en_;
+    mutable bool                   enSorted_ = false;
 
-    // Current language
-    Language currentLang_ = Language::EN;
+    struct OverlayEntry {
+        std::string key;
+        std::string value;
+    };
+    std::vector<OverlayEntry> activeOverlay_;
+    std::vector<std::string>  overlayLangs_;
+    std::string               overlayJsonPath_;
 
-    // Next available module ID
-    uint16_t nextModuleId_ = static_cast<uint16_t>(StringId::CORE_COUNT);
+    std::string currentLang_ = "en";
 
-    // Initialize core strings
-    void initCoreStrings();
-
-    // Save/load from NVS
-    void loadFromNvs();
-    void saveToNvs();
+    LanguageChangedCallback onChanged_;
 };
 
-// Convenience function
-inline const char* tr(StringId id) {
-    return I18n::instance().str(id);
+/// Look up a translation by string key.
+inline const char* tr(const char* key)
+{
+    return I18n::instance().tr(key);
 }
 
-inline const char* tr(uint16_t id) {
-    return I18n::instance().str(id);
-}
-
-} // namespace cdc::ui
+}  // namespace cdc::ui

@@ -57,7 +57,14 @@ namespace cdc::ui {
  * \return void
  */
 void T9InputView::init(const char* title, const char* initialText, uint16_t maxLen) {
-    title_ = title;
+    if (title) {
+        strncpy(titleBuf_, title, TITLE_MAX_LEN);
+        titleBuf_[TITLE_MAX_LEN] = '\0';
+        title_ = titleBuf_;
+    } else {
+        titleBuf_[0] = '\0';
+        title_ = titleBuf_;
+    }
     maxLen_ = maxLen > MAX_TEXT_LEN ? MAX_TEXT_LEN : maxLen;
 
     // Copy initial text
@@ -136,7 +143,7 @@ bool T9InputView::processKey(char key) {
             charIndex_ = 0;
             cursorActive_ = true;
         } else {
-            ui::showToastError(ui::tr(ui::StringId::T9_FULL), 800);
+            ui::showToastError(ui::tr("core.t9_full"), 800);
         }
     }
 
@@ -158,7 +165,6 @@ void T9InputView::backspace() {
         lastKey_ = 0;
         cursorActive_ = false;
         dirty_ = true;
-        LOG_D(TAG, "backspace: text='%s'", text_);
     }
 }
 
@@ -189,8 +195,23 @@ void T9InputView::forceDigit(char key) {
         dirty_ = true;
         LOG_D(TAG, "forceDigit (append): key='%c', text='%s'", key, text_);
     } else {
-        ui::showToastError(ui::tr(ui::StringId::T9_FULL), 800);
+        ui::showToastError(ui::tr("core.t9_full"), 800);
     }
+}
+
+uint16_t T9InputView::appendRaw(const char* text) {
+    if (!text) return 0;
+    commitCharacter();
+    uint16_t added = 0;
+    while (*text && len_ < maxLen_) {
+        text_[len_++] = *text++;
+        added++;
+    }
+    text_[len_] = '\0';
+    lastKey_ = 0;
+    charIndex_ = 0;
+    dirty_ = true;
+    return added;
 }
 
 /**
@@ -283,7 +304,7 @@ InputResult T9InputView::onLongPress(char key) {
  * \return Footer hint string.
  */
 const char* T9InputView::getFooterHint() const {
-    return hintOverride_ ? hintOverride_ : tr(StringId::HINT_T9_INPUT);
+    return hintOverride_ ? hintOverride_ : ui::tr("core.hint_t9_input");
 }
 
 /**

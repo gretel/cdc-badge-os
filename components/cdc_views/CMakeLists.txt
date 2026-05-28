@@ -17,6 +17,9 @@ idf_component_register(
         "src/QRCodeView.cpp"
         "src/ConfirmView.cpp"
         "src/RenderHelpers.cpp"
+        "src/CanvasView.cpp"
+        "src/ColorPickerView.cpp"
+        "src/Fonts.cpp"
     INCLUDE_DIRS
         "include"
     REQUIRES
@@ -25,4 +28,5 @@ idf_component_register(
         cdc_hal
         cdc_log
         CalEPD
+        Adafruit-GFX
 )

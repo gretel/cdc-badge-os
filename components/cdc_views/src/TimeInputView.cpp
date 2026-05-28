@@ -8,6 +8,7 @@
 #include "cdc_views/KeyCodes.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/I18n.h"
+#include "cdc_ui/ViewStack.h"
 #include "cdc_hal/IDisplay.h"
 #include "cdc_log.h"
 #include <goodisplay/gdey029T94.h>
@@ -144,10 +145,11 @@ InputResult TimeInputView::onKey(char key) {
             if (hour_ > 23) hour_ = 23;
             if (minute_ > 59) minute_ = 59;
             LOG_I(TAG, "Time confirmed: %02d:%02d", hour_, minute_);
+            cdc::ui::ViewStack::instance().pop();
             if (onConfirm_) {
                 onConfirm_(hour_, minute_);
             }
-            return InputResult::REQUEST_POP;
+            return InputResult::CONSUMED;
 
         default:
             return InputResult::IGNORED;
@@ -159,7 +161,7 @@ InputResult TimeInputView::onKey(char key) {
  * \return Footer hint string.
  */
 const char* TimeInputView::getFooterHint() const {
-    return tr(StringId::HINT_TIME_INPUT);
+    return ui::tr("core.hint_time_input");
 }
 
 /**

@@ -10,10 +10,14 @@
 #include "cdc_ui/ViewStack.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_hal/IDisplay.h"
+#include "cdc_hal/IKeypad.h"
 #include "cdc_log.h"
 #include <goodisplay/gdey029T94.h>
 #include <cstdio>
 #include <algorithm>
+
+static constexpr uint32_t REPEAT_INITIAL_MS = 350;
+static constexpr uint32_t REPEAT_PERIOD_MS = 80;
 
 static const char* TAG = "SliderView";
 
@@ -103,17 +107,20 @@ InputResult SliderView::onKey(char key) {
     switch (key) {
         case '6': // Right = Increase
             adjust(true);
+            repeatStartMs_ = 0;
             return InputResult::CONSUMED;
 
         case '4': // Left = Decrease
             adjust(false);
+            repeatStartMs_ = 0;
             return InputResult::CONSUMED;
 
         case KEY_YES: // Save
+            ViewStack::instance().pop();
             if (onSave_) {
                 onSave_(value_);
             }
-            return InputResult::REQUEST_POP;
+            return InputResult::CONSUMED;
 
         case KEY_NO: // Cancel
             return InputResult::REQUEST_POP;
@@ -123,12 +130,37 @@ InputResult SliderView::onKey(char key) {
     }
 }
 
+void SliderView::onTick(uint32_t nowMs) {
+    auto* kp = cdc::hal::getKeypadInstance();
+    if (!kp) return;
+
+    bool keyLeft  = kp->isKeyPressed(cdc::hal::Key::KEY_4);
+    bool keyRight = kp->isKeyPressed(cdc::hal::Key::KEY_6);
+
+    if (!keyLeft && !keyRight) {
+        repeatStartMs_ = 0;
+        return;
+    }
+
+    if (repeatStartMs_ == 0) {
+        repeatStartMs_ = nowMs;
+        lastRepeatMs_ = nowMs;
+        return;
+    }
+
+    if (nowMs - repeatStartMs_ < REPEAT_INITIAL_MS) return;
+    if (nowMs - lastRepeatMs_ < REPEAT_PERIOD_MS) return;
+
+    lastRepeatMs_ = nowMs;
+    adjust(keyRight);
+}
+
 /**
  * \brief Returns localized footer hint text.
  * \return Footer hint string.
  */
 const char* SliderView::getFooterHint() const {
-    return tr(StringId::HINT_BRIGHTNESS);
+    return ui::tr("core.hint_brightness");
 }
 
 /**

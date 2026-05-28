@@ -3,6 +3,8 @@
 idf_component_register(
     SRCS
         "src/GpgModule.cpp"
+        "src/GpgRecvStore.cpp"
+        "src/ble_gpg_xsig.cpp"
         "src/ccid/ccid_driver.cpp"
         "src/gpg.cpp"
         "src/GpgStorage.cpp"
@@ -10,8 +12,10 @@ idf_component_register(
         "src/openpgp/algo_attr.cpp"
         "src/openpgp/ccid.cpp"
         "src/openpgp/ecdh.cpp"
+        "src/openpgp/fingerprint.cpp"
         "src/openpgp/openpgp.cpp"
         "src/openpgp/tlv.cpp"
+        "src/openpgp/xsig.cpp"
     INCLUDE_DIRS
         "include"
         "src/openpgp"

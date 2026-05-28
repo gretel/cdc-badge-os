@@ -432,6 +432,7 @@ bool WifiController::connect(const char* ssid, const char* password,
 
     if (bits & WIFI_GOT_IP_BIT) {
         LOG_I(TAG, "Connected to %s", ssid);
+        vTaskDelay(pdMS_TO_TICKS(500));
         return true;
     } else {
         LOG_W(TAG, "Connection to %s failed", ssid);

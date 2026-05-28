@@ -2,6 +2,7 @@
 #include "cdc_core/TropicSlotMap.h"
 #include "cdc_core/TropicStorage.h"
 #include "cdc_core/EventBus.h"
+#include "cdc_core/Raii.h"
 #include "cdc_log.h"
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -374,18 +375,16 @@ static constexpr size_t MAX_MODULE_LIST_SIZE = 256;
  * \brief Removes persisted NVS data for modules no longer present in firmware.
  */
 void ModuleRegistry::cleanupOrphanedModuleData() {
-    nvs_handle_t handle;
-    if (nvs_open(MODULES_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
-        // No previous module list - first boot or NVS was erased
+    NvsScope handle(MODULES_NVS_NAMESPACE, NVS_READONLY);
+    if (!handle) {
         LOG_I(TAG, "No previous module list found (first boot)");
         return;
     }
 
-    // Read saved module list (comma-separated names)
     char savedList[MAX_MODULE_LIST_SIZE] = {0};
     size_t len = sizeof(savedList);
     esp_err_t err = nvs_get_str(handle, MODULES_NVS_KEY, savedList, &len);
-    nvs_close(handle);
+    handle.close();
 
     if (err != ESP_OK || len == 0) {
         LOG_I(TAG, "No saved module list");
@@ -421,11 +420,10 @@ void ModuleRegistry::cleanupOrphanedModuleData() {
 
             LOG_W(TAG, "Module '%s' removed - erasing NVS namespace '%s'", token, nsName);
 
-            nvs_handle_t modHandle;
-            if (nvs_open(nsName, NVS_READWRITE, &modHandle) == ESP_OK) {
+            NvsScope modHandle(nsName, NVS_READWRITE);
+            if (modHandle) {
                 nvs_erase_all(modHandle);
-                nvs_commit(modHandle);
-                nvs_close(modHandle);
+                modHandle.commit();
                 LOG_I(TAG, "Erased NVS data for removed module '%s'", token);
             }
         }
@@ -465,12 +463,10 @@ void ModuleRegistry::saveModuleList() {
     }
     moduleList[offset] = '\0';
 
-    // Save to NVS
-    nvs_handle_t handle;
-    if (nvs_open(MODULES_NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
+    NvsScope handle(MODULES_NVS_NAMESPACE, NVS_READWRITE);
+    if (handle) {
         nvs_set_str(handle, MODULES_NVS_KEY, moduleList);
-        nvs_commit(handle);
-        nvs_close(handle);
+        handle.commit();
         LOG_I(TAG, "Saved module list: %s", moduleList);
     } else {
         LOG_E(TAG, "Failed to save module list");
@@ -485,15 +481,16 @@ void ModuleRegistry::saveModuleList() {
  * \brief Loads persisted disabled-module list from NVS.
  */
 void ModuleRegistry::loadDisabledList() {
-    nvs_handle_t handle;
     bool loaded = false;
-    if (nvs_open(MODULES_NVS_NAMESPACE, NVS_READONLY, &handle) == ESP_OK) {
-        size_t len = sizeof(disabledModules_);
-        if (nvs_get_str(handle, MODULES_NVS_KEY_DISABLED, disabledModules_, &len) == ESP_OK) {
-            LOG_I(TAG, "Loaded disabled modules: %s", disabledModules_);
-            loaded = true;
+    {
+        NvsScope handle(MODULES_NVS_NAMESPACE, NVS_READONLY);
+        if (handle) {
+            size_t len = sizeof(disabledModules_);
+            if (nvs_get_str(handle, MODULES_NVS_KEY_DISABLED, disabledModules_, &len) == ESP_OK) {
+                LOG_I(TAG, "Loaded disabled modules: %s", disabledModules_);
+                loaded = true;
+            }
         }
-        nvs_close(handle);
     }
     if (loaded) return;
 
@@ -529,11 +526,10 @@ void ModuleRegistry::loadDisabledList() {
  * \brief Saves disabled-module list to NVS.
  */
 void ModuleRegistry::saveDisabledList() {
-    nvs_handle_t handle;
-    if (nvs_open(MODULES_NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
+    NvsScope handle(MODULES_NVS_NAMESPACE, NVS_READWRITE);
+    if (handle) {
         nvs_set_str(handle, MODULES_NVS_KEY_DISABLED, disabledModules_);
-        nvs_commit(handle);
-        nvs_close(handle);
+        handle.commit();
         LOG_I(TAG, "Saved disabled modules: %s", disabledModules_);
     } else {
         LOG_E(TAG, "Failed to save disabled modules list");

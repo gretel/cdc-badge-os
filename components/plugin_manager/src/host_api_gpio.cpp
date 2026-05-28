@@ -1,0 +1,238 @@
+/**
+ * \file host_api_gpio.cpp
+ * \brief GPIO / PWM / ADC / I2C / SAO host API with capability + pin-lock.
+ *
+ * Per-call enforcement on top of the load-time CapabilityChecker:
+ *   1. Pin must be allowed by the plugin manifest.
+ *   2. Pin must not be locked by another plugin or the native serial CLI.
+ *   3. Pin must not be on the firmware-internal block list (Display SPI,
+ *      TROPIC01 CS, charger I2C, USB, etc.) - that list is hard-coded.
+ *
+ * The lock table is also consulted by future GPIO serial commands so a
+ * native console session cannot fight a running plugin for the same pin.
+ */
+
+#include "cdc_hal/hw_config.h"
+#include "plugin_manager/host_api.h"
+#include "plugin_manager/Plugin.h"
+#include "plugin_manager/PluginGpioPolicy.h"
+
+#include "driver/gpio.h"
+#include "driver/ledc.h"
+#include "driver/i2c.h"
+#include "esp_adc/adc_oneshot.h"
+
+#include <array>
+#include <cstring>
+
+extern "C" void* plg_get_active_plugin(void);
+extern "C" void  plg_log_warn(const char* msg);
+
+namespace {
+
+struct PinLock {
+    void* owner = nullptr;
+    bool  in_use = false;
+};
+constexpr size_t MAX_GPIO_PINS = 49;
+std::array<PinLock, MAX_GPIO_PINS> s_pin_locks{};
+
+cdc::plugin_manager::Plugin* active() {
+    return static_cast<cdc::plugin_manager::Plugin*>(plg_get_active_plugin());
+}
+
+bool manifest_allows_gpio(uint8_t pin) {
+    auto* p = active();
+    if (!p) return false;
+    const auto& cap = p->manifest().capabilities;
+    if (cap.grove && (pin == 2 || pin == 3)) return true;
+    if (cap.sao   && (pin == 15 || pin == 16)) return true;
+    for (uint8_t allowed : cap.gpio_pins) if (allowed == pin) return true;
+    for (uint8_t allowed : cap.pwm_pins)  if (allowed == pin) return true;
+    for (uint8_t allowed : cap.adc_pins)  if (allowed == pin) return true;
+    return false;
+}
+
+int acquire_lock(uint8_t pin) {
+    if (pin >= MAX_GPIO_PINS) return HOST_ERR_INVALID_ARG;
+    if (cdc::plugin_manager::gpio_policy::isBlocked(pin)) return HOST_ERR_NO_CAPABILITY;
+    if (!manifest_allows_gpio(pin)) return HOST_ERR_NO_CAPABILITY;
+
+    auto* a = active();
+    PinLock& lock = s_pin_locks[pin];
+    if (lock.in_use && lock.owner != a) return HOST_ERR_BUSY;
+    lock.owner  = a;
+    lock.in_use = true;
+    return HOST_OK;
+}
+
+void release_lock(uint8_t pin) {
+    if (pin >= MAX_GPIO_PINS) return;
+    s_pin_locks[pin] = PinLock{};
+}
+
+}  // namespace
+
+extern "C" {
+
+int host_gpio_set_direction(uint8_t pin, uint8_t direction)
+{
+    int rc = acquire_lock(pin);
+    if (rc != HOST_OK) return rc;
+
+    gpio_config_t cfg{};
+    cfg.pin_bit_mask = 1ULL << pin;
+    cfg.intr_type    = GPIO_INTR_DISABLE;
+    cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
+    cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    switch (direction) {
+        case GPIO_DIR_IN:     cfg.mode = GPIO_MODE_INPUT; break;
+        case GPIO_DIR_OUT:    cfg.mode = GPIO_MODE_OUTPUT; break;
+        case GPIO_DIR_OUT_OD: cfg.mode = GPIO_MODE_OUTPUT_OD; break;
+        default:              return HOST_ERR_INVALID_ARG;
+    }
+    return gpio_config(&cfg) == ESP_OK ? HOST_OK : HOST_ERR_GENERIC;
+}
+
+int host_gpio_set_pull(uint8_t pin, uint8_t pull)
+{
+    int rc = acquire_lock(pin);
+    if (rc != HOST_OK) return rc;
+
+    gpio_pull_mode_t mode = GPIO_FLOATING;
+    switch (pull) {
+        case GPIO_PULL_UP:   mode = GPIO_PULLUP_ONLY; break;
+        case GPIO_PULL_DOWN: mode = GPIO_PULLDOWN_ONLY; break;
+        case GPIO_PULL_NONE: mode = GPIO_FLOATING; break;
+        default:             return HOST_ERR_INVALID_ARG;
+    }
+    return gpio_set_pull_mode(static_cast<gpio_num_t>(pin), mode) == ESP_OK
+           ? HOST_OK : HOST_ERR_GENERIC;
+}
+
+int host_gpio_write(uint8_t pin, bool level)
+{
+    int rc = acquire_lock(pin);
+    if (rc != HOST_OK) return rc;
+    return gpio_set_level(static_cast<gpio_num_t>(pin), level ? 1 : 0) == ESP_OK
+           ? HOST_OK : HOST_ERR_GENERIC;
+}
+
+int host_gpio_read(uint8_t pin, bool* level)
+{
+    if (!level) return HOST_ERR_INVALID_ARG;
+    int rc = acquire_lock(pin);
+    if (rc != HOST_OK) return rc;
+    *level = gpio_get_level(static_cast<gpio_num_t>(pin)) != 0;
+    return HOST_OK;
+}
+
+int host_gpio_release(uint8_t pin)
+{
+    if (pin >= MAX_GPIO_PINS) return HOST_ERR_INVALID_ARG;
+    // Only the owner can release; silently ignore alien plugins.
+    if (s_pin_locks[pin].owner != active()) return HOST_OK;
+    gpio_reset_pin(static_cast<gpio_num_t>(pin));
+    release_lock(pin);
+    return HOST_OK;
+}
+
+int host_gpio_pwm_start(uint8_t pin, uint32_t freq_hz, uint16_t duty_per_mille)
+{
+    int rc = acquire_lock(pin);
+    if (rc != HOST_OK) return rc;
+    if (duty_per_mille > 1000) return HOST_ERR_INVALID_ARG;
+
+    static bool s_timer_inited = false;
+    if (!s_timer_inited) {
+        ledc_timer_config_t timer{};
+        timer.speed_mode      = LEDC_LOW_SPEED_MODE;
+        timer.duty_resolution = LEDC_TIMER_10_BIT;
+        timer.timer_num       = LEDC_TIMER_0;
+        timer.freq_hz         = freq_hz ? freq_hz : 5000;
+        timer.clk_cfg         = LEDC_AUTO_CLK;
+        if (ledc_timer_config(&timer) != ESP_OK) return HOST_ERR_GENERIC;
+        s_timer_inited = true;
+    }
+
+    // Pick a free LEDC channel; for V1 we use channel 0 globally (single-plugin).
+    ledc_channel_config_t ch{};
+    ch.channel    = LEDC_CHANNEL_0;
+    ch.duty       = (1023 * duty_per_mille) / 1000;
+    ch.gpio_num   = pin;
+    ch.speed_mode = LEDC_LOW_SPEED_MODE;
+    ch.hpoint     = 0;
+    ch.timer_sel  = LEDC_TIMER_0;
+    return ledc_channel_config(&ch) == ESP_OK ? HOST_OK : HOST_ERR_GENERIC;
+}
+
+int host_gpio_pwm_set_duty(uint8_t pin, uint16_t duty_per_mille)
+{
+    (void)pin;
+    if (duty_per_mille > 1000) return HOST_ERR_INVALID_ARG;
+    uint32_t duty = (1023 * duty_per_mille) / 1000;
+    if (ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty) != ESP_OK) return HOST_ERR_GENERIC;
+    if (ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0) != ESP_OK)    return HOST_ERR_GENERIC;
+    return HOST_OK;
+}
+
+int host_gpio_pwm_stop(uint8_t pin)
+{
+    (void)pin;
+    ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+    return HOST_OK;
+}
+
+int host_adc_read(uint8_t pin, uint16_t* raw, uint16_t* millivolt)
+{
+    if (!raw && !millivolt) return HOST_ERR_INVALID_ARG;
+    int rc = acquire_lock(pin);
+    if (rc != HOST_OK) return rc;
+
+    // ADC1 channel mapping for user pins (ADC2 conflicts with WiFi).
+    struct AdcMap { uint8_t pin; adc_channel_t ch; };
+    constexpr AdcMap PINS[] = {
+        { 2, ADC_CHANNEL_1 }, { 3, ADC_CHANNEL_2 },
+        { 4, ADC_CHANNEL_3 }, { 5, ADC_CHANNEL_4 },
+        { 6, ADC_CHANNEL_5 }, { 7, ADC_CHANNEL_6 },
+        { 9, ADC_CHANNEL_8 },
+    };
+    adc_channel_t ch = static_cast<adc_channel_t>(-1);
+    for (const auto& m : PINS) if (m.pin == pin) ch = m.ch;
+    if (static_cast<int>(ch) < 0) return HOST_ERR_NOT_SUPPORTED;
+
+    adc_oneshot_unit_handle_t unit;
+    adc_oneshot_unit_init_cfg_t unit_cfg{};
+    unit_cfg.unit_id  = ADC_UNIT_1;
+    unit_cfg.ulp_mode = ADC_ULP_MODE_DISABLE;
+    if (adc_oneshot_new_unit(&unit_cfg, &unit) != ESP_OK) return HOST_ERR_GENERIC;
+
+    adc_oneshot_chan_cfg_t chan_cfg{};
+    chan_cfg.atten    = ADC_ATTEN_DB_12;
+    chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if (adc_oneshot_config_channel(unit, ch, &chan_cfg) != ESP_OK) {
+        adc_oneshot_del_unit(unit);
+        return HOST_ERR_GENERIC;
+    }
+
+    int reading = 0;
+    esp_err_t err = adc_oneshot_read(unit, ch, &reading);
+    adc_oneshot_del_unit(unit);
+    if (err != ESP_OK) return HOST_ERR_GENERIC;
+
+    if (raw) *raw = static_cast<uint16_t>(reading);
+    if (millivolt) {
+        // Rough conversion without calibration; ATTEN_DB_12 gives ~3300 mV full-scale on 12-bit.
+        *millivolt = static_cast<uint16_t>(reading * 3300 / 4095);
+    }
+    return HOST_OK;
+}
+
+int host_i2c_write(uint8_t /*bus*/, uint8_t /*addr*/, const uint8_t* /*data*/, size_t /*len*/)         { return HOST_ERR_NOT_SUPPORTED; }
+int host_i2c_read (uint8_t /*bus*/, uint8_t /*addr*/, uint8_t* /*data*/, size_t /*len*/)               { return HOST_ERR_NOT_SUPPORTED; }
+int host_i2c_write_read(uint8_t /*bus*/, uint8_t /*addr*/, const uint8_t*, size_t, uint8_t*, size_t)   { return HOST_ERR_NOT_SUPPORTED; }
+int host_i2c_scan (uint8_t /*bus*/, uint8_t* /*found_addrs*/, size_t* /*count*/)                       { return HOST_ERR_NOT_SUPPORTED; }
+int host_sao_eeprom_read (uint16_t /*off*/, uint8_t* /*buf*/, size_t /*len*/)                          { return HOST_ERR_NOT_SUPPORTED; }
+int host_sao_eeprom_write(uint16_t /*off*/, const uint8_t* /*buf*/, size_t /*len*/)                    { return HOST_ERR_NOT_SUPPORTED; }
+
+}  // extern "C"

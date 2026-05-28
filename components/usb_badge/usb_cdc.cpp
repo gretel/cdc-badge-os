@@ -12,6 +12,8 @@
 #include "cdc_log.h"
 #include "esp_err.h"
 #include "esp_idf_version.h"
+#include "esp_rom_sys.h"
+#include "esp_system.h"
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0) && defined(CONFIG_SOC_USB_OTG_SUPPORTED) && CONFIG_SOC_USB_OTG_SUPPORTED
 #include "esp_private/usb_phy.h"
@@ -89,6 +91,20 @@ static void usb_device_task(void* arg) {
  * \brief Starts the TinyUSB stack and creates the USB device task.
  * \return `true` if USB stack startup succeeded, otherwise `false`.
  */
+static void usb_shutdown_handler(void) {
+    if (tud_inited()) {
+        tud_disconnect();
+        esp_rom_delay_us(50000);
+    }
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0) && defined(CONFIG_SOC_USB_OTG_SUPPORTED) && CONFIG_SOC_USB_OTG_SUPPORTED
+    if (g_usb_phy) {
+        usb_del_phy(g_usb_phy);
+        g_usb_phy = nullptr;
+    }
+#endif
+    esp_rom_delay_us(50000);
+}
+
 static bool usb_start_stack(void) {
     if (g_usb_started) return true;
 
@@ -103,6 +119,8 @@ static bool usb_start_stack(void) {
     // and ECDH point multiplication invoked from CCID APDU handlers.
     xTaskCreate(usb_device_task, "usbd", 8192, nullptr,
                 configMAX_PRIORITIES - 1, &g_usb_task);
+
+    esp_register_shutdown_handler(usb_shutdown_handler);
 
     g_usb_started = true;
     return true;

@@ -15,9 +15,7 @@
  *   3. t1_state_next_outbound() until it returns 0
  */
 
-#ifndef MOD_GPG_OPENPGP_T1_T1_STATE_H
-#define MOD_GPG_OPENPGP_T1_T1_STATE_H
-
+#pragma once
 #include "mod_gpg/openpgp/t1/t1_block.h"
 
 #ifdef __cplusplus
@@ -110,4 +108,3 @@ size_t t1_state_next_outbound(t1_state_t *state, uint8_t *out, size_t out_cap);
 }
 #endif
 
-#endif  // MOD_GPG_OPENPGP_T1_T1_STATE_H

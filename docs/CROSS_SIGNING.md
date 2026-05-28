@@ -124,85 +124,106 @@ gpg_sign_hash(hash, 32, signature, &sig_len);
 ### NVS Schema
 
 - **Namespace:** `gpg_recv`
-- **Key Format:** `pk_<fingerprint_hex_8>`
+- **Key Format:** `pk_<fingerprint_hex_8>` (first 4 bytes of V4 FP, hex)
 
 ### Structure
 
 ```c
 typedef struct {
-    uint8_t curve;                  // 1 Byte
-    char user_id[64];               // 64 Bytes
-    uint8_t pubkey[64];             // 64 Bytes
+    uint8_t curve;                  // 1 Byte (CDC_CURVE_ED25519 / CDC_CURVE_P256)
+    char user_id[64];               // 64 Bytes, null-padded UTF-8
+    uint8_t pubkey[64];             // 64 Bytes (32 used for Ed25519, 64 for P-256)
     uint8_t pubkey_len;             // 1 Byte
-    uint8_t fingerprint[20];        // 20 Bytes
+    uint8_t fingerprint_v4[20];     // 20 Bytes (RFC 4880, SHA-1)
+    uint8_t fingerprint_v5[32];     // 32 Bytes (RFC 9580, SHA-256)
     uint32_t received_at;           // 4 Bytes (Unix timestamp)
-    uint8_t my_signature[64];       // 64 Bytes (own cross-signature)
-    uint8_t sig_len;                // 1 Byte
+    uint8_t my_signature[64];       // 64 Bytes (own cross-signature, R || S)
+    uint8_t sig_len;                // 1 Byte (0 if not signed yet)
     uint8_t flags;                  // 1 Byte (0x01 = verified in person)
-} gpg_received_key_nvs_t;
+} gpg_recv_key_t;
 ```
 
-**Maximum Keys:** 16 (NVS limitation)
+**Maximum Keys:** 128. NVS itself imposes no hard limit; the cap exists so the
+in-memory list buffer used by RECV_LIST stays predictable (allocated in PSRAM).
 
 ## API
 
-### Receiving
+### Storage (`GpgRecvStore`)
 
-```c
-// Receive key from another badge and store
-bool gpg_receive_pubkey(
-    const uint8_t *pubkey, size_t pubkey_len,
-    uint8_t curve,
-    const char *user_id,
-    const uint8_t *fingerprint
-);
+```cpp
+class GpgRecvStore {
+public:
+    static GpgRecvStore& instance();
+
+    // Persist a received key. Returns false if the store is full
+    // (kMaxKeys == 128) or NVS write fails.
+    bool addKey(const gpg_recv_key_t& key);
+
+    // Number of stored keys.
+    uint8_t count() const;
+
+    // Load one key by list index (0 .. count()-1).
+    bool getKey(uint8_t index, gpg_recv_key_t* out) const;
+
+    // Remove one key by list index.
+    bool deleteKey(uint8_t index);
+
+    // Attach a cross-signature + flag bits to an existing key.
+    bool setSignature(uint8_t index,
+                      const uint8_t* sig, uint8_t sig_len,
+                      uint8_t flags);
+};
 ```
 
-### Listing
+### Cross-Signing (`xsig.h`)
 
-```c
-// Number of received keys
-uint8_t gpg_received_count(void);
+```cpp
+// Hash to be signed: SHA-256(fingerprint_v4 || padded(user_id, 64))
+bool gpgCrossSignDigest(const uint8_t fp_v4[20],
+                        const char* user_id,
+                        uint8_t out_hash[32]);
 
-// Get info for a key
-bool gpg_received_get_info(uint8_t index, gpg_received_key_info_t *info);
+// Sign the target key with the badge's own SIG ECC slot.
+// Output is 64 bytes (R || S) regardless of curve.
+bool gpgCrossSign(const gpg_recv_key_t& target, uint8_t out_sig[64]);
+
+// Build an ASCII-armored OpenPGP block: Public Key + User ID + Cert Sig.
+bool gpgBuildSignedKeyArmored(const gpg_recv_key_t& key,
+                              char* out, size_t out_size,
+                              size_t* out_len);
 ```
 
-### Cross-Signing
+### BLE Exchange (`ble_gpg_xsig.h`)
 
-```c
-// Sign a key
-bool gpg_cross_sign(uint8_t index);
+```cpp
+// Push own key to the connected peer; resolves when peer ACKs.
+bool gpg_xsig_send(uint16_t conn_handle);
 
-// Get signature
-bool gpg_received_get_signature(uint8_t index, uint8_t *sig_out, size_t *sig_len);
-```
+// Pull peer's key (server-initiated read of the data characteristic).
+bool gpg_xsig_request(uint16_t conn_handle);
 
-### Export for BLE
-
-```c
-// Export own key for BLE transmission
-bool gpg_export_for_broadcast(
-    uint8_t *pubkey, size_t *pubkey_len,
-    uint8_t *curve,
-    char *user_id,
-    uint8_t *fingerprint
-);
+// Triggered when a remote frame finished assembly. On success
+// the key has already been written through GpgRecvStore::addKey().
+typedef void (*gpg_xsig_received_cb_t)(const gpg_recv_key_t* key);
+void gpg_xsig_set_received_callback(gpg_xsig_received_cb_t cb);
 ```
 
 ## Serial Commands
 
-| Command | Description |
-|---------|-------------|
-| `GPG_RECV_LIST` | List all received keys |
-| `GPG_RECV_INFO <index>` | Details for a key |
-| `GPG_CROSS_SIGN <index>` | Sign key |
-| `GPG_RECV_DELETE <index>` | Delete key |
+Group command: `GPG <subcommand> [args]`. All entries require an authenticated session.
+
+| Sub-command | Description |
+|-------------|-------------|
+| `GPG RECV_LIST` | List all received keys |
+| `GPG RECV_INFO <index>` | Details for a key |
+| `GPG CROSS_SIGN <index>` | Sign key |
+| `GPG RECV_DELETE <index>` | Delete key |
+| `GPG EXPORT_SIGNED <index>` | Export signed key as ASCII-armored OpenPGP block |
 
 ### Example Output
 
 ```
-> GPG_RECV_LIST
+> GPG RECV_LIST
 OK: 2 received keys
 [0] Max Mustermann <max@example.com>
     FP: ABCD1234...
@@ -211,11 +232,12 @@ OK: 2 received keys
     FP: 5678EFGH...
     Signed: No
 
-> GPG_RECV_INFO 0
+> GPG RECV_INFO 0
 OK: Key details
 User-ID: Max Mustermann <max@example.com>
 Curve: Ed25519
-Fingerprint: ABCD1234567890ABCDEF1234567890ABCDEF1234
+Fingerprint V4: ABCD1234567890ABCDEF1234567890ABCDEF1234
+Fingerprint V5: 1122334455667788...1122334455667788 (64 hex)
 Received: 2026-01-19 14:30:00
 Signed: Yes
 Signature: (hex dump)
@@ -239,14 +261,16 @@ Cross-signing should only occur after personal verification:
 
 ### Fingerprints
 
-The badge calculates two fingerprint formats:
+The badge calculates and stores both formats:
 
 | Version | Hash | Length | Standard | Usage |
 |---------|------|--------|----------|-------|
 | V4 | SHA-1 | 20 Bytes (40 Hex) | RFC 4880 | GnuPG 2.x |
 | V5 | SHA-256 | 32 Bytes (64 Hex) | RFC 9580 | GnuPG 2.5+ |
 
-Both are automatically calculated during key generation and stored.
+Both fingerprints are computed during key generation (own key) and on receive
+(remote key) and stored in `gpg_recv_key_t`. V4 is the one used in the
+cross-signature digest for GnuPG 2.x compatibility.
 
 ### OpenPGP Export
 
@@ -254,7 +278,7 @@ Cross-signed keys can be exported in RFC 4880 format:
 
 ```bash
 # Via Serial Command
-GPG_EXPORT_SIGNED <index>
+GPG EXPORT_SIGNED <index>
 
 # Output: ASCII-armored OpenPGP
 -----BEGIN PGP PUBLIC KEY BLOCK-----

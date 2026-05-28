@@ -12,14 +12,12 @@
 #include "cdc_hal/IKeypad.h"
 #include "cdc_hal/ISleepController.h"
 #include "cdc_core/ModuleRegistry.h"
+#include "plugin_manager/PluginManager.h"
 #include "cdc_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <goodisplay/gdey029T94.h>
-#include <cdc_os_ui/fonts/FreeMonoBold9pt8b.h>
-#include <cdc_os_ui/fonts/FreeMonoBold12pt8b.h>
-#include <Fonts/FreeMonoBold18pt7b.h>
-#include <Fonts/FreeMonoBold24pt7b.h>
+#include "cdc_views/Fonts.h"
 #include "cdc_views/RenderHelpers.h"
 #include <cstring>
 
@@ -38,17 +36,6 @@ static constexpr int BATTERY_X = 260;
 static constexpr int BATTERY_Y = 5;
 static constexpr int DISPLAY_WIDTH = 296;
 
-/**
- * \brief Font size table: 5=24pt, 4=18pt, 3=12pt, 2=9pt, 1=built-in 6x8.
- */
-static const GFXfont* const FONT_SIZES[] = {
-    nullptr,                // Size 1: built-in 6x8 (CP437 native)
-    &FreeMonoBold9pt8b,     // Size 2: 9pt (Latin-1 range, supports umlauts)
-    &FreeMonoBold12pt8b,    // Size 3: 12pt (Latin-1 range, supports umlauts)
-    &FreeMonoBold18pt7b,    // Size 4: 18pt (ASCII only, unused on lockscreen)
-    &FreeMonoBold24pt7b,    // Size 5: 24pt (ASCII only, unused on lockscreen)
-};
-static constexpr int FONT_SIZE_COUNT = 5;
 
 /**
  * \brief Battery icon dimensions.
@@ -267,10 +254,14 @@ static void onLightMenuCallback() {
 /**
  * \brief Storage for dynamic context-menu items contributed by modules.
  */
-static constexpr uint8_t MAX_CONTEXT_ITEMS = 8;
+static constexpr uint8_t MAX_CONTEXT_ITEMS = 12;
+static constexpr uint8_t MAX_PLUGIN_ITEMS  = 4;
 static ContextMenuItem s_contextItems[MAX_CONTEXT_ITEMS];
 static core::LockScreenContextItem s_moduleContextItems[MAX_CONTEXT_ITEMS - 1];
 static uint8_t s_moduleContextCount = 0;
+
+static cdc::plugin_manager::PluginManager::LockscreenItem s_pluginContextItems[MAX_PLUGIN_ITEMS];
+static uint8_t s_pluginContextCount = 0;
 
 /**
  * \brief Wrapper callback for module context item at index 0.
@@ -314,6 +305,27 @@ static void (*const s_moduleCallbacks[])() = {
     moduleContextCallback6
 };
 
+static void pluginContextCallback0() {
+    cdc::plugin_manager::PluginManager::instance().triggerLockscreenItem(s_pluginContextItems[0]);
+    hideContextMenu();
+}
+static void pluginContextCallback1() {
+    cdc::plugin_manager::PluginManager::instance().triggerLockscreenItem(s_pluginContextItems[1]);
+    hideContextMenu();
+}
+static void pluginContextCallback2() {
+    cdc::plugin_manager::PluginManager::instance().triggerLockscreenItem(s_pluginContextItems[2]);
+    hideContextMenu();
+}
+static void pluginContextCallback3() {
+    cdc::plugin_manager::PluginManager::instance().triggerLockscreenItem(s_pluginContextItems[3]);
+    hideContextMenu();
+}
+static void (*const s_pluginCallbacks[MAX_PLUGIN_ITEMS])() = {
+    pluginContextCallback0, pluginContextCallback1,
+    pluginContextCallback2, pluginContextCallback3,
+};
+
 /**
  * \brief Handles lock-screen key actions.
  *
@@ -328,7 +340,7 @@ InputResult LockScreenView::onKey(char key) {
         uint8_t itemCount = 0;
 
         // First item: Light toggle (built-in)
-        s_contextItems[itemCount++] = {tr(StringId::LIGHT), onLightMenuCallback};
+        s_contextItems[itemCount++] = {ui::tr("core.light"), onLightMenuCallback};
 
         // Get module items from registry
         auto& moduleReg = core::ModuleRegistry::instance();
@@ -340,7 +352,14 @@ InputResult LockScreenView::onKey(char key) {
             s_contextItems[itemCount++] = {label, s_moduleCallbacks[i]};
         }
 
-        showContextMenu(tr(StringId::ACTIONS), s_contextItems, itemCount);
+        // Plugin-contributed lockscreen items.
+        s_pluginContextCount = cdc::plugin_manager::PluginManager::instance()
+            .getLockscreenItems(s_pluginContextItems, MAX_PLUGIN_ITEMS);
+        for (uint8_t i = 0; i < s_pluginContextCount && itemCount < MAX_CONTEXT_ITEMS; i++) {
+            s_contextItems[itemCount++] = {s_pluginContextItems[i].label, s_pluginCallbacks[i]};
+        }
+
+        showContextMenu(ui::tr("core.actions"), s_contextItems, itemCount);
         return InputResult::CONSUMED;
     }
 
@@ -413,8 +432,8 @@ void LockScreenView::checkDeepSleepTrigger(uint32_t nowMs) {
  * \return Localized footer hint string.
  */
 const char* LockScreenView::getFooterHint() const {
-    if (deepSleepMode_) return tr(StringId::DEEP_SLEEP);
-    return tr(StringId::PRESS_ANY_KEY);
+    if (deepSleepMode_) return ui::tr("core.deep_sleep");
+    return ui::tr("core.press_any_key");
 }
 
 /**
@@ -633,93 +652,49 @@ void LockScreenView::render(bool partial) {
     // === Right of battery: Status icons ===
     renderStatusIcons(gfx, BATTERY_X - 20, ICONS_Y);
 
-    auto measure = [&](const char* t, const GFXfont* f, int16_t* x1, int16_t* y1, uint16_t* w, uint16_t* h) {
-        if (f) cdc::ui::render::measureCp437Text(gfx, t, 0, 0, x1, y1, w, h);
-        else gfx->getTextBounds(t, 0, 0, x1, y1, w, h);
+    constexpr int FIT_BUDGET = DISPLAY_WIDTH - 10;
+
+    auto fitAndDraw = [&](const char* text, int baselineY,
+                          const GFXfont* const* candidates, size_t count,
+                          bool cp437) {
+        if (!text || !text[0]) return;
+        const GFXfont* f = cdc::ui::render::pickFontThatFits(
+            gfx, text, FIT_BUDGET, candidates, count, cp437);
+        int16_t x1, y1;
+        uint16_t w = 0, h = 0;
+        if (cp437) {
+            cdc::ui::render::measureCp437Text(gfx, text, 0, 0, &x1, &y1, &w, &h);
+        } else {
+            gfx->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+        }
+        int x = (display->getWidth() - w) / 2;
+        gfx->setCursor(x, baselineY);
+        if (cp437 && f) {
+            cdc::ui::render::drawCp437Text(gfx, text);
+        } else {
+            gfx->print(text);
+        }
     };
-    auto draw = [&](const char* t, const GFXfont* f) {
-        if (f) cdc::ui::render::drawCp437Text(gfx, t);
-        else gfx->print(t);
+
+    using cdc::ui::FontId;
+    static const GFXfont* const NAME_FONTS[] = {
+        cdc::ui::getGfxFont(FontId::Bold12pt),
+        cdc::ui::getGfxFont(FontId::Bold9pt),
+        cdc::ui::getGfxFont(FontId::Builtin),
+    };
+    static const GFXfont* const INFO_FONTS[] = {
+        cdc::ui::getGfxFont(FontId::Bold9pt),
+        cdc::ui::getGfxFont(FontId::Builtin),
     };
 
     // === Center: Name (size 3 = 12pt, fallback to smaller) ===
-    if (name_[0]) {
-        int16_t x1, y1;
-        uint16_t w, h;
-
-        // Try size 3 (12pt), then 2 (9pt), then 1 (built-in)
-        int selectedSize = 3;
-        for (int size = 3; size >= 1; size--) {
-            const GFXfont* f = FONT_SIZES[size - 1];
-            gfx->setFont(f);
-            gfx->setTextSize(1);
-            measure(name_, f, &x1, &y1, &w, &h);
-            if (w < DISPLAY_WIDTH - 10) {
-                selectedSize = size;
-                break;
-            }
-        }
-
-        const GFXfont* f = FONT_SIZES[selectedSize - 1];
-        gfx->setFont(f);
-        gfx->setTextSize(1);
-        measure(name_, f, &x1, &y1, &w, &h);
-        int nameX = (display->getWidth() - w) / 2;
-        gfx->setCursor(nameX, NAME_Y);
-        draw(name_, f);
-    }
+    fitAndDraw(name_,  NAME_Y,  NAME_FONTS, std::size(NAME_FONTS), true);
 
     // === Info line 1 (size 2 = 9pt, fallback to 1) ===
-    if (info_[0]) {
-        int16_t x1, y1;
-        uint16_t w, h;
-
-        // Try size 2 (9pt), then 1 (built-in)
-        int selectedSize = 2;
-        for (int size = 2; size >= 1; size--) {
-            const GFXfont* f = FONT_SIZES[size - 1];
-            gfx->setFont(f);
-            gfx->setTextSize(1);
-            measure(info_, f, &x1, &y1, &w, &h);
-            if (w < DISPLAY_WIDTH - 10) {
-                selectedSize = size;
-                break;
-            }
-        }
-
-        const GFXfont* f = FONT_SIZES[selectedSize - 1];
-        gfx->setFont(f);
-        gfx->setTextSize(1);
-        measure(info_, f, &x1, &y1, &w, &h);
-        int infoX = (display->getWidth() - w) / 2;
-        gfx->setCursor(infoX, INFO_Y);
-        draw(info_, f);
-    }
+    fitAndDraw(info_,  INFO_Y,  INFO_FONTS, std::size(INFO_FONTS), true);
 
     // === Info line 2 (size 2 = 9pt, fallback to 1) ===
-    if (info2_[0]) {
-        int16_t x1, y1;
-        uint16_t w, h;
-
-        // Try size 2 (9pt), then 1 (built-in)
-        int selectedSize = 2;
-        for (int size = 2; size >= 1; size--) {
-            gfx->setFont(FONT_SIZES[size - 1]);
-            gfx->setTextSize(1);
-            gfx->getTextBounds(info2_, 0, 0, &x1, &y1, &w, &h);
-            if (w < DISPLAY_WIDTH - 10) {
-                selectedSize = size;
-                break;
-            }
-        }
-
-        gfx->setFont(FONT_SIZES[selectedSize - 1]);
-        gfx->setTextSize(1);
-        gfx->getTextBounds(info2_, 0, 0, &x1, &y1, &w, &h);
-        int info2X = (display->getWidth() - w) / 2;
-        gfx->setCursor(info2X, INFO2_Y);
-        gfx->print(info2_);
-    }
+    fitAndDraw(info2_, INFO2_Y, INFO_FONTS, std::size(INFO_FONTS), false);
 
     // === Bottom: Footer hint (size 1 = built-in 6x8) ===
     gfx->setFont(nullptr);

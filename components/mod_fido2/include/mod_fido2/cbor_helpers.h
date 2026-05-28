@@ -1,9 +1,7 @@
 // CBOR Encoding/Decoding Helpers for CTAP2
 // Minimal CBOR implementation for FIDO2
 
-#ifndef CBOR_HELPERS_H
-#define CBOR_HELPERS_H
-
+#pragma once
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -223,4 +221,3 @@ bool cbor_parse_cose_key(cbor_reader_t *r, int *kty, int *alg,
 }
 #endif
 
-#endif // CBOR_HELPERS_H

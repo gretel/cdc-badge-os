@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+
+#include <gfxfont.h>
 
 #include "cdc_views/LayoutConstants.h"
 
@@ -27,6 +30,16 @@ void drawScrollIndicator(Gdey029T94* gfx, int x, int y, int listHeight,
 void drawDialogFrame(Gdey029T94* gfx, int x, int y, int w, int h);
 
 /**
+ * \brief Print `text` at the current cursor, truncated with an ellipsis to fit
+ *        `maxWidthPx`. Caller must have already called `setCursor` and
+ *        `setTextColor`/`setTextSize`. Adafruit-GFX text wrap should be off.
+ * \param gfx Display drawing context.
+ * \param text Null-terminated text.
+ * \param maxWidthPx Maximum width in pixels.
+ */
+void printTruncated(Gdey029T94* gfx, const char* text, int maxWidthPx);
+
+/**
  * \brief Maps a CP437 byte to the equivalent Latin-1 byte for use with
  *        Unicode/Latin-1 indexed GFX fonts (e.g. FreeMonoBold*pt8b).
  * \param c CP437 byte value.
@@ -47,6 +60,32 @@ uint8_t unicodeToCp437(uint32_t cp);
  */
 void utf8ToCp437Inplace(char* buf);
 
+/// Display encoding targets for decodeWebText().
+enum class DisplayTarget : uint8_t {
+    Cp437  = 0,  ///< GFX builtin glcdfont (default after `setFont(nullptr)`).
+    Latin1 = 1,  ///< FreeMonoBold*pt8b fonts (Latin-1 indexed, 0x20..0xFF).
+};
+
+/**
+ * \brief Normalises a web payload for display: HTML named/numeric entities
+ *        decode first, then UTF-8 multibyte sequences collapse into the
+ *        single-byte layout expected by the target font.
+ *
+ * \p target picks the output codepage:
+ *   - \ref DisplayTarget::Cp437 - matches the GFX builtin glcdfont.
+ *   - \ref DisplayTarget::Latin1 - matches the FreeMonoBold*pt8b fonts.
+ *
+ * Output is always NUL-terminated. Unmapped codepoints are dropped.
+ * `in` and `out` must not alias.
+ *
+ * \param in       Source string (UTF-8, optionally containing HTML entities).
+ * \param out      Destination buffer.
+ * \param out_size Capacity of `out` in bytes (including the terminator).
+ * \param target   Encoding target. Defaults to CP437.
+ */
+void decodeWebText(const char* in, char* out, size_t out_size,
+                   DisplayTarget target = DisplayTarget::Cp437);
+
 /**
  * \brief Prints a CP437 string by mapping each byte to Latin-1 before drawing.
  *        Use with TTF-derived GFX fonts (range 0x20..0xFF) that expect Latin-1 indices.
@@ -54,6 +93,30 @@ void utf8ToCp437Inplace(char* buf);
  * \param text CP437-encoded null-terminated string.
  */
 void drawCp437Text(Gdey029T94* gfx, const char* text);
+
+/**
+ * \brief Picks the largest font from \p candidates whose rendered width of
+ *        \p text fits within \p maxWidthPx. Candidates are evaluated in array
+ *        order; pass them sorted from largest to smallest so the first match
+ *        is the biggest font that still fits.
+ * \param gfx Target display. Its current font is overwritten while measuring
+ *        and restored to the selected font on return.
+ * \param text Null-terminated text to measure.
+ * \param maxWidthPx Pixel budget that the rendered text must stay below.
+ * \param candidates Array of GFX font pointers. `nullptr` entries select the
+ *        built-in 6x8 font.
+ * \param count Number of entries in \p candidates.
+ * \param cp437 If true, measure via measureCp437Text() (CP437->Latin1 mapping);
+ *        otherwise use Adafruit-GFX getTextBounds() directly.
+ * \return Selected font pointer. Falls back to the last (smallest) candidate
+ *         when nothing fits; returns nullptr if the array is empty.
+ */
+const GFXfont* pickFontThatFits(Gdey029T94* gfx,
+                                const char* text,
+                                int maxWidthPx,
+                                const GFXfont* const* candidates,
+                                size_t count,
+                                bool cp437 = false);
 
 /**
  * \brief Measures a CP437 string using the current font (via Latin-1 mapping).

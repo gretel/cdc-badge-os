@@ -1,9 +1,7 @@
 // FIDO2 Common Helpers
 // Shared utility functions used across the FIDO2 module
 
-#ifndef FIDO2_COMMON_H
-#define FIDO2_COMMON_H
-
+#pragma once
 #include <cdc_hal/ISecureElement.h>
 #include <mbedtls/sha256.h>
 #include <cstdint>
@@ -40,4 +38,3 @@ inline void sha256_str(const char* str, uint8_t out[FIDO2_SHA256_DIGEST_SIZE]) {
 } // namespace mod_fido2
 } // namespace cdc
 
-#endif // FIDO2_COMMON_H

@@ -34,6 +34,13 @@ jobs:
       - name: Build firmware
         run: pio run
 
+      - name: Build initial plugins FAT image (with lang overlay)
+        run: |
+          pip install construct
+          python tools/build_lang_image.py \
+            --lang-json assets/i18n/lang.json \
+            --output build/plugins_initial.bin
+
       - name: Get version info
         id: version
         env:
@@ -55,6 +62,7 @@ jobs:
           cp .pio/build/cdc_badge_usb/firmware.bin "artifacts/cdc-badge-firmware-${VERSION}.bin"
           cp .pio/build/cdc_badge_usb/bootloader.bin "artifacts/cdc-badge-bootloader-${VERSION}.bin"
           cp .pio/build/cdc_badge_usb/partitions.bin "artifacts/cdc-badge-partitions-${VERSION}.bin"
+          cp build/plugins_initial.bin "artifacts/cdc-badge-plugins-initial-${VERSION}.bin"
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4

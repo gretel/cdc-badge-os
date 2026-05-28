@@ -126,12 +126,12 @@ void rebuildBluetoothMenu() {
     bool enabled = ble && ble->isEnabled();
 
     if (enabled) {
-        s_bluetoothItems[BT_IDX_ENABLE] = {tr(StringId::BLUETOOTH_ON), '*', false, nullptr};
+        s_bluetoothItems[BT_IDX_ENABLE] = {ui::tr("core.bluetooth_on"), '*', false, nullptr};
     } else {
-        s_bluetoothItems[BT_IDX_ENABLE] = {tr(StringId::BLUETOOTH_OFF), 0, false, nullptr};
+        s_bluetoothItems[BT_IDX_ENABLE] = {ui::tr("core.bluetooth_off"), 0, false, nullptr};
     }
-    s_bluetoothItems[BT_IDX_STATUS] = {tr(StringId::BLE_STATUS), 0, false, nullptr};
-    s_bluetoothItems[BT_IDX_SCAN] = {tr(StringId::BLE_SCAN), 0, !enabled, nullptr};
+    s_bluetoothItems[BT_IDX_STATUS] = {ui::tr("core.ble_status"), 0, false, nullptr};
+    s_bluetoothItems[BT_IDX_SCAN] = {ui::tr("core.ble_scan"), 0, !enabled, nullptr};
     s_bluetoothItems[BT_IDX_FORGET_BONDS] = {"Forget all bonds", 0, !enabled, nullptr};
 
     auto& moduleReg = core::ModuleRegistry::instance();
@@ -146,7 +146,7 @@ void rebuildBluetoothMenu() {
     }
 
     if (s_bluetoothMenu) {
-        s_bluetoothMenu->init(tr(StringId::BLUETOOTH), s_bluetoothItems, BT_IDX_FIXED_COUNT + s_bluetoothModuleCount);
+        s_bluetoothMenu->init(ui::tr("core.bluetooth"), s_bluetoothItems, BT_IDX_FIXED_COUNT + s_bluetoothModuleCount);
     }
 }
 
@@ -213,18 +213,18 @@ static void onBluetoothMenuSelect(uint16_t index, void* userData) {
 static void toggleBluetoothEnable() {
     auto* ble = hal::getBluetoothControllerInstance();
     if (!ble) {
-        showToastError(tr(StringId::HW_NOT_AVAILABLE));
+        showToastError(ui::tr("core.hw_not_available"));
         return;
     }
 
     if (ble->isEnabled()) {
         ble->disable();
-        showToastInfo(tr(StringId::BLUETOOTH_OFF));
+        showToastInfo(ui::tr("core.bluetooth_off"));
     } else {
         if (ble->enable()) {
-            showToastSuccess(tr(StringId::BLUETOOTH_ON));
+            showToastSuccess(ui::tr("core.bluetooth_on"));
         } else {
-            showToastError(tr(StringId::FAILED));
+            showToastError(ui::tr("core.failed"));
         }
     }
 
@@ -263,16 +263,16 @@ static void showBluetoothStatus() {
         }
 
         if (ble->isConnected()) {
-            append("\n%s\n", tr(StringId::BLE_CONNECTED_TO));
-            append("%s: %d dBm\n", tr(StringId::BLE_SIGNAL), ble->getRssi());
+            append("\n%s\n", ui::tr("core.ble_connected_to"));
+            append("%s: %d dBm\n", ui::tr("core.ble_signal"), ble->getRssi());
         } else {
-            append("\n%s\n", tr(StringId::BLE_NOT_CONNECTED));
+            append("\n%s\n", ui::tr("core.ble_not_connected"));
         }
 
         append("\nName: %s\n", ble->getDeviceName());
     }
 
-    showInfo(tr(StringId::BLE_STATUS), info);
+    showInfo(ui::tr("core.ble_status"), info);
 }
 
 /**
@@ -281,11 +281,11 @@ static void showBluetoothStatus() {
 static void startBluetoothScan() {
     auto* ble = hal::getBluetoothControllerInstance();
     if (!ble || !ble->isEnabled()) {
-        showToastError(tr(StringId::HW_NOT_AVAILABLE));
+        showToastError(ui::tr("core.hw_not_available"));
         return;
     }
 
-    showToastInfo(tr(StringId::BLE_SCANNING), 0);
+    showToastInfo(ui::tr("core.ble_scanning"), 0);
 
     s_bleScanCount = 0;
     if (ble->startScan(BLE_SCAN_TIMEOUT_MS)) {
@@ -302,7 +302,7 @@ static void startBluetoothScan() {
     ViewStack::instance().hideModal();
 
     if (s_bleScanCount == 0) {
-        showToastInfo(tr(StringId::BLE_NO_DEVICES));
+        showToastInfo(ui::tr("core.ble_no_devices"));
         return;
     }
 
@@ -316,7 +316,7 @@ static void startBluetoothScan() {
     }
 
     char title[32];
-    snprintf(title, sizeof(title), "%s (%d)", tr(StringId::BLE_SCAN), s_bleScanCount);
+    snprintf(title, sizeof(title), "%s (%d)", ui::tr("core.ble_scan"), s_bleScanCount);
     s_bleScanView->init(title, s_bleScanItems, s_bleScanCount);
     ViewStack::instance().push(s_bleScanView);
 }

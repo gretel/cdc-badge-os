@@ -23,9 +23,11 @@ idf_component_register(
         cdc_ui
         cdc_views
         serial_cmd
+        plugin_manager
         Adafruit-GFX
         nvs_flash
         esp_timer
         freertos
         mbedtls
+        espressif__tinyusb
 )

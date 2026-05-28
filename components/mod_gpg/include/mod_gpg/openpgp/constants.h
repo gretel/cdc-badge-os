@@ -12,9 +12,7 @@
  * - FIPS 180-4: SHA-256 specification
  */
 
-#ifndef MOD_GPG_OPENPGP_CONSTANTS_H
-#define MOD_GPG_OPENPGP_CONSTANTS_H
-
+#pragma once
 #include <stddef.h>
 #include <stdint.h>
 
@@ -83,4 +81,3 @@ extern "C" {
 }
 #endif
 
-#endif /* MOD_GPG_OPENPGP_CONSTANTS_H */

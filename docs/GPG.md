@@ -170,28 +170,32 @@ The decrypt step is where the ESP32 ECDH path runs. Expect a one-off pinentry pr
 
 ## Serial commands
 
-| Command | Description |
-|---------|-------------|
-| `GPG_STATUS` | Show keys, fingerprints, counters |
-| `GPG_GENERATE <curve> <user_id>` | Generate SIG + DEC + AUT in one shot (curve 1 = Ed25519 for SIG/AUT, 2 = P-256 ECDSA for SIG/AUT — DEC is always P-256 ECDH) |
-| `GPG_EXPORT` | Print primary + subkey pubkeys as PEM |
-| `GPG_RESET` | Two-step destructive reset (see below) |
-| `GPG_RECV_LIST` / `GPG_RECV_INFO` / `GPG_CROSS_SIGN` / `GPG_RECV_DELETE` | Cross-signing helpers — see [CROSS_SIGNING.md](CROSS_SIGNING.md) |
+Group command: `GPG <subcommand> [args]`. All entries require an authenticated session.
+
+| Sub-command | Description |
+|-------------|-------------|
+| `GPG STATUS` | Show keys, fingerprints, counters |
+| `GPG GENERATE <curve> <user_id>` | Generate SIG + DEC + AUT in one shot (curve 1 = Ed25519 for SIG/AUT, 2 = P-256 ECDSA for SIG/AUT; DEC is always P-256 ECDH) |
+| `GPG EXPORT` | Print primary + subkey pubkeys as PEM |
+| `GPG RESET [token]` | Two-step destructive reset (see below) |
+| `GPG RECV_LIST` / `RECV_INFO <i>` / `RECV_DELETE <i>` | Inspect / remove received cross-sign keys — see [CROSS_SIGNING.md](CROSS_SIGNING.md) |
+| `GPG CROSS_SIGN <i>` | Cross-sign a received key |
+| `GPG EXPORT_SIGNED <i>` | ASCII-armored OpenPGP export of a cross-signed key |
 
 ### Reset workflow
 
-`GPG_RESET` wipes all three ECC slots, the DEC backup in R-Mem 502, the AES key, and resets PINs to factory defaults. To prevent fat-fingered loss, the command is two-step:
+`GPG RESET` wipes all three ECC slots, the DEC backup in R-Mem 502, the AES key, and resets PINs to factory defaults. To prevent fat-fingered loss, the command is two-step:
 
 ```text
-> GPG_RESET
+> GPG RESET
 WARNING: this wipes ALL GPG keys (SIG/DEC/AUT), the DEC backup, and PINs.
-Confirm within 30s: GPG_RESET A4F921
+Confirm within 30s: GPG RESET A4F921
 
-> GPG_RESET A4F921
+> GPG RESET A4F921
 OK
 ```
 
-The token is regenerated each time and only valid for 30 seconds. The same reset is also reachable from the GPG menu on the device (with on-screen confirmation) and via the OpenPGP `TERMINATE_DF` + `ACTIVATE_FILE` APDU pair triggered by `gpg --card-edit → factory-reset`.
+The token is regenerated each time and only valid for 30 seconds. The same reset is also reachable from the GPG menu on the device (with on-screen confirmation) and via the OpenPGP `TERMINATE_DF` + `ACTIVATE_FILE` APDU pair triggered by `gpg --card-edit -> factory-reset`.
 
 ## Security model
 

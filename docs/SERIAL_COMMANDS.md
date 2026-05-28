@@ -13,7 +13,22 @@ Commands tagged `[AUTH]` additionally require authentication even when
 `FEATURE_SECURE_SERIAL` is disabled. The tag is applied to anything that
 mutates persistent state or accesses secret material: `REBOOT`, all NVS
 mutators, every TROPIC01 slot mutator, the full TOTP / Password / GPG /
-Home Assistant module surface, and the factory-wipe commands.
+plugin module surface, and the factory-wipe commands.
+
+## Sub-command syntax
+
+Grouped commands are dispatched as `<GROUP> <SUBCOMMAND> [args...]`. For example:
+
+```
+NVS LIST
+NVS READ display name
+PIN CHANGE 1234 5678
+WIFI CONNECT MyAP secret123
+```
+
+Typing the bare group name (e.g. `NVS`) or `<GROUP> HELP` prints a usage block
+listing the available sub-commands. The same listing is reproduced by `HELP`
+under each module section.
 
 ## Authentication
 
@@ -26,7 +41,7 @@ Home Assistant module surface, and the factory-wipe commands.
 
 | Command | Description |
 |---------|-------------|
-| `HELP` | Show available commands |
+| `HELP` | Show available commands (includes sub-command listings) |
 | `PING` | Check if device is responsive (returns PONG) |
 | `STATUS` | Show system status |
 | `MEM` | Show memory usage (Heap/PSRAM/NVS) |
@@ -34,6 +49,7 @@ Home Assistant module surface, and the factory-wipe commands.
 | `ERROR_LOG` | Show error log |
 | `ERROR_LOG CLEAR` | Clear error log |
 | `REBOOT` | Restart the device `[AUTH]` |
+| `BOOTLOADER` | Reboot into USB download mode `[AUTH]` |
 
 ## Time
 
@@ -55,78 +71,158 @@ Home Assistant module surface, and the factory-wipe commands.
 
 ## NVS (Non-Volatile Storage)
 
-| Command | Description |
-|---------|-------------|
-| `NVS_LIST [namespace]` | List NVS entries |
-| `NVS_READ <ns> <key>` | Read NVS key value |
-| `NVS_DEL <ns> [key]` | Delete NVS key or namespace `[AUTH]` |
-| `NVS_CLEAR YES` | Erase entire NVS `[AUTH]` |
+Group command: `NVS <subcommand> [args]`
+
+| Sub-command | Description |
+|-------------|-------------|
+| `NVS LIST [namespace]` | List NVS entries (optionally filtered by namespace) |
+| `NVS READ <ns> <key>` | Read NVS key value |
+| `NVS DEL <ns> [key]` | Delete a single key, or the entire namespace if key is omitted `[AUTH]` |
+| `NVS CLEAR YES` | Erase entire NVS (`YES` confirmation required) `[AUTH]` |
 
 ## PIN Management
 
-| Command | Description |
-|---------|-------------|
-| `PIN_STATUS` | Show PIN status and retry counts |
-| `PIN_RESET` | Reset PIN retries (debug only) |
+Group command: `PIN <subcommand> [args]`
+
+| Sub-command | Description |
+|-------------|-------------|
+| `PIN STATUS` | Show PIN status and retry counts |
+| `PIN RESET` | Reset PIN retries (debug only) |
+| `PIN CHANGE <currentPin> <newPin>` | Change badge PIN (4-8 digits) `[AUTH]` |
 
 ## TROPIC01 Secure Element
 
-| Command | Description |
-|---------|-------------|
-| `TR01_STATUS` | Show TR01 connection status |
-| `TR01_INFO` | Show TR01 chip info (ID, firmware) |
-| `TR01_SESSION` | Start/restart TR01 session |
-| `TR01_SLOTS` | Show slot usage summary |
-| `TR01_RMEM_READ <slot>` | Read and dump R-Memory slot |
-| `TR01_ECC_DEL <slot>` | Delete ECC key slot `[AUTH]` |
-| `TR01_RMEM_DEL <slot>` | Delete R-Memory slot `[AUTH]` |
-| `TR01_RESYNC` | Resync TR01 session and cache |
-| `TR01_CACHE_REBUILD` | Rebuild TR01 cache from chip |
-| `TR01_CLEANUP` | Cleanup mismatched slots + rebuild cache `[AUTH]` |
-| `TR01_WIPE CONFIRM` | Factory reset all TR01 data `[AUTH]` |
+Group command: `TR01 <subcommand> [args]`
+
+| Sub-command | Description |
+|-------------|-------------|
+| `TR01 STATUS` | Show TR01 connection status |
+| `TR01 INFO` | Show TR01 chip info (ID, firmware) |
+| `TR01 SESSION` | Start/restart TR01 session |
+| `TR01 SLOTS` | Show slot usage summary |
+| `TR01 RMEM_READ <slot>` | Read and dump R-Memory slot |
+| `TR01 ECC_DEL <slot>` | Delete ECC key slot `[AUTH]` |
+| `TR01 RMEM_DEL <slot>` | Delete R-Memory slot `[AUTH]` |
+| `TR01 RESYNC` | Resync TR01 session and cache |
+| `TR01 CACHE_REBUILD` | Rebuild TR01 cache from chip |
+| `TR01 CLEANUP` | Cleanup mismatched slots + rebuild cache `[AUTH]` |
+| `TR01 WIPE CONFIRM` | Factory reset all TR01 data `[AUTH]` |
+
+## WiFi
+
+Group command: `WIFI <subcommand> [args]`. All WiFi commands require authentication.
+
+| Sub-command | Description |
+|-------------|-------------|
+| `WIFI SCAN` | Scan for available networks |
+| `WIFI STATUS` | Show WiFi state and saved configuration |
+| `WIFI ON [sta\|ap\|sta_ap]` | Enable WiFi radio (default STA, auto-reconnects if saved config exists) |
+| `WIFI OFF` | Disable WiFi radio |
+| `WIFI CONNECT <ssid> <password>` | Connect to network and persist credentials |
+| `WIFI TIMEOUT [ms]` | Get or set connect timeout (3000-60000 ms, default 15000, persisted in NVS) |
+| `WIFI FORGET` | Clear all saved WiFi configuration |
 
 ## TOTP Module
 
-| Command | Description |
-|---------|-------------|
-| `TOTP_LIST` | List all TOTP accounts `[AUTH]` |
-| `TOTP_ADD <name> <secret> [issuer] [digits] [period]` | Add TOTP account `[AUTH]` |
-| `TOTP_DEL <index>` | Delete TOTP account by index `[AUTH]` |
-| `TOTP_GET <index>` | Generate TOTP code by index `[AUTH]` |
+Group command: `TOTP <subcommand> [args]`. All TOTP commands require authentication.
 
-**TOTP_ADD Parameters:**
+| Sub-command | Description |
+|-------------|-------------|
+| `TOTP LIST` | List all TOTP accounts |
+| `TOTP ADD <name> <secret> [issuer] [digits] [period] [algo]` | Add TOTP account |
+| `TOTP DEL <index>` | Delete TOTP account by index |
+| `TOTP GET <index>` | Generate TOTP code by index |
+
+**`TOTP ADD` Parameters:**
 - `name` - Account name (required)
 - `secret` - Base32 encoded secret (required)
 - `issuer` - Issuer name (optional)
 - `digits` - Code length: 6, 7, or 8 (default: 6)
 - `period` - Time period in seconds (default: 30)
+- `algo` - HMAC algorithm: `SHA1`, `SHA256`, or `SHA512` (default: SHA1)
 
 ## Password Module
 
-| Command | Description |
-|---------|-------------|
-| `PASSWORD_LIST` | List password entries `[AUTH]` |
-| `PASSWORD_GET <index>` | Get password entry details `[AUTH]` |
-| `PASSWORD_ADD <name> <user> <url> <password>` | Add password entry `[AUTH]` |
-| `PASSWORD_EDIT <index> ...` | Edit existing password entry `[AUTH]` |
-| `PASSWORD_DEL <index>` | Delete password entry `[AUTH]` |
+Group command: `PASSWORD <subcommand> [args]`. All password commands require authentication.
+
+| Sub-command | Description |
+|-------------|-------------|
+| `PASSWORD LIST` | List password entries (sorted by title) |
+| `PASSWORD GET <slot>` | Show one entry (title, username, password, URL, TOTP link, notes) |
+| `PASSWORD ADD <slot\|x> <title> <user\|x> <pw\|x> <url\|x> <totp\|-> [notes]` | Add entry; `x` skips a field, `x` for password generates a 16-char random one, `x` for slot picks the next free slot |
+| `PASSWORD EDIT <slot> <field> <value>` | Edit one field. `field` is `title`, `username`, `password`, `url`, `totp`, or `notes`. Use `\\ ` to include spaces in `value`. |
+| `PASSWORD DEL <slot>` | Delete entry by slot |
 
 ## GPG Module
 
-| Command | Description |
-|---------|-------------|
-| `GPG_STATUS` | Show GPG key status `[AUTH]` |
-| `GPG_GENERATE <curve> <user_id>` | Generate GPG keys (1=Ed25519, 2=P-256) `[AUTH]` |
-| `GPG_EXPORT` | Export public keys `[AUTH]` |
-| `GPG_RESET` | Two-step destructive reset of all GPG keys (`GPG_RESET` prints a token; confirm within 30 s via `GPG_RESET <token>`) `[AUTH]` |
+Group command: `GPG <subcommand> [args]`. All GPG commands require authentication.
+
+| Sub-command | Description |
+|-------------|-------------|
+| `GPG STATUS` | Show keys, fingerprints, counters |
+| `GPG GENERATE <curve> <user_id>` | Generate SIG + DEC + AUT in one shot (`1` = Ed25519 for SIG/AUT, `2` = P-256 ECDSA for SIG/AUT; DEC is always P-256 ECDH) |
+| `GPG EXPORT` | Print primary + subkey pubkeys as PEM |
+| `GPG RESET [token]` | Two-step destructive reset (see below) |
+| `GPG RECV_LIST` | List received cross-sign keys (see [CROSS_SIGNING.md](CROSS_SIGNING.md)) |
+| `GPG RECV_INFO <index>` | Show details for a received key |
+| `GPG RECV_DELETE <index>` | Delete a received key |
+| `GPG CROSS_SIGN <index>` | Cross-sign a received key with the badge's SIG subkey |
+| `GPG EXPORT_SIGNED <index>` | Print signed key as ASCII-armored OpenPGP block (importable via `gpg --import`) |
+
+`GPG RESET` wipes all three ECC slots, the DEC backup in R-Mem 502, the AES key,
+and resets PINs to factory defaults. To prevent fat-fingered loss, the command
+is two-step:
+
+```
+> GPG RESET
+WARNING: this wipes ALL GPG keys (SIG/DEC/AUT), the DEC backup, and PINs.
+Confirm within 30s: GPG RESET A4F921
+
+> GPG RESET A4F921
+OK
+```
 
 ## vCard Module (BLE Badge-to-Badge)
 
-| Command | Description |
-|---------|-------------|
-| `VCARD_SET` | Set own vCard (multiline paste, terminate with empty line) |
-| `VCARD_GET` | Show own vCard |
-| `VCARD_DELETE` | Delete own vCard |
+Group command: `VCARD <subcommand>`
+
+| Sub-command | Description |
+|-------------|-------------|
+| `VCARD SET` | Set own vCard (multiline paste, terminate with `---` on its own line or `ABORT` to cancel) |
+| `VCARD GET` | Show own vCard |
+| `VCARD DELETE` | Delete own vCard |
+
+## Plugin Manager
+
+Group command: `PLUGIN <subcommand> [args]`. All plugin commands require authentication.
+
+| Sub-command | Description |
+|-------------|-------------|
+| `PLUGIN LIST` | List installed plugins (JSON array of `{id, name, version}`) |
+| `PLUGIN INFO <id>` | Show manifest details for one plugin |
+| `PLUGIN START <id>` | Start a plugin |
+| `PLUGIN STOP` | Stop the currently active plugin |
+| `PLUGIN DELETE <id>` | Delete wasm + meta + lang files for plugin |
+| `PLUGIN UPLOAD <id> <size> <crc32_hex>` | Upload `.wasm` payload (binary byte-stream) |
+| `PLUGIN UPLOAD_META <id> <size> <crc32_hex>` | Upload `.meta` payload (binary byte-stream) |
+| `PLUGIN UPLOAD_LANG <id> <size> <crc32_hex>` | Upload `.lang` payload (binary byte-stream) |
+| `PLUGIN ABORT` | Abort an active upload session |
+| `PLUGIN DEBUG` | Toggle verbose `PLG_*` / `host_*` logging |
+
+After issuing an `UPLOAD*` sub-command the device responds with `READY`, then
+accepts exactly `<size>` raw bytes from the serial stream. CRC-32 is computed
+on the fly and verified against `<crc32_hex>` (IEEE 802.3) before the partial
+file is renamed in place. A `READY` session aborts after 15 s of inactivity.
+
+## i18n Overlay
+
+Group command: `LANG <subcommand> [args]`. Requires authentication.
+
+| Sub-command | Description |
+|-------------|-------------|
+| `LANG UPLOAD <size>` | Upload `lang.json` overlay (binary byte-stream, same protocol as `PLUGIN UPLOAD`) |
+| `LANG INFO` | Show active language and available overlays under `/plugins/i18n/` |
+| `LANG RELOAD` | Reload `lang.json` overlay from `/plugins/i18n/` |
 
 ## Examples
 
@@ -135,14 +231,23 @@ Home Assistant module surface, and the factory-wipe commands.
 echo "SET_DATE $(date +%s)" > /dev/ttyACM0
 
 # Add TOTP account
-echo "TOTP_ADD GitHub JBSWY3DPEHPK3PXP" > /dev/ttyACM0
+echo "TOTP ADD GitHub JBSWY3DPEHPK3PXP" > /dev/ttyACM0
 
 # Add TOTP with all options
-echo "TOTP_ADD AWS HXDMVJECJJWSRB3HWIZR4IFUGFTMXBOZ Amazon 6 30" > /dev/ttyACM0
+echo "TOTP ADD AWS HXDMVJECJJWSRB3HWIZR4IFUGFTMXBOZ Amazon 6 30" > /dev/ttyACM0
 
 # Show memory usage
 echo "MEM" > /dev/ttyACM0
 
+# WiFi: enable STA mode and connect
+echo "AUTH 1234" > /dev/ttyACM0
+echo "WIFI ON sta" > /dev/ttyACM0
+echo "WIFI CONNECT MyAP secretPassword" > /dev/ttyACM0
+
+# NVS: inspect and delete a key
+echo "NVS LIST display" > /dev/ttyACM0
+echo "NVS DEL display name" > /dev/ttyACM0
+
 # Factory reset (dangerous!)
-echo "TR01_WIPE CONFIRM" > /dev/ttyACM0
+echo "TR01 WIPE CONFIRM" > /dev/ttyACM0
 ```

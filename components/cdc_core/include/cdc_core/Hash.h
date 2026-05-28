@@ -3,9 +3,7 @@
  * \brief Centralized non-cryptographic hash utilities.
  */
 
-#ifndef CDC_CORE_HASH_H
-#define CDC_CORE_HASH_H
-
+#pragma once
 #include <cstddef>
 #include <cstdint>
 
@@ -63,4 +61,3 @@ inline uint32_t fnv1a_32(const uint8_t* data, size_t len) {
 }  // namespace core
 }  // namespace cdc
 
-#endif  // CDC_CORE_HASH_H

@@ -1,9 +1,7 @@
 // FIDO2/WebAuthn Module
 // Main interface for credential management and user presence
 
-#ifndef FIDO2_H
-#define FIDO2_H
-
+#pragma once
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -191,4 +189,3 @@ uint8_t fido2_get_available_slots(void);
 }
 #endif
 
-#endif // FIDO2_H

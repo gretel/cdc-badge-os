@@ -165,7 +165,7 @@ Tools
   WiFi
   Bluetooth
   Hardware Info
-  Grove LED (if connected)
+  Plugins
 ─────────────────────────
 [Y] Select  [N] Back
 ```
@@ -181,7 +181,6 @@ Modules
   mod_totp       [ON]
   mod_password   [ON]
   mod_gpg        [ON]
-  grove_led      [OFF]
 ─────────────────────────
 [Y] Toggle  [N] Back
 ```

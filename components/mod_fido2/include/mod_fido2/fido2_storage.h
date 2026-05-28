@@ -1,9 +1,7 @@
 // FIDO2 Storage Layer (TROPIC01 + NVS)
 // Handles credential storage in ECC slots and R-Memory
 
-#ifndef FIDO2_STORAGE_H
-#define FIDO2_STORAGE_H
-
+#pragma once
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -297,4 +295,3 @@ bool fido2_storage_counter_flush(void);
 }
 #endif
 
-#endif // FIDO2_STORAGE_H

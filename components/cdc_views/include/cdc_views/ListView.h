@@ -31,7 +31,7 @@ struct ListItem {
  */
 class ListView : public ViewBase {
 public:
-    static constexpr uint16_t MAX_ITEMS = 512;  // Support large lists (e.g., password vault)
+    static constexpr uint16_t MAX_ITEMS = 2048;
     static constexpr uint8_t DEFAULT_ITEM_HEIGHT = 18;
     static constexpr uint8_t MIN_VISIBLE_ITEMS = 2;
     static constexpr uint8_t MAX_VISIBLE_ITEMS = 8;

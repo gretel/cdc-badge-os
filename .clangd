@@ -1,0 +1,18 @@
+CompileFlags:
+  CompilationDatabase: .pio/build/cdc_badge_usb
+  Remove:
+    - -mlongcalls
+    - -mtext-section-literals
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -free
+    - -fno-shrink-wrap
+
+Diagnostics:
+  UnusedIncludes: None
+  Suppress:
+    - pp_file_not_found
+
+Index:
+  Background: Build
+  StandardLibrary: Yes

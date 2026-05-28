@@ -91,6 +91,19 @@ bool gpg_reset(void);
  */
 bool gpg_export_pubkey_pem(char *buf, size_t size, size_t *out_len);
 
+/**
+ * \brief Writes the alchemical-word fingerprint of the SIG public key.
+ *
+ * Reads the current SIG key from the secure element, derives a SHA-256, and
+ * encodes the first 25 bits as five space-separated words from the shared
+ * 32-word alchemy table. Intended for visual comparison between two devices.
+ *
+ * \param buf Output buffer; must be at least KEY_FINGERPRINT_MAX_LEN bytes.
+ * \param len Capacity of \p buf.
+ * \return `true` on success. On failure the buffer holds an error placeholder.
+ */
+bool gpg_alchemy_fingerprint(char *buf, size_t len);
+
 #ifdef __cplusplus
 }
 #endif

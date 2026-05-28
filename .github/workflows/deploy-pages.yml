@@ -105,10 +105,13 @@ jobs:
             mv "_site/cdc-badge-bootloader-${TAG}.bin" _site/bootloader.bin
             mv "_site/cdc-badge-partitions-${TAG}.bin" _site/partitions.bin
             mv "_site/cdc-badge-firmware-${TAG}.bin" _site/firmware.bin
+            if [ -f "_site/cdc-badge-plugins-initial-${TAG}.bin" ]; then
+              mv "_site/cdc-badge-plugins-initial-${TAG}.bin" _site/plugins_initial.bin
+            fi
 
             cat > _site/manifest.json << MANIFEST
           {
-            "name": "CDC Badge OS",
+            "name": "CDC Badge OS (Firmware Update)",
             "version": "${TAG}",
             "builds": [
               {
@@ -116,12 +119,32 @@ jobs:
                 "parts": [
                   { "path": "bootloader.bin", "offset": 0 },
                   { "path": "partitions.bin", "offset": 32768 },
-                  { "path": "firmware.bin", "offset": 65536 }
+                  { "path": "firmware.bin", "offset": 327680 }
                 ]
               }
             ]
           }
           MANIFEST
+
+            if [ -f "_site/plugins_initial.bin" ]; then
+              cat > _site/manifest_factory.json << MANIFEST
+          {
+            "name": "CDC Badge OS (Factory Setup)",
+            "version": "${TAG}",
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [
+                  { "path": "bootloader.bin",      "offset": 0 },
+                  { "path": "partitions.bin",      "offset": 32768 },
+                  { "path": "firmware.bin",        "offset": 327680 },
+                  { "path": "plugins_initial.bin", "offset": 14614528 }
+                ]
+              }
+            ]
+          }
+          MANIFEST
+            fi
           else
             echo "No release found, skipping firmware binaries"
           fi

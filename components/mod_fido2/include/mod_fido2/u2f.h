@@ -1,9 +1,7 @@
 // U2F/CTAP1 Protocol Implementation
 // Legacy U2F support for Chrome compatibility
 
-#ifndef U2F_H
-#define U2F_H
-
+#pragma once
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -99,4 +97,3 @@ uint16_t u2f_process_apdu(const uint8_t *apdu, uint16_t apdu_len,
 }
 #endif
 
-#endif // U2F_H

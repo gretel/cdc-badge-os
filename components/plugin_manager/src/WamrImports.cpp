@@ -1,0 +1,631 @@
+/**
+ * \file WamrImports.cpp
+ * \brief NativeSymbol table bound under WAMR module "cdc".
+ *
+ * Each wrapper here translates between WAMR's calling convention
+ * (wasm_exec_env_t + WASM-validated argument types) and the host_api_*.cpp
+ * implementations. Wrappers stay thin - the actual logic always lives in
+ * the host_api_<family>.cpp files.
+ */
+
+#include "plugin_manager/WamrImports.h"
+#include "plugin_manager/host_api.h"
+#include "cdc_core/Raii.h"
+#include "cdc_views/ListView.h"
+
+extern "C" {
+#include "wasm_export.h"
+void plg_log_info (const char* msg);
+void plg_log_warn (const char* msg);
+void plg_log_error(const char* msg);
+}
+
+#include <cstdio>
+#include <cstring>
+
+namespace cdc::plugin_manager {
+
+// Wrapper signature notation:
+//   i = i32, I = i64, $ = null-terminated string, *~ = buffer+length.
+// WAMR injects wasm_exec_env_t as the first C argument automatically.
+
+#define W(name, fn, sig)  { name, (void*)fn, sig, nullptr }
+
+// -- Logging ----------------------------------------------------------------
+
+static void w_host_log(wasm_exec_env_t, uint32_t level, const char* tag, const char* msg)
+{ host_log(static_cast<uint8_t>(level), tag, msg); }
+
+// -- Time / Power -----------------------------------------------------------
+
+static uint64_t w_host_uptime_ms(wasm_exec_env_t)        { return host_uptime_ms(); }
+static int64_t  w_host_unix_time(wasm_exec_env_t)        { return host_unix_time(); }
+static int32_t  w_host_is_time_set(wasm_exec_env_t)      { return host_is_time_set() ? 1 : 0; }
+static int32_t  w_host_timezone_offset(wasm_exec_env_t)  { return host_timezone_offset(); }
+
+static uint32_t w_host_battery_mv(wasm_exec_env_t)          { return host_battery_mv(); }
+static uint32_t w_host_battery_pct(wasm_exec_env_t)         { return host_battery_pct(); }
+static int32_t  w_host_is_usb_connected(wasm_exec_env_t)    { return host_is_usb_connected(); }
+static uint32_t w_host_power_source(wasm_exec_env_t)        { return host_power_source(); }
+static uint32_t w_host_charge_status(wasm_exec_env_t)       { return host_charge_status(); }
+static int32_t  w_host_is_battery_low(wasm_exec_env_t)      { return host_is_battery_low(); }
+static int32_t  w_host_is_battery_critical(wasm_exec_env_t) { return host_is_battery_critical(); }
+
+// -- UI ---------------------------------------------------------------------
+
+static int32_t w_host_ui_push_toast(wasm_exec_env_t, const char* t, uint32_t icon, uint32_t ms)
+{ return host_ui_push_toast(t, icon, static_cast<uint16_t>(ms)); }
+
+static int32_t w_host_ui_push_message(wasm_exec_env_t, const char* t, uint32_t icon, uint32_t ms)
+{ return host_ui_push_message(t, icon, ms); }
+
+static int32_t w_host_ui_push_info(wasm_exec_env_t, const char* title, const char* body)
+{ return host_ui_push_info(title, body); }
+
+static int32_t w_host_ui_push_confirm(wasm_exec_env_t, const char* text, uint32_t icon, uint32_t action_id)
+{ return host_ui_push_confirm(text, icon, action_id); }
+
+namespace {
+int translate_and_call(wasm_exec_env_t exec_env, const char* title, const ui_item_t* items,
+                       uint32_t count, uint32_t sel, uint32_t menu, bool replace)
+{
+    if (count == 0 || !items) {
+        return replace ? host_ui_replace_list(title, items, 0, sel, menu)
+                       : host_ui_push_list   (title, items, 0, sel, menu);
+    }
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    if (count > cdc::ui::ListView::MAX_ITEMS) count = cdc::ui::ListView::MAX_ITEMS;
+    auto native = cdc::core::psramAlloc<ui_item_t>(count);
+    if (!native) return HOST_ERR_NO_MEMORY;
+    for (uint32_t i = 0; i < count; ++i) {
+        native[i] = items[i];
+        uint32_t off = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(items[i].label));
+        if (off != 0 && wasm_runtime_validate_app_addr(inst, off, 1)) {
+            native[i].label = static_cast<const char*>(wasm_runtime_addr_app_to_native(inst, off));
+        } else {
+            native[i].label = "";
+        }
+    }
+    return replace ? host_ui_replace_list(title, native.get(), static_cast<uint16_t>(count), sel, menu)
+                   : host_ui_push_list   (title, native.get(), static_cast<uint16_t>(count), sel, menu);
+}
+}  // namespace
+
+static int32_t w_host_ui_push_list(wasm_exec_env_t exec_env, const char* title, const ui_item_t* items,
+                                   uint32_t count, uint32_t sel, uint32_t menu)
+{
+    return translate_and_call(exec_env, title, items, count, sel, menu, false);
+}
+
+static int32_t w_host_ui_replace_list(wasm_exec_env_t exec_env, const char* title, const ui_item_t* items,
+                                      uint32_t count, uint32_t sel, uint32_t menu)
+{
+    return translate_and_call(exec_env, title, items, count, sel, menu, true);
+}
+
+static int32_t w_host_ui_set_view_footer(wasm_exec_env_t, const char* hint)
+{
+    return host_ui_set_view_footer(hint);
+}
+
+static int32_t w_host_ui_set_view_empty(wasm_exec_env_t, const char* text)
+{
+    return host_ui_set_view_empty(text);
+}
+
+static int32_t w_host_ui_push_context_menu(wasm_exec_env_t exec_env, const char* title,
+                                            const ui_item_t* items, uint32_t count, uint32_t sel)
+{
+    if (count == 0 || !items) return host_ui_push_context_menu(title, items, 0, sel);
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    constexpr uint32_t kMaxItems = 8;
+    if (count > kMaxItems) count = kMaxItems;
+    ui_item_t native[kMaxItems];
+    for (uint32_t i = 0; i < count; ++i) {
+        native[i] = items[i];
+        uint32_t off = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(items[i].label));
+        if (off != 0 && wasm_runtime_validate_app_addr(inst, off, 1)) {
+            native[i].label = static_cast<const char*>(wasm_runtime_addr_app_to_native(inst, off));
+        } else {
+            native[i].label = "";
+        }
+    }
+    return host_ui_push_context_menu(title, native, static_cast<uint16_t>(count), sel);
+}
+
+static int32_t w_host_ui_pop(wasm_exec_env_t)            { return host_ui_pop(); }
+static int32_t w_host_ui_pop_to_plugin(wasm_exec_env_t)  { return host_ui_pop_to_plugin(); }
+static int32_t w_host_ui_repaint(wasm_exec_env_t)        { return host_ui_repaint(); }
+static int32_t w_host_ui_wink(wasm_exec_env_t, uint32_t count, uint32_t period_ms)
+{ return host_ui_wink(static_cast<uint8_t>(count), static_cast<uint16_t>(period_ms)); }
+
+static int32_t w_host_ui_push_t9_input(wasm_exec_env_t, const char* title, const char* initial,
+                                       uint32_t max_len, uint32_t action_id)
+{ return host_ui_push_t9_input(title, initial, static_cast<uint16_t>(max_len), action_id); }
+
+static int32_t w_host_ui_push_password(wasm_exec_env_t, const char* title, const char* initial,
+                                       uint32_t max_len, uint32_t action_id)
+{ return host_ui_push_password(title, initial, static_cast<uint16_t>(max_len), action_id); }
+
+static int32_t w_host_ui_push_pin_entry(wasm_exec_env_t, const char* title, uint32_t max_len,
+                                        uint32_t max_attempts, uint32_t action_id)
+{ return host_ui_push_pin_entry(title, static_cast<uint8_t>(max_len),
+                                static_cast<uint8_t>(max_attempts), action_id); }
+
+static int32_t w_host_ui_push_slider(wasm_exec_env_t, const char* title, int32_t min, int32_t max,
+                                     int32_t init, int32_t step, const char* unit, uint32_t action_id)
+{ return host_ui_push_slider(title, min, max, init, step, unit, action_id); }
+
+static int32_t w_host_ui_push_color_picker(wasm_exec_env_t, uint32_t r, uint32_t g,
+                                            uint32_t b, uint32_t action_id)
+{ return host_ui_push_color_picker(static_cast<uint8_t>(r), static_cast<uint8_t>(g),
+                                    static_cast<uint8_t>(b), action_id); }
+
+static int32_t w_host_ui_consume_input_text(wasm_exec_env_t, char* out, uint32_t out_size)
+{ return host_ui_consume_input_text(out, out_size); }
+
+static int32_t w_host_ui_consume_input_int(wasm_exec_env_t, int32_t* out)
+{ return host_ui_consume_input_int(out); }
+
+// -- Canvas view -----------------------------------------------------------
+
+static int32_t w_host_view_canvas_push(wasm_exec_env_t, const char* title,
+                                        uint32_t key_action_id, uint32_t widget_action_id)
+{ return host_view_canvas_push(title, key_action_id, widget_action_id); }
+
+static int32_t w_host_view_canvas_get_body_size(wasm_exec_env_t, uint16_t* w, uint16_t* h)
+{ return host_view_canvas_get_body_size(w, h); }
+
+static int32_t w_host_view_canvas_set_footer(wasm_exec_env_t, const char* hint)
+{ return host_view_canvas_set_footer(hint); }
+
+static int32_t w_host_view_canvas_clear(wasm_exec_env_t)
+{ return host_view_canvas_clear(); }
+
+static int32_t w_host_view_canvas_set_text_size(wasm_exec_env_t, uint32_t size)
+{ return host_view_canvas_set_text_size(static_cast<uint8_t>(size)); }
+
+static int32_t w_host_view_canvas_set_text_color(wasm_exec_env_t, uint32_t inverted)
+{ return host_view_canvas_set_text_color(inverted != 0); }
+
+static int32_t w_host_view_canvas_set_font(wasm_exec_env_t, uint32_t font_id)
+{ return host_view_canvas_set_font(static_cast<uint8_t>(font_id)); }
+
+static int32_t w_host_text_pick_font_that_fits(wasm_exec_env_t, const char* text, int32_t max_width_px,
+                                               const uint8_t* candidates, uint32_t count,
+                                               uint8_t* out_font_id)
+{
+    return host_text_pick_font_that_fits(text, static_cast<int16_t>(max_width_px),
+                                         candidates, count, out_font_id);
+}
+
+static int32_t w_host_view_canvas_draw_text(wasm_exec_env_t, int32_t x, int32_t y, const char* text)
+{ return host_view_canvas_draw_text(static_cast<int16_t>(x), static_cast<int16_t>(y), text); }
+
+static int32_t w_host_view_canvas_draw_text_aligned(wasm_exec_env_t, int32_t x, int32_t y,
+                                                     int32_t w, const char* text, uint32_t align)
+{ return host_view_canvas_draw_text_aligned(static_cast<int16_t>(x), static_cast<int16_t>(y),
+                                            static_cast<int16_t>(w), text,
+                                            static_cast<uint8_t>(align)); }
+
+static int32_t w_host_view_canvas_draw_rect(wasm_exec_env_t, int32_t x, int32_t y,
+                                             int32_t w, int32_t h, uint32_t filled)
+{ return host_view_canvas_draw_rect(static_cast<int16_t>(x), static_cast<int16_t>(y),
+                                    static_cast<int16_t>(w), static_cast<int16_t>(h),
+                                    filled != 0); }
+
+static int32_t w_host_view_canvas_invert_rect(wasm_exec_env_t, int32_t x, int32_t y,
+                                               int32_t w, int32_t h)
+{ return host_view_canvas_invert_rect(static_cast<int16_t>(x), static_cast<int16_t>(y),
+                                       static_cast<int16_t>(w), static_cast<int16_t>(h)); }
+
+static int32_t w_host_view_canvas_hline(wasm_exec_env_t, int32_t x, int32_t y, int32_t w)
+{ return host_view_canvas_hline(static_cast<int16_t>(x), static_cast<int16_t>(y),
+                                 static_cast<int16_t>(w)); }
+
+static int32_t w_host_view_canvas_vline(wasm_exec_env_t, int32_t x, int32_t y, int32_t h)
+{ return host_view_canvas_vline(static_cast<int16_t>(x), static_cast<int16_t>(y),
+                                 static_cast<int16_t>(h)); }
+
+static int32_t w_host_view_canvas_commit(wasm_exec_env_t, uint32_t full_refresh)
+{ return host_view_canvas_commit(full_refresh != 0); }
+
+static int32_t w_host_view_canvas_add_slider(wasm_exec_env_t, uint32_t widget_id,
+                                              int32_t min, int32_t max, int32_t initial, int32_t step)
+{ return host_view_canvas_add_slider(widget_id, min, max, initial, step); }
+
+static int32_t w_host_view_canvas_add_text(wasm_exec_env_t, uint32_t widget_id,
+                                            uint32_t max_len, const char* initial)
+{ return host_view_canvas_add_text(widget_id, static_cast<uint16_t>(max_len), initial); }
+
+static int32_t w_host_view_canvas_add_button(wasm_exec_env_t, uint32_t widget_id)
+{ return host_view_canvas_add_button(widget_id); }
+
+static int32_t w_host_view_canvas_remove_widget(wasm_exec_env_t, uint32_t widget_id)
+{ return host_view_canvas_remove_widget(widget_id); }
+
+static int32_t w_host_view_canvas_set_value(wasm_exec_env_t, uint32_t widget_id, int32_t value)
+{ return host_view_canvas_set_value(widget_id, value); }
+
+static int32_t w_host_view_canvas_get_value(wasm_exec_env_t, uint32_t widget_id, int32_t* out)
+{ return host_view_canvas_get_value(widget_id, out); }
+
+static int32_t w_host_view_canvas_set_text(wasm_exec_env_t, uint32_t widget_id, const char* text)
+{ return host_view_canvas_set_text(widget_id, text); }
+
+static int32_t w_host_view_canvas_get_text(wasm_exec_env_t, uint32_t widget_id,
+                                            char* out, uint32_t cap)
+{ return host_view_canvas_get_text(widget_id, out, cap); }
+
+static int32_t w_host_view_canvas_set_focus(wasm_exec_env_t, uint32_t widget_id)
+{ return host_view_canvas_set_focus(widget_id); }
+
+static int32_t w_host_view_canvas_get_focus(wasm_exec_env_t, uint32_t* out)
+{ return host_view_canvas_get_focus(out); }
+
+static int32_t w_host_view_canvas_set_key_repeat(wasm_exec_env_t, uint32_t initial_ms, uint32_t repeat_ms)
+{ return host_view_canvas_set_key_repeat(static_cast<uint16_t>(initial_ms),
+                                          static_cast<uint16_t>(repeat_ms)); }
+
+// -- I18n -------------------------------------------------------------------
+
+static int32_t w_host_i18n_tr_key (wasm_exec_env_t, const char* k, char* o, uint32_t c) { return host_i18n_tr_key(k, o, c); }
+static int32_t w_host_i18n_tr_meta(wasm_exec_env_t, const char* f, char* o, uint32_t c) { return host_i18n_tr_meta(f, o, c); }
+static int32_t w_host_i18n_tr_core(wasm_exec_env_t, const char* k, char* o, uint32_t c) { return host_i18n_tr_core(k, o, c); }
+static uint32_t w_host_i18n_current_language(wasm_exec_env_t)                           { return host_i18n_current_language(); }
+
+// -- NVS --------------------------------------------------------------------
+
+static int32_t w_host_nvs_get_blob(wasm_exec_env_t, const char* key, uint8_t* buf, uint32_t buf_size)
+{
+    size_t len = buf_size;
+    int rc = host_nvs_get_blob(key, buf, &len);
+    return rc == HOST_OK ? static_cast<int32_t>(len) : rc;
+}
+
+static int32_t w_host_nvs_set_blob(wasm_exec_env_t, const char* key, const uint8_t* buf, uint32_t len)
+{ return host_nvs_set_blob(key, buf, len); }
+
+static int32_t w_host_nvs_get_u32(wasm_exec_env_t, const char* key, uint32_t* out)
+{ return host_nvs_get_u32(key, out); }
+
+static int32_t w_host_nvs_set_u32(wasm_exec_env_t, const char* key, uint32_t value)
+{ return host_nvs_set_u32(key, value); }
+
+static int32_t w_host_nvs_get_str(wasm_exec_env_t, const char* key, char* buf, uint32_t buf_size)
+{ return host_nvs_get_str(key, buf, buf_size); }
+
+static int32_t w_host_nvs_set_str(wasm_exec_env_t, const char* key, const char* value)
+{ return host_nvs_set_str(key, value); }
+
+static int32_t w_host_nvs_erase(wasm_exec_env_t, const char* key) { return host_nvs_erase(key); }
+
+// -- Crypto -----------------------------------------------------------------
+
+static int32_t w_host_random(wasm_exec_env_t, uint8_t* buf, uint32_t len)
+{ return host_random(buf, len); }
+
+static int32_t w_host_sha256(wasm_exec_env_t, const uint8_t* data, uint32_t len, uint8_t* out)
+{ return host_sha256(data, len, out); }
+
+static int32_t w_host_hmac_sha256(wasm_exec_env_t, const uint8_t* key, uint32_t klen,
+                                  const uint8_t* data, uint32_t dlen, uint8_t* out)
+{ return host_hmac_sha256(key, klen, data, dlen, out); }
+
+static int32_t w_host_base32_encode(wasm_exec_env_t, const uint8_t* in, uint32_t in_len, char* out, uint32_t out_size)
+{ return host_base32_encode(in, in_len, out, out_size); }
+
+static int32_t w_host_base32_decode(wasm_exec_env_t, const char* in, uint32_t in_len, uint8_t* out, uint32_t out_size)
+{ return host_base32_decode(in, in_len, out, out_size); }
+
+static int32_t w_host_hex_encode(wasm_exec_env_t, const uint8_t* in, uint32_t in_len, char* out, uint32_t out_size)
+{ return host_hex_encode(in, in_len, out, out_size); }
+
+// -- HTTP -------------------------------------------------------------------
+
+static int32_t w_host_http_open(wasm_exec_env_t, uint32_t method, const char* url, uint32_t timeout)
+{ return host_http_open(static_cast<uint8_t>(method), url, timeout); }
+
+static int32_t w_host_http_set_header(wasm_exec_env_t, int32_t h, const char* k, const char* v)
+{ return host_http_set_header(h, k, v); }
+
+static int32_t w_host_http_set_body(wasm_exec_env_t, int32_t h, const uint8_t* body, uint32_t len)
+{ return host_http_set_body(h, body, len); }
+
+static int32_t w_host_http_perform(wasm_exec_env_t, int32_t h)  { return host_http_perform(h); }
+static int32_t w_host_http_status(wasm_exec_env_t,  int32_t h)  { return host_http_status(h); }
+static int32_t w_host_http_close (wasm_exec_env_t, int32_t h)   { return host_http_close(h); }
+
+static int32_t w_host_http_read_chunk(wasm_exec_env_t, int32_t h, uint8_t* buf, uint32_t buf_size)
+{
+    size_t out_len = 0;
+    int rc = host_http_read_chunk(h, buf, buf_size, &out_len);
+    return rc == HOST_OK ? static_cast<int32_t>(out_len) : rc;
+}
+
+// -- WiFi -------------------------------------------------------------------
+
+static int32_t w_host_wifi_request(wasm_exec_env_t, uint32_t t) { return host_wifi_request(t); }
+static int32_t w_host_wifi_release(wasm_exec_env_t)             { return host_wifi_release(); }
+static int32_t w_host_wifi_is_connected(wasm_exec_env_t)        { return host_wifi_is_connected(); }
+static int32_t w_host_wifi_ssid(wasm_exec_env_t, char* out, uint32_t sz)
+{ return host_wifi_ssid(out, sz); }
+static int32_t w_host_wifi_ip(wasm_exec_env_t, char* out, uint32_t sz)
+{ return host_wifi_ip(out, sz); }
+
+// -- SecureElement ----------------------------------------------------------
+
+static int32_t w_host_rmem_read_named(wasm_exec_env_t, const char* name,
+                                      uint8_t* buf, uint32_t buf_size)
+{
+    size_t len = buf_size;
+    int rc = host_rmem_read_named(name, buf, &len);
+    return rc == HOST_OK ? static_cast<int32_t>(len) : rc;
+}
+
+static int32_t w_host_rmem_write_named(wasm_exec_env_t, const char* name,
+                                       const uint8_t* buf, uint32_t len)
+{ return host_rmem_write_named(name, buf, len); }
+
+static int32_t w_host_rmem_erase_named(wasm_exec_env_t, const char* name)
+{ return host_rmem_erase_named(name); }
+
+static int32_t w_host_rmem_name_used(wasm_exec_env_t, const char* name)
+{ return host_rmem_name_used(name) ? 1 : 0; }
+
+static uint32_t w_host_rmem_slot_size(wasm_exec_env_t)
+{ return host_rmem_slot_size(); }
+
+static int32_t w_host_ecdsa_sign(wasm_exec_env_t, uint32_t slot, const uint8_t* msg, uint32_t len, uint8_t* sig)
+{ return host_ecdsa_sign(static_cast<uint8_t>(slot), msg, len, sig); }
+
+// -- EventBus ---------------------------------------------------------------
+
+static int32_t w_host_event_subscribe(wasm_exec_env_t, uint32_t mask, uint32_t action_id)
+{ return host_event_subscribe(mask, action_id); }
+static int32_t w_host_event_unsubscribe(wasm_exec_env_t, uint32_t sub) { return host_event_unsubscribe(sub); }
+
+// -- GPIO -------------------------------------------------------------------
+
+static int32_t w_host_gpio_set_direction(wasm_exec_env_t, uint32_t pin, uint32_t dir)
+{ return host_gpio_set_direction(static_cast<uint8_t>(pin), static_cast<uint8_t>(dir)); }
+static int32_t w_host_gpio_set_pull(wasm_exec_env_t, uint32_t pin, uint32_t pull)
+{ return host_gpio_set_pull(static_cast<uint8_t>(pin), static_cast<uint8_t>(pull)); }
+static int32_t w_host_gpio_write(wasm_exec_env_t, uint32_t pin, int32_t level)
+{ return host_gpio_write(static_cast<uint8_t>(pin), level != 0); }
+static int32_t w_host_gpio_read(wasm_exec_env_t, uint32_t pin, int32_t* out)
+{
+    bool level = false;
+    int rc = host_gpio_read(static_cast<uint8_t>(pin), &level);
+    if (rc == HOST_OK && out) *out = level ? 1 : 0;
+    return rc;
+}
+static int32_t w_host_gpio_release(wasm_exec_env_t, uint32_t pin)
+{ return host_gpio_release(static_cast<uint8_t>(pin)); }
+static int32_t w_host_gpio_pwm_start(wasm_exec_env_t, uint32_t pin, uint32_t freq, uint32_t duty)
+{ return host_gpio_pwm_start(static_cast<uint8_t>(pin), freq, static_cast<uint16_t>(duty)); }
+static int32_t w_host_gpio_pwm_stop(wasm_exec_env_t, uint32_t pin)
+{ return host_gpio_pwm_stop(static_cast<uint8_t>(pin)); }
+
+// -- Date/Time + System info ------------------------------------------------
+
+static int32_t w_host_ui_push_date(wasm_exec_env_t, const char* title, uint32_t d,
+                                   uint32_t m, uint32_t y, uint32_t action_id)
+{ return host_ui_push_date(title, static_cast<uint8_t>(d), static_cast<uint8_t>(m),
+                           static_cast<uint16_t>(y), action_id); }
+
+static int32_t w_host_ui_push_time(wasm_exec_env_t, const char* title, uint32_t h,
+                                   uint32_t m, uint32_t action_id)
+{ return host_ui_push_time(title, static_cast<uint8_t>(h), static_cast<uint8_t>(m), action_id); }
+
+static int32_t w_host_get_firmware_version(wasm_exec_env_t, char* out, uint32_t out_size)
+{ return host_get_firmware_version(out, out_size); }
+
+static int32_t w_host_str_to_display(wasm_exec_env_t, const char* in, char* out,
+                                     uint32_t out_size, uint32_t target)
+{ return host_str_to_display(in, out, out_size, target); }
+
+static int32_t w_host_get_build_profile(wasm_exec_env_t, char* out, uint32_t out_size)
+{ return host_get_build_profile(out, out_size); }
+
+static int32_t w_host_feature_enabled(wasm_exec_env_t, uint32_t feature_id)
+{ return host_feature_enabled(static_cast<uint16_t>(feature_id)) ? 1 : 0; }
+
+static int32_t w_host_ui_acquire_exclusive(wasm_exec_env_t)  { return host_ui_acquire_exclusive(); }
+static int32_t w_host_ui_release_exclusive(wasm_exec_env_t)  { return host_ui_release_exclusive(); }
+static int32_t w_host_ui_set_inactivity(wasm_exec_env_t, uint32_t timeout_ms, uint32_t action_id)
+{ return host_ui_set_inactivity(timeout_ms, action_id); }
+
+// -- Pixel strip ------------------------------------------------------------
+
+static int32_t w_host_pixel_strip_init(wasm_exec_env_t, uint32_t gpio, uint32_t num, uint32_t format)
+{ return host_pixel_strip_init(static_cast<uint8_t>(gpio),
+                               static_cast<uint16_t>(num),
+                               static_cast<uint8_t>(format)); }
+static int32_t w_host_pixel_strip_deinit(wasm_exec_env_t)  { return host_pixel_strip_deinit(); }
+static int32_t w_host_pixel_strip_set(wasm_exec_env_t, uint32_t idx,
+                                      uint32_t r, uint32_t g, uint32_t b)
+{ return host_pixel_strip_set(static_cast<uint16_t>(idx),
+                              static_cast<uint8_t>(r),
+                              static_cast<uint8_t>(g),
+                              static_cast<uint8_t>(b)); }
+static int32_t w_host_pixel_strip_fill(wasm_exec_env_t, uint32_t r, uint32_t g, uint32_t b)
+{ return host_pixel_strip_fill(static_cast<uint8_t>(r),
+                               static_cast<uint8_t>(g),
+                               static_cast<uint8_t>(b)); }
+static int32_t w_host_pixel_strip_clear  (wasm_exec_env_t)  { return host_pixel_strip_clear(); }
+static int32_t w_host_pixel_strip_refresh(wasm_exec_env_t)  { return host_pixel_strip_refresh(); }
+static uint32_t w_host_pixel_strip_length(wasm_exec_env_t)  { return host_pixel_strip_length(); }
+static int32_t w_host_pixel_strip_ready  (wasm_exec_env_t)  { return host_pixel_strip_ready() ? 1 : 0; }
+
+// -- Lockscreen quick-action -----------------------------------------------
+
+static int32_t w_host_lockscreen_register_action(wasm_exec_env_t,
+                                                 const char* label_key,
+                                                 uint32_t action_id)
+{ return host_lockscreen_register_action(label_key, action_id); }
+
+static int32_t w_host_lockscreen_unregister_action(wasm_exec_env_t)
+{ return host_lockscreen_unregister_action(); }
+
+// -- Symbol table -----------------------------------------------------------
+
+static NativeSymbol s_symbols[] = {
+    W("host_log",                w_host_log,                "(i$$)"),
+    W("host_uptime_ms",          w_host_uptime_ms,          "()I"),
+    W("host_unix_time",          w_host_unix_time,          "()I"),
+    W("host_is_time_set",        w_host_is_time_set,        "()i"),
+    W("host_timezone_offset",    w_host_timezone_offset,    "()i"),
+
+    W("host_battery_mv",         w_host_battery_mv,         "()i"),
+    W("host_battery_pct",        w_host_battery_pct,        "()i"),
+    W("host_is_usb_connected",   w_host_is_usb_connected,   "()i"),
+    W("host_power_source",       w_host_power_source,       "()i"),
+    W("host_charge_status",      w_host_charge_status,      "()i"),
+    W("host_is_battery_low",     w_host_is_battery_low,     "()i"),
+    W("host_is_battery_critical",w_host_is_battery_critical,"()i"),
+
+    W("host_ui_push_toast",      w_host_ui_push_toast,      "($ii)i"),
+    W("host_ui_push_message",    w_host_ui_push_message,    "($ii)i"),
+    W("host_ui_push_info",       w_host_ui_push_info,       "($$)i"),
+    W("host_ui_push_confirm",    w_host_ui_push_confirm,    "($ii)i"),
+    W("host_ui_push_list",       w_host_ui_push_list,       "($*~ii)i"),
+    W("host_ui_replace_list",    w_host_ui_replace_list,    "($*~ii)i"),
+    W("host_ui_set_view_footer", w_host_ui_set_view_footer, "($)i"),
+    W("host_ui_set_view_empty",  w_host_ui_set_view_empty,  "($)i"),
+    W("host_ui_push_context_menu", w_host_ui_push_context_menu, "($*~i)i"),
+    W("host_ui_push_t9_input",   w_host_ui_push_t9_input,   "($$ii)i"),
+    W("host_ui_push_password",   w_host_ui_push_password,   "($$ii)i"),
+    W("host_ui_push_pin_entry",  w_host_ui_push_pin_entry,  "($iii)i"),
+    W("host_ui_push_slider",     w_host_ui_push_slider,     "($iiii$i)i"),
+    W("host_ui_push_color_picker", w_host_ui_push_color_picker, "(iiii)i"),
+    W("host_ui_consume_input_text", w_host_ui_consume_input_text, "(*~)i"),
+    W("host_ui_consume_input_int",  w_host_ui_consume_input_int,  "(*)i"),
+    W("host_ui_pop",             w_host_ui_pop,             "()i"),
+    W("host_ui_pop_to_plugin",   w_host_ui_pop_to_plugin,   "()i"),
+    W("host_ui_repaint",         w_host_ui_repaint,         "()i"),
+    W("host_ui_wink",            w_host_ui_wink,            "(ii)i"),
+
+    W("host_view_canvas_push",          w_host_view_canvas_push,          "($ii)i"),
+    W("host_view_canvas_get_body_size", w_host_view_canvas_get_body_size, "(**)i"),
+    W("host_view_canvas_set_footer",    w_host_view_canvas_set_footer,    "($)i"),
+    W("host_view_canvas_clear",         w_host_view_canvas_clear,         "()i"),
+    W("host_view_canvas_set_text_size", w_host_view_canvas_set_text_size, "(i)i"),
+    W("host_view_canvas_set_text_color",w_host_view_canvas_set_text_color,"(i)i"),
+    W("host_view_canvas_set_font",      w_host_view_canvas_set_font,      "(i)i"),
+    W("host_text_pick_font_that_fits",  w_host_text_pick_font_that_fits,  "($i*~*)i"),
+    W("host_view_canvas_draw_text",     w_host_view_canvas_draw_text,     "(ii$)i"),
+    W("host_view_canvas_draw_text_aligned", w_host_view_canvas_draw_text_aligned, "(iii$i)i"),
+    W("host_view_canvas_draw_rect",     w_host_view_canvas_draw_rect,     "(iiiii)i"),
+    W("host_view_canvas_invert_rect",   w_host_view_canvas_invert_rect,   "(iiii)i"),
+    W("host_view_canvas_hline",         w_host_view_canvas_hline,         "(iii)i"),
+    W("host_view_canvas_vline",         w_host_view_canvas_vline,         "(iii)i"),
+    W("host_view_canvas_commit",        w_host_view_canvas_commit,        "(i)i"),
+    W("host_view_canvas_add_slider",    w_host_view_canvas_add_slider,    "(iiiii)i"),
+    W("host_view_canvas_add_text",      w_host_view_canvas_add_text,      "(ii$)i"),
+    W("host_view_canvas_add_button",    w_host_view_canvas_add_button,    "(i)i"),
+    W("host_view_canvas_remove_widget", w_host_view_canvas_remove_widget, "(i)i"),
+    W("host_view_canvas_set_value",     w_host_view_canvas_set_value,     "(ii)i"),
+    W("host_view_canvas_get_value",     w_host_view_canvas_get_value,     "(i*)i"),
+    W("host_view_canvas_set_text",      w_host_view_canvas_set_text,      "(i$)i"),
+    W("host_view_canvas_get_text",      w_host_view_canvas_get_text,      "(i*~)i"),
+    W("host_view_canvas_set_focus",     w_host_view_canvas_set_focus,     "(i)i"),
+    W("host_view_canvas_get_focus",     w_host_view_canvas_get_focus,     "(*)i"),
+    W("host_view_canvas_set_key_repeat",w_host_view_canvas_set_key_repeat,"(ii)i"),
+
+    W("host_i18n_tr_key",        w_host_i18n_tr_key,        "($*~)i"),
+    W("host_i18n_tr_meta",       w_host_i18n_tr_meta,       "($*~)i"),
+    W("host_i18n_tr_core",       w_host_i18n_tr_core,       "($*~)i"),
+    W("host_i18n_current_language", w_host_i18n_current_language, "()i"),
+
+    W("host_nvs_get_blob",       w_host_nvs_get_blob,       "($*~)i"),
+    W("host_nvs_set_blob",       w_host_nvs_set_blob,       "($*~)i"),
+    W("host_nvs_get_u32",        w_host_nvs_get_u32,        "($*)i"),
+    W("host_nvs_set_u32",        w_host_nvs_set_u32,        "($i)i"),
+    W("host_nvs_get_str",        w_host_nvs_get_str,        "($*~)i"),
+    W("host_nvs_set_str",        w_host_nvs_set_str,        "($$)i"),
+    W("host_nvs_erase",          w_host_nvs_erase,          "($)i"),
+
+    W("host_random",             w_host_random,             "(*~)i"),
+    W("host_sha256",             w_host_sha256,             "(*~*)i"),
+    W("host_hmac_sha256",        w_host_hmac_sha256,        "(*~*~*)i"),
+    W("host_base32_encode",      w_host_base32_encode,      "(*~*~)i"),
+    W("host_base32_decode",      w_host_base32_decode,      "(*~*~)i"),
+    W("host_hex_encode",         w_host_hex_encode,         "(*~*~)i"),
+
+    W("host_http_open",          w_host_http_open,          "(i$i)i"),
+    W("host_http_set_header",    w_host_http_set_header,    "(i$$)i"),
+    W("host_http_set_body",      w_host_http_set_body,      "(i*~)i"),
+    W("host_http_perform",       w_host_http_perform,       "(i)i"),
+    W("host_http_status",        w_host_http_status,        "(i)i"),
+    W("host_http_read_chunk",    w_host_http_read_chunk,    "(i*~)i"),
+    W("host_http_close",         w_host_http_close,         "(i)i"),
+
+    W("host_wifi_request",       w_host_wifi_request,       "(i)i"),
+    W("host_wifi_release",       w_host_wifi_release,       "()i"),
+    W("host_wifi_is_connected",  w_host_wifi_is_connected,  "()i"),
+    W("host_wifi_ssid",          w_host_wifi_ssid,          "(*~)i"),
+    W("host_wifi_ip",            w_host_wifi_ip,            "(*~)i"),
+
+    W("host_rmem_read_named",    w_host_rmem_read_named,    "($*~)i"),
+    W("host_rmem_write_named",   w_host_rmem_write_named,   "($*~)i"),
+    W("host_rmem_erase_named",   w_host_rmem_erase_named,   "($)i"),
+    W("host_rmem_name_used",     w_host_rmem_name_used,     "($)i"),
+    W("host_rmem_slot_size",     w_host_rmem_slot_size,     "()i"),
+    W("host_ecdsa_sign",         w_host_ecdsa_sign,         "(i*~*)i"),
+
+    W("host_event_subscribe",    w_host_event_subscribe,    "(ii)i"),
+    W("host_event_unsubscribe",  w_host_event_unsubscribe,  "(i)i"),
+
+    W("host_gpio_set_direction", w_host_gpio_set_direction, "(ii)i"),
+    W("host_gpio_set_pull",      w_host_gpio_set_pull,      "(ii)i"),
+    W("host_gpio_write",         w_host_gpio_write,         "(ii)i"),
+    W("host_gpio_read",          w_host_gpio_read,          "(i*)i"),
+    W("host_gpio_release",       w_host_gpio_release,       "(i)i"),
+    W("host_gpio_pwm_start",     w_host_gpio_pwm_start,     "(iii)i"),
+    W("host_gpio_pwm_stop",      w_host_gpio_pwm_stop,      "(i)i"),
+
+    W("host_ui_push_date",       w_host_ui_push_date,       "($iiii)i"),
+    W("host_ui_push_time",       w_host_ui_push_time,       "($iii)i"),
+
+    W("host_get_firmware_version", w_host_get_firmware_version, "(*~)i"),
+    W("host_str_to_display",        w_host_str_to_display,        "($*~i)i"),
+    W("host_get_build_profile",    w_host_get_build_profile,    "(*~)i"),
+    W("host_feature_enabled",      w_host_feature_enabled,      "(i)i"),
+
+    W("host_ui_acquire_exclusive", w_host_ui_acquire_exclusive, "()i"),
+    W("host_ui_release_exclusive", w_host_ui_release_exclusive, "()i"),
+    W("host_ui_set_inactivity",    w_host_ui_set_inactivity,    "(ii)i"),
+
+    W("host_pixel_strip_init",    w_host_pixel_strip_init,    "(iii)i"),
+    W("host_pixel_strip_deinit",  w_host_pixel_strip_deinit,  "()i"),
+    W("host_pixel_strip_set",     w_host_pixel_strip_set,     "(iiii)i"),
+    W("host_pixel_strip_fill",    w_host_pixel_strip_fill,    "(iii)i"),
+    W("host_pixel_strip_clear",   w_host_pixel_strip_clear,   "()i"),
+    W("host_pixel_strip_refresh", w_host_pixel_strip_refresh, "()i"),
+    W("host_pixel_strip_length",  w_host_pixel_strip_length,  "()i"),
+    W("host_pixel_strip_ready",   w_host_pixel_strip_ready,   "()i"),
+
+    W("host_lockscreen_register_action",   w_host_lockscreen_register_action,   "($i)i"),
+    W("host_lockscreen_unregister_action", w_host_lockscreen_unregister_action, "()i"),
+};
+
+bool register_host_imports()
+{
+    const uint32_t n = sizeof(s_symbols) / sizeof(s_symbols[0]);
+    if (!wasm_runtime_register_natives("cdc", s_symbols, n)) {
+        plg_log_error("WAMR: register_natives(\"cdc\") failed");
+        return false;
+    }
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "WAMR: %u host imports registered", static_cast<unsigned>(n));
+    plg_log_info(buf);
+    return true;
+}
+
+void unregister_host_imports()
+{
+    wasm_runtime_unregister_natives("cdc", s_symbols);
+}
+
+}  // namespace cdc::plugin_manager
