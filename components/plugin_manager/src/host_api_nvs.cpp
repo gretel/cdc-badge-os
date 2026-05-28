@@ -33,7 +33,13 @@ std::string activeNamespace()
 bool namespaceOk(const std::string& ns)
 {
     constexpr size_t NVS_MAX = 15;
-    return !ns.empty() && ns.size() <= NVS_MAX;
+    if (ns.empty() || ns.size() > NVS_MAX) return false;
+    if (ns.rfind("plg_", 0) != 0 && ns.rfind("plugin_", 0) != 0) return false;
+    for (char c : ns) {
+        bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+        if (!ok) return false;
+    }
+    return true;
 }
 
 int openScope(bool write, ::cdc::core::NvsScope& out)

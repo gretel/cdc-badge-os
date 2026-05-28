@@ -119,10 +119,24 @@ CapabilityCheckResult CapabilityChecker::validate(const PluginManifest& m)
     }
 
     if (!m.capabilities.nvs_namespace.empty()) {
-        if (m.capabilities.nvs_namespace.size() > NVS_NAMESPACE_MAX_LEN) {
+        const auto& ns = m.capabilities.nvs_namespace;
+        if (ns.size() > NVS_NAMESPACE_MAX_LEN) {
             return { CapabilityResult::NvsNamespaceInvalid,
                      "nvs_namespace exceeds " +
                          std::to_string(NVS_NAMESPACE_MAX_LEN) + " chars" };
+        }
+        const bool prefixOk = ns.rfind("plg_", 0) == 0 ||
+                              ns.rfind("plugin_", 0) == 0;
+        if (!prefixOk) {
+            return { CapabilityResult::NvsNamespaceInvalid,
+                     "nvs_namespace must start with 'plg_' or 'plugin_'" };
+        }
+        for (char c : ns) {
+            bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+            if (!ok) {
+                return { CapabilityResult::NvsNamespaceInvalid,
+                         "nvs_namespace must be [a-z0-9_]" };
+            }
         }
     } else if (!m.capabilities.rmem.empty()) {
         return { CapabilityResult::MissingNvsNamespace,
