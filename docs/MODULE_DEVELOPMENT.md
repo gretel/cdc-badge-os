@@ -72,10 +72,9 @@ intentionally module-facing and reusable.
 `cdc_os_ui` is the OS-only layer (LockScreen, Settings, Wifi/Bluetooth menus,
 HardwareInfo, ExpertMenu). Modules **must not** depend on `cdc_os_ui`.
 
-Module-specific views (e.g. a HomeAssistant device-detail view, a vCard
-wizard, a FIDO2 credential-management screen) live **inside the module** and
-may compose `cdc_views` primitives, but they should not be exported into
-`cdc_views` itself.
+Module-specific views (e.g. a vCard wizard, a FIDO2 credential-management
+screen) live **inside the module** and may compose `cdc_views` primitives,
+but they should not be exported into `cdc_views` itself.
 
 ## Step 3: Module Header
 
@@ -347,7 +346,6 @@ Add your module to `main/CMakeLists.txt`:
 
 ```cmake
 set(MODULES
-    grove_led
     mod_totp
     mod_fido2
     mod_password
@@ -470,14 +468,12 @@ The build system generates `main/modules_init.gen.h`:
 
 ```cpp
 // Auto-generated - DO NOT EDIT
-extern "C" void grove_led_register();
 extern "C" void mod_totp_register();
 extern "C" void mod_fido2_register();
 extern "C" void mod_password_register();
 extern "C" void mod_gpg_register();
 
 inline void modules_register_all() {
-    grove_led_register();
     mod_totp_register();
     mod_fido2_register();
     mod_password_register();
@@ -510,8 +506,7 @@ The TROPIC01 secure element has two storage types:
 | 5-31 | mod_fido2 (27 credentials, paired with ECC 5-31) |
 | 32-131 | mod_totp (100 accounts) |
 | 132-500 | mod_password (369 entries) |
-| 501 | mod_homeassistant |
-| 502-511 | Available for future modules |
+| 501-511 | WASM plugin named slots (`capabilities.rmem` in manifest) |
 
 **Rules:**
 - Slot 0 is always reserved for PinManager (both ECC and RMEM)
@@ -698,7 +693,10 @@ Reference existing modules for patterns:
 - `mod_vcard` - BLE service module with lock screen context items
 - `mod_hid` - Service provider module (IKeyboardProvider)
 - `mod_sao` - Minimal hardware detection module
-- `grove_led` - Minimal demo module (Grove I2C LED)
+
+For the addressable WS2813 strip on the Grove port, see the `grove_led`
+WASM plugin in `cdc-badge-plugins/plugins/grove_led/` - that functionality
+is no longer a built-in module.
 
 ## Troubleshooting
 

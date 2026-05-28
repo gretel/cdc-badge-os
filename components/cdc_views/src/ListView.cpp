@@ -181,10 +181,13 @@ InputResult ListView::onKey(char key) {
  * \return Footer hint string.
  */
 const char* ListView::getFooterHint() const {
+    if (customFooter_) {
+        return customFooter_;
+    }
     if (customHint_) {
         return customHint_;
     }
-    return tr(StringId::HINT_OK_BACK);
+    return ui::tr("core.hint_ok_back");
 }
 
 /**
@@ -208,6 +211,7 @@ void ListView::render(bool partial) {
 
     gfx->setTextColor(EPD_BLACK);
     gfx->setTextSize(1);
+    gfx->setTextWrap(false);
 
     // Title + underline
     render::drawHeaderLeft(gfx, title_, ITEM_PADDING_X, TITLE_Y, width);
@@ -251,11 +255,15 @@ void ListView::render(bool partial) {
                     gfx->drawLine(textX, y + 10, textX + 6, y + 10, color);
                 }
                 textX += 10;
+            } else {
+                uint16_t bullet_color = isSelected ? EPD_WHITE : EPD_BLACK;
+                gfx->fillCircle(textX + 2, y + itemHeight_ / 2, 2, bullet_color);
+                textX += 9;
             }
 
             gfx->setCursor(textX, y + 4);
             if (item.label) {
-                gfx->print(item.label);
+                render::printTruncated(gfx, item.label, rowWidth - textX - 2);
             }
         }
     }

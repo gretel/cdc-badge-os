@@ -59,9 +59,7 @@ private:
     static constexpr const char* NVS_NAMESPACE = "mod_ble_serial";
 
     // I18n
-    static uint16_t s_strIdBase;
     void registerStrings();
-    const char* mstr(uint16_t offset) const;
 
     // Console hooks
     void registerConsoleHooks();

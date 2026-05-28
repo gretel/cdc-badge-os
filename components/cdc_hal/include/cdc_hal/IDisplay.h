@@ -148,4 +148,21 @@ public:
 // Factory function to get display instance
 IDisplay* getDisplayInstance();
 
+/**
+ * \brief Blink the backlight as a visual "look at me" signal.
+ *
+ * Toggles the e-paper frontlight off/on \p count times with \p period_ms
+ * milliseconds in each half-cycle. Restores the original backlight state on
+ * return. Safe to call from any FreeRTOS task: the underlying LEDC PWM API
+ * is thread-safe and no framebuffer rendering happens.
+ *
+ * Used for FIDO2/CTAPHID WINK identification, USB pairing prompts, and any
+ * other "draw the user's attention" notification.
+ *
+ * \param count Number of off/on cycles (clamped to 1..10, default 2).
+ * \param period_ms Duration of each half-cycle in ms (clamped to 50..1000,
+ *                  default 150). Total wall time is 2 * count * period_ms.
+ */
+void winkBacklight(uint8_t count = 2, uint16_t period_ms = 150);
+
 } // namespace cdc::hal

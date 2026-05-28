@@ -33,7 +33,7 @@ static constexpr uint16_t RMEM_SLOT_MIN_ALLOC = 1;
 #define MODULE_ID_MOD_FIDO2 4
 #define MODULE_ID_MOD_TOTP 5
 #define MODULE_ID_MOD_PASSWORD 6
-#define MODULE_ID_MOD_HOMEASSISTANT 7
+#define MODULE_ID_PLUGIN_POOL 7
 #define MODULE_ID_UNKNOWN 255
 
 // ECC slot ranges
@@ -55,8 +55,10 @@ static constexpr uint16_t RMEM_SLOT_MIN_ALLOC = 1;
 #define RMEM_SLOT_MOD_TOTP_END 131
 #define RMEM_SLOT_MOD_PASSWORD_START 132
 #define RMEM_SLOT_MOD_PASSWORD_END 500
-#define RMEM_SLOT_MOD_HOMEASSISTANT_START 501
-#define RMEM_SLOT_MOD_HOMEASSISTANT_END 501
+// Plugin pool. Allocated dynamically by name at runtime, not via the
+// TROPIC_RMEM_SLOT_MAP X-macro (which is for native modules only).
+#define RMEM_SLOT_MOD_PLUGINS_START 501
+#define RMEM_SLOT_MOD_PLUGINS_END 511
 
 // Slot map entries (do not include reserved slots)
 #define TROPIC_ECC_SLOT_MAP(X) \
@@ -69,7 +71,6 @@ static constexpr uint16_t RMEM_SLOT_MIN_ALLOC = 1;
     X("mod_ca", MODULE_ID_MOD_CA, RMEM_SLOT_MOD_CA_START, RMEM_SLOT_MOD_CA_END) \
     X("mod_fido2", MODULE_ID_MOD_FIDO2, RMEM_SLOT_MOD_FIDO2_START, RMEM_SLOT_MOD_FIDO2_END) \
     X("mod_totp", MODULE_ID_MOD_TOTP, RMEM_SLOT_MOD_TOTP_START, RMEM_SLOT_MOD_TOTP_END) \
-    X("mod_password", MODULE_ID_MOD_PASSWORD, RMEM_SLOT_MOD_PASSWORD_START, RMEM_SLOT_MOD_PASSWORD_END) \
-    X("mod_homeassistant", MODULE_ID_MOD_HOMEASSISTANT, RMEM_SLOT_MOD_HOMEASSISTANT_START, RMEM_SLOT_MOD_HOMEASSISTANT_END)
+    X("mod_password", MODULE_ID_MOD_PASSWORD, RMEM_SLOT_MOD_PASSWORD_START, RMEM_SLOT_MOD_PASSWORD_END)
 
 } // namespace cdc::tropic_map

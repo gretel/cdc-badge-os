@@ -8,10 +8,9 @@ Modular firmware for the CDC Badge v1.0/v1.1 hardware security key featuring TRO
 >
 > This firmware is **pre-1.0 beta**. Every flash can wipe all stored data
 > on the badge: FIDO2/U2F credentials, TOTP seeds, password-vault entries,
-> GPG keys and the badge PIN. The build-profile factory-reset guard
-> (`DEBUG_MODE` / `FEATURE_SECURE_SERIAL` change) will erase NVS and the
-> TROPIC01 R-Memory / ECC slots before booting the new image. Layout-breaking
-> changes between versions can also trigger a re-initialisation.
+> GPG keys and the badge PIN. Layout-breaking changes between versions can
+> trigger a re-initialisation; use the web-flasher's reset action to wipe
+> the device deliberately.
 >
 > **Treat the badge as a working copy, not the authoritative store.** Keep an
 > independent backup of anything you cannot afford to lose (FIDO2 recovery
@@ -30,14 +29,14 @@ Modular firmware for the CDC Badge v1.0/v1.1 hardware security key featuring TRO
 | **GPG/CCID** | Working (UI WIP) | OpenPGP smartcard via USB CCID, sign / encrypt / decrypt / SSH end-to-end with GnuPG |
 | **BLE vCard** | WIP | Badge-to-badge contact exchange via BLE |
 | **BLE HID** | WIP | Bluetooth keyboard for auto-type |
-| **WiFi + NTP** | Working | Time synchronization over WiFi |
+| **WiFi + NTP** | Working | Time synchronization over WiFi, serial control (scan, connect, status, ..) |
 | **BLE Serial** | WIP | Bluetooth serial console (Nordic UART Service) |
 | **SAO Detection** | Working | Shitty Add-On port detection and info |
 | **E-Paper Display** | Working | 2.9" low-power display with backlight |
 | **12-Button Keypad** | Working | Phone-style T9 input |
 | **Multi-Language** | Working | English and German UI |
 | **Secure Serial** | Working | PIN authentication for serial commands |
-| **Home Assistant** | Working | REST controller: favorites with state, browse/search/filter, brightness, HTTPS, token in TROPIC01 R-Memory |
+| **WASM Plugin Runtime** | WIP | Sandboxed third-party plugins via WebAssembly (WAMR Fast Interpreter). Host API exposes 80+ symbols under module `"cdc"`, including a Canvas view for plugin-drawn UIs. See [cdc-badge-plugins](https://github.com/krim404/cdc-badge-plugins) for SDK + examples (Home Assistant controller, news feed, Grove LED strip). |
 
 ### Planned
 
@@ -157,6 +156,7 @@ python tools/flash_firmware.py --release latest --erase-nvs
 ```
 
 If the device is not detected, hold **BOOT** while pressing **RESET** to enter download mode.
+Alternatively, when the badge is already running, authenticate over serial (`AUTH <pin>`) and issue `BOOTLOADER` to reboot into USB download mode.
 
 ### Build from Source
 
@@ -198,20 +198,6 @@ Or via Kconfig menuconfig:
 ```bash
 ~/.platformio/penv/bin/pio run -t menuconfig
 ```
-
-### Factory Reset on Flag Change
-
-Switching `DEBUG_MODE` or `FEATURE_SECURE_SERIAL` between builds and reflashing
-triggers an automatic factory reset on the next boot: the NVS partition is
-erased and every used TROPIC01 R-Memory and ECC slot is wiped. This doubles
-as the recovery path for a forgotten Badge PIN — rebuild with a different
-flag value, flash, and the device returns to defaults (PIN `123456`).
-
-In the current beta the check itself runs in firmware and is therefore
-trivially bypassable by an attacker who can flash arbitrary firmware. Real
-enforcement (Secure Boot v2 + anti-rollback) is on the 1.0 roadmap; see
-[Security Hardening Guide](docs/SECURITY.md) for details and for what a
-beta user can add today to harden their own device.
 
 ### First-Time Setup
 
@@ -257,6 +243,8 @@ ssh user@server
 Connect at 115200 baud via USB CDC. Type `HELP` to list all available commands.
 
 The [Web Flasher](https://krim404.github.io/cdc-badge-os/) also provides a serial console for configuration.
+
+> **Tip — `PASTE`:** when a T9 input is open on the badge (URL, API key, entity id, …), `PASTE <text>` over serial injects the text into the active input. Saves a lot of multi-tap typing for long tokens.
 
 See [Serial Commands Reference](docs/SERIAL_COMMANDS.md) for the full command list.
 

@@ -88,8 +88,8 @@ InputResult PasswordT9View::onLongPress(char key) {
 }
 
 const char* PasswordT9View::getFooterHint() const {
-    return tr(revealed_ ? StringId::HINT_PASSWORD_REVEALED
-                        : StringId::HINT_PASSWORD_HIDDEN);
+    return tr(revealed_ ? "core.hint_password_revealed"
+                        : "core.hint_password_hidden");
 }
 
 } // namespace cdc::ui

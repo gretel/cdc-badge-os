@@ -3,9 +3,7 @@
  * \brief Big-endian byte-packing helpers.
  */
 
-#ifndef CDC_CORE_BYTES_H
-#define CDC_CORE_BYTES_H
-
+#pragma once
 #include <cstdint>
 
 namespace cdc {
@@ -58,4 +56,3 @@ inline uint16_t readBe16(const uint8_t* in) {
 } // namespace core
 } // namespace cdc
 
-#endif // CDC_CORE_BYTES_H

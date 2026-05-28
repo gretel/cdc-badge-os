@@ -63,4 +63,14 @@ void showExpertMenu();
 void showModulesView();
 void onModuleErrorEvent(const core::Event& evt);
 
+/**
+ * \brief Forces the badge into a quiet state ahead of the bootloader reset:
+ *        pops every view back to the lock screen, replaces the lock-screen
+ *        text with "BOOTLOADER MODE" / reset-button hint and triggers a full
+ *        EPD refresh + backlight off.
+ *
+ * Provided by AppUi.cpp because it touches the static lock-screen instance.
+ */
+void prepareForBootloaderReset();
+
 } // namespace cdc::ui

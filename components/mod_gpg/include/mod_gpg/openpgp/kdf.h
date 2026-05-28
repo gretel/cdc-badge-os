@@ -22,9 +22,7 @@
  * scope for the pure-logic test tier.
  */
 
-#ifndef MOD_GPG_OPENPGP_KDF_H
-#define MOD_GPG_OPENPGP_KDF_H
-
+#pragma once
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -119,4 +117,3 @@ kdf_status_t kdf_do_build_disabled(uint8_t *out, size_t out_cap, size_t *out_len
 }
 #endif
 
-#endif  // MOD_GPG_OPENPGP_KDF_H

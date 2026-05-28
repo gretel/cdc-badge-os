@@ -1,0 +1,21 @@
+diff --git a/core/shared/platform/esp-idf/espidf_thread.c b/core/shared/platform/esp-idf/espidf_thread.c
+index 768d823a..56798969 100644
+--- a/core/shared/platform/esp-idf/espidf_thread.c
++++ b/core/shared/platform/esp-idf/espidf_thread.c
+@@ -30,12 +30,13 @@ os_thread_wrapper(void *arg)
+     return NULL;
+ }
+
++#include "freertos/FreeRTOS.h"
++#include "freertos/task.h"
++
+ korp_tid
+ os_self_thread(void)
+ {
+-    /* only allowed if this is a thread, xTaskCreate is not enough look at
+-     * product_mini for how to use this*/
+-    return pthread_self();
++    return (korp_tid)xTaskGetCurrentTaskHandle();
+ }
+
+ int

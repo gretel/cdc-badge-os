@@ -62,6 +62,13 @@ public:
      */
     virtual void markDirty() = 0;
 
+    /**
+     * Clear the dirty flag. Called automatically by ViewStack after a
+     * successful `render()` pass. Subclasses that animate or update every
+     * tick must call `markDirty()` themselves in `onTick()`.
+     */
+    virtual void clearDirty() = 0;
+
     // === Input ===
 
     /**
@@ -93,6 +100,15 @@ public:
      * Return nullptr for no footer
      */
     virtual const char* getFooterHint() const { return nullptr; }
+
+    /**
+     * Override the footer hint at runtime. Default is a no-op; views that
+     * support custom footers (ListView, T9InputView, ...) override this to
+     * persist the hint. The string is NOT copied by the view - caller
+     * (typically PluginUiState) must keep it alive while the view is shown.
+     * \param hint Footer text, or nullptr to clear the override.
+     */
+    virtual void setFooterHint(const char* hint) { (void)hint; }
 
     // === Identity ===
 
@@ -129,14 +145,23 @@ public:
     // Dirty flag management
     bool needsRender() const override { return dirty_; }
     void markDirty() override { dirty_ = true; }
+    void clearDirty() override { dirty_ = false; }
+
+    // Footer override (universal). Subclasses that wire their own
+    // getFooterHint() can still consult customFooter_ first.
+    void setFooterHint(const char* hint) override {
+        customFooter_ = hint;
+        dirty_ = true;
+    }
+    const char* getFooterHint() const override { return customFooter_; }
 
 protected:
-    void clearDirty() { dirty_ = false; }
     void setTitle(const char* title) { title_ = title; }
     const char* getTitle() const { return title_; }
 
     bool dirty_ = true;
     const char* title_ = nullptr;
+    const char* customFooter_ = nullptr;
 };
 
 } // namespace cdc::ui

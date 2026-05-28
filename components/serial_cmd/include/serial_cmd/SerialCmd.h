@@ -72,6 +72,13 @@ public:
      */
     static void logout();
 
+    /**
+     * Refresh the authentication-timeout timestamp so a long-running serial
+     * activity (binary upload, multi-line paste) can keep the session alive
+     * without having to execute periodic dummy commands.
+     */
+    static void touchAuthSession();
+
     // === Built-in Commands ===
 
     /**

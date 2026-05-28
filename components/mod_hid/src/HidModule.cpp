@@ -17,63 +17,21 @@ static const char* TAG = "HID";
 
 namespace cdc::mod_hid {
 
-/** \brief Module-specific translation string offsets. */
-static uint16_t s_strIdBase = 0;
-static constexpr uint16_t STR_BLE_KEYBOARD = 0;
-static constexpr uint16_t STR_STATUS = 1;
-static constexpr uint16_t STR_START_ADV = 2;
-static constexpr uint16_t STR_STOP_ADV = 3;
-static constexpr uint16_t STR_UNICODE_METHOD = 4;
-static constexpr uint16_t STR_ASCII_ONLY = 5;
-static constexpr uint16_t STR_WINDOWS = 6;
-static constexpr uint16_t STR_LINUX = 7;
-static constexpr uint16_t STR_MACOS = 8;
-static constexpr uint16_t STR_DISCONNECT = 9;
-static constexpr uint16_t STR_COUNT = 10;
+constexpr ui::I18nEntry kStrings[] = {
+    {"mod_hid.title",           "BLE Keyboard"},
+    {"mod_hid.status",          "Status"},
+    {"mod_hid.start_adv",       "Start Advertising"},
+    {"mod_hid.stop_adv",        "Stop Advertising"},
+    {"mod_hid.unicode_method",  "Unicode Method"},
+    {"mod_hid.ascii_only",      "ASCII only"},
+    {"mod_hid.windows",         "Windows (Alt+Numpad)"},
+    {"mod_hid.linux",           "Linux (Ctrl+Shift+U)"},
+    {"mod_hid.macos",           "macOS (limited)"},
+    {"mod_hid.disconnect",      "Disconnect"},
+};
 
-/**
- * \brief Resolves a module-local translation string by offset.
- * \param offset Module-local translation offset.
- * \return Localized string pointer.
- */
-static const char* mstr(uint16_t offset) {
-    return ui::tr(s_strIdBase + offset);
-}
-
-/**
- * \brief Registers all i18n strings used by the HID module.
- */
 static void registerStrings() {
-    auto& i18n = ui::I18n::instance();
-    s_strIdBase = i18n.registerModule("mod_hid", STR_COUNT);
-    if (s_strIdBase == 0) {
-        LOG_E(TAG, "Failed to register i18n strings");
-        return;
-    }
-
-    i18n.registerTranslation(s_strIdBase + STR_BLE_KEYBOARD, ui::Language::EN, "BLE Keyboard");
-    i18n.registerTranslation(s_strIdBase + STR_STATUS, ui::Language::EN, "Status");
-    i18n.registerTranslation(s_strIdBase + STR_START_ADV, ui::Language::EN, "Start Advertising");
-    i18n.registerTranslation(s_strIdBase + STR_STOP_ADV, ui::Language::EN, "Stop Advertising");
-    i18n.registerTranslation(s_strIdBase + STR_UNICODE_METHOD, ui::Language::EN, "Unicode Method");
-    i18n.registerTranslation(s_strIdBase + STR_ASCII_ONLY, ui::Language::EN, "ASCII only");
-    i18n.registerTranslation(s_strIdBase + STR_WINDOWS, ui::Language::EN, "Windows (Alt+Numpad)");
-    i18n.registerTranslation(s_strIdBase + STR_LINUX, ui::Language::EN, "Linux (Ctrl+Shift+U)");
-    i18n.registerTranslation(s_strIdBase + STR_MACOS, ui::Language::EN, "macOS (limited)");
-    i18n.registerTranslation(s_strIdBase + STR_DISCONNECT, ui::Language::EN, "Disconnect");
-
-    i18n.registerTranslation(s_strIdBase + STR_BLE_KEYBOARD, ui::Language::DE, "BLE Tastatur");
-    i18n.registerTranslation(s_strIdBase + STR_STATUS, ui::Language::DE, "Status");
-    i18n.registerTranslation(s_strIdBase + STR_START_ADV, ui::Language::DE, "Werbung starten");
-    i18n.registerTranslation(s_strIdBase + STR_STOP_ADV, ui::Language::DE, "Werbung stoppen");
-    i18n.registerTranslation(s_strIdBase + STR_UNICODE_METHOD, ui::Language::DE, "Unicode-Methode");
-    i18n.registerTranslation(s_strIdBase + STR_ASCII_ONLY, ui::Language::DE, "Nur ASCII");
-    i18n.registerTranslation(s_strIdBase + STR_WINDOWS, ui::Language::DE, "Windows (Alt+Numpad)");
-    i18n.registerTranslation(s_strIdBase + STR_LINUX, ui::Language::DE, "Linux (Ctrl+Shift+U)");
-    i18n.registerTranslation(s_strIdBase + STR_MACOS, ui::Language::DE, "macOS (eingeschraenkt)");
-    i18n.registerTranslation(s_strIdBase + STR_DISCONNECT, ui::Language::DE, "Trennen");
-
-    LOG_I(TAG, "Registered i18n strings (base=%d)", s_strIdBase);
+    ui::I18n::instance().registerEnglishTable(kStrings, std::size(kStrings));
 }
 
 /** \brief Status view showing BLE HID runtime state and selected input mode. */
@@ -111,12 +69,12 @@ public:
         gfx->setTextColor(EPD_BLACK);
         gfx->setTextSize(1);
         gfx->setCursor(8, 6);
-        gfx->print(mstr(STR_BLE_KEYBOARD));
+        gfx->print(ui::tr("mod_hid.title"));
         gfx->drawFastHLine(0, 22, display->getWidth(), EPD_BLACK);
 
         // Status
         gfx->setCursor(8, 30);
-        gfx->print(mstr(STR_STATUS));
+        gfx->print(ui::tr("mod_hid.status"));
         gfx->print(": ");
         gfx->print(kb.getStatusText());
 
@@ -132,11 +90,11 @@ public:
 
         // Unicode method
         gfx->setCursor(8, 62);
-        gfx->print(mstr(STR_UNICODE_METHOD));
+        gfx->print(ui::tr("mod_hid.unicode_method"));
         gfx->print(": ");
         switch (kb.getUnicodeMethod()) {
             case UnicodeMethod::ASCII_ONLY:
-                gfx->print(mstr(STR_ASCII_ONLY));
+                gfx->print(ui::tr("mod_hid.ascii_only"));
                 break;
             case UnicodeMethod::WINDOWS:
                 gfx->print("Windows");
@@ -210,18 +168,18 @@ static ui::ListItem s_menuItems[MENU_COUNT];
 static void rebuildMenu() {
     auto& kb = BleHidKeyboard::instance();
 
-    s_menuItems[MENU_STATUS] = {mstr(STR_STATUS), 0, false, nullptr};
+    s_menuItems[MENU_STATUS] = {ui::tr("mod_hid.status"), 0, false, nullptr};
 
     if (kb.isAdvertising() || kb.isConnected()) {
-        s_menuItems[MENU_TOGGLE_ADV] = {mstr(STR_STOP_ADV), 0, false, nullptr};
+        s_menuItems[MENU_TOGGLE_ADV] = {ui::tr("mod_hid.stop_adv"), 0, false, nullptr};
     } else {
-        s_menuItems[MENU_TOGGLE_ADV] = {mstr(STR_START_ADV), 0, false, nullptr};
+        s_menuItems[MENU_TOGGLE_ADV] = {ui::tr("mod_hid.start_adv"), 0, false, nullptr};
     }
 
-    s_menuItems[MENU_UNICODE] = {mstr(STR_UNICODE_METHOD), 0, false, nullptr};
-    s_menuItems[MENU_DISCONNECT] = {mstr(STR_DISCONNECT), 0, !kb.isConnected(), nullptr};
+    s_menuItems[MENU_UNICODE] = {ui::tr("mod_hid.unicode_method"), 0, false, nullptr};
+    s_menuItems[MENU_DISCONNECT] = {ui::tr("mod_hid.disconnect"), 0, !kb.isConnected(), nullptr};
 
-    s_menuView.init(mstr(STR_BLE_KEYBOARD), s_menuItems, MENU_COUNT);
+    s_menuView.init(ui::tr("mod_hid.title"), s_menuItems, MENU_COUNT);
 }
 
 /**
@@ -254,12 +212,12 @@ static void onMenuSelect(uint16_t index, void* userData) {
 
         case MENU_UNICODE: {
             static ui::ListItem unicodeItems[4] = {
-                {mstr(STR_ASCII_ONLY), 0, false, nullptr},
-                {mstr(STR_WINDOWS), 0, false, nullptr},
-                {mstr(STR_LINUX), 0, false, nullptr},
-                {mstr(STR_MACOS), 0, false, nullptr}
+                {ui::tr("mod_hid.ascii_only"), 0, false, nullptr},
+                {ui::tr("mod_hid.windows"), 0, false, nullptr},
+                {ui::tr("mod_hid.linux"), 0, false, nullptr},
+                {ui::tr("mod_hid.macos"), 0, false, nullptr}
             };
-            s_unicodeMenu.init(mstr(STR_UNICODE_METHOD), unicodeItems, 4);
+            s_unicodeMenu.init(ui::tr("mod_hid.unicode_method"), unicodeItems, 4);
             s_unicodeMenu.setOnSelect(onUnicodeSelect);
             ui::ViewStack::instance().push(&s_unicodeMenu);
             break;
@@ -285,7 +243,7 @@ static void onUnicodeSelect(uint16_t index, void* userData) {
     (void)userData;
     auto& kb = BleHidKeyboard::instance();
     kb.setUnicodeMethod(static_cast<UnicodeMethod>(index));
-    ui::showToastSuccess(ui::tr(ui::StringId::OK));
+    ui::showToastSuccess(ui::tr("core.ok"));
     ui::ViewStack::instance().pop();
 }
 
@@ -353,7 +311,7 @@ void HidModule::stop() {
 uint8_t HidModule::getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems) {
     if (!items || maxItems == 0) return 0;
 
-    items[0] = {mstr(STR_BLE_KEYBOARD), 55, []() -> ui::IView* {
+    items[0] = {ui::tr("mod_hid.title"), 55, []() -> ui::IView* {
         if (!s_viewsInitialized) {
             s_menuView.setOnSelect(onMenuSelect);
             s_viewsInitialized = true;

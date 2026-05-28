@@ -146,7 +146,7 @@ const char* InfoView::getFooterHint() const {
     if (customHint_) {
         return customHint_;
     }
-    return tr(StringId::HINT_SCROLL_BACK);
+    return ui::tr("core.hint_scroll_back");
 }
 
 /**

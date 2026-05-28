@@ -14,6 +14,9 @@
 #include "cdc_log.h"
 
 #include "cdc_core/ServiceRegistry.h"
+#include "plugin_manager/PluginManager.h"
+#include "plugin_manager/PluginSerialCommands.h"
+#include "cdc_ui/I18n.h"
 #include "cdc_core/EventBus.h"
 #include "cdc_core/ModuleRegistry.h"
 #include "cdc_core/SystemLock.h"
@@ -489,6 +492,26 @@ static void initModules() {
 }
 
 /**
+ * \brief Bring up the WAMR runtime, mount the plugins partition and discover
+ *        installed plugins. Phase 1: scaffolding only; actual plugin loading
+ *        comes in Phase 2.
+ */
+static void initPluginSystem() {
+    if (!cdc::plugin_manager::PluginManager::instance().init()) {
+        LOG_W(TAG, "PluginManager init failed - plugins disabled");
+        return;
+    }
+    cdc::plugin_manager::registerPluginSerialCommands();
+
+    if (cdc::ui::I18n::instance().getLanguageCode() != "en") {
+        // Triggers the language-changed callback registered in ui_init(),
+        // which rebuilds menu labels so cached `tr()` pointers track the
+        // newly loaded overlay.
+        cdc::ui::I18n::instance().loadOverlay();
+    }
+}
+
+/**
  * \brief Final startup step: completes USB CDC enumeration and prints banner.
  */
 static void startApp() {
@@ -564,6 +587,9 @@ extern "C" void app_main(void)
 
     // STAGE 6: Modules
     initModules();
+
+    // STAGE 6b: Plugin system (WAMR + plugins partition)
+    initPluginSystem();
 
     // STAGE 7: Final startup
     startApp();

@@ -1,6 +1,9 @@
 #include "cdc_os_ui/WifiHandlers.h"
 #include "cdc_hal/IWifiController.h"
 #include "cdc_hal/IRtc.h"
+#include "cdc_ui/I18n.h"
+#include "cdc_ui/ViewStack.h"
+#include "cdc_views/ToastView.h"
 #include "nvs.h"
 #include "esp_sntp.h"
 #include "esp_timer.h"
@@ -62,6 +65,67 @@ uint32_t WifiHandlers::parseIpAddress(const char* ip) const {
     if (!isValidIpOctet(a) || !isValidIpOctet(b) || !isValidIpOctet(c) || !isValidIpOctet(d)) return 0;
     return (static_cast<uint32_t>(a) << 24) | (static_cast<uint32_t>(b) << 16) |
            (static_cast<uint32_t>(c) << 8) | static_cast<uint32_t>(d);
+}
+
+/**
+ * \brief Returns the persisted connect timeout, clamped to the valid range.
+ */
+uint32_t WifiHandlers::getConnectTimeoutMs() const {
+    nvs_handle_t nvs;
+    if (nvs_open("wifi", NVS_READONLY, &nvs) != ESP_OK) {
+        return WIFI_CONNECT_TIMEOUT_DEFAULT_MS;
+    }
+    uint32_t ms = WIFI_CONNECT_TIMEOUT_DEFAULT_MS;
+    nvs_get_u32(nvs, "tout", &ms);
+    nvs_close(nvs);
+    if (ms < WIFI_CONNECT_TIMEOUT_MIN_MS) ms = WIFI_CONNECT_TIMEOUT_MIN_MS;
+    if (ms > WIFI_CONNECT_TIMEOUT_MAX_MS) ms = WIFI_CONNECT_TIMEOUT_MAX_MS;
+    return ms;
+}
+
+/**
+ * \brief Persists the connect timeout if the value is in range.
+ */
+bool WifiHandlers::setConnectTimeoutMs(uint32_t ms) {
+    if (ms < WIFI_CONNECT_TIMEOUT_MIN_MS || ms > WIFI_CONNECT_TIMEOUT_MAX_MS) {
+        return false;
+    }
+    nvs_handle_t nvs;
+    if (nvs_open("wifi", NVS_READWRITE, &nvs) != ESP_OK) return false;
+    esp_err_t err = nvs_set_u32(nvs, "tout", ms);
+    if (err == ESP_OK) nvs_commit(nvs);
+    nvs_close(nvs);
+    return err == ESP_OK;
+}
+
+/**
+ * \brief Stores credentials (WPA2/DHCP defaults) and persists them.
+ */
+void WifiHandlers::saveCredentials(const char* ssid, const char* password) {
+    wizard_.reset();
+    if (ssid) {
+        strncpy(wizard_.ssid, ssid, sizeof(wizard_.ssid) - 1);
+    }
+    if (password) {
+        strncpy(wizard_.password, password, sizeof(wizard_.password) - 1);
+    }
+    wizard_.security = hal::WifiSecurity::WPA2_PSK;
+    wizard_.useDhcp = true;
+    saveConfig();
+}
+
+/**
+ * \brief Erases the WiFi NVS namespace and invalidates the cached config.
+ */
+void WifiHandlers::clearConfig() {
+    nvs_handle_t nvs;
+    if (nvs_open("wifi", NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_erase_all(nvs);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+    config_ = {};
+    config_.valid = false;
 }
 
 /**
@@ -150,7 +214,6 @@ bool WifiHandlers::connect() {
         return false;
     }
 
-    // Enable WiFi if needed
     if (!wifi->isEnabled()) {
         if (!wifi->enable(hal::WifiMode::STA)) {
             lastError_ = "WiFi init failed";
@@ -158,7 +221,15 @@ bool WifiHandlers::connect() {
         }
     }
 
-    bool connected = wifi->connect(config_.ssid, config_.password, WIFI_CONNECT_TIMEOUT_MS);
+    char toastMsg[96];
+    std::snprintf(toastMsg, sizeof(toastMsg), "%s\n%s",
+                  cdc::ui::tr("core.wifi_connecting"), config_.ssid);
+    showToastTask(toastMsg, 0);
+
+    bool connected = wifi->connect(config_.ssid, config_.password, getConnectTimeoutMs());
+
+    ViewStack::instance().hideModal();
+    ViewStack::instance().render();
 
     if (!connected || !wifi->isConnected()) {
         hal::WifiState state = wifi->getWifiState();
@@ -184,6 +255,11 @@ void WifiHandlers::disconnect() {
 
     if (wifi->isConnected()) {
         wifi->disconnect();
+        // Let lwIP's tcpip thread finish the DHCP release before we tear the
+        // Wi-Fi driver down; otherwise dhcp_release_and_stop sends a UDP
+        // packet over a half-deinitialised driver and dereferences a NULL
+        // pointer in ieee80211_output_do.
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
     if (wifi->isEnabled()) {
         wifi->disable();
@@ -223,7 +299,7 @@ bool WifiHandlers::syncNtp(bool disconnectAfter) {
             wifi->enable(hal::WifiMode::STA);
         }
 
-        bool connected = wifi->connect(config_.ssid, config_.password, WIFI_CONNECT_TIMEOUT_MS);
+        bool connected = wifi->connect(config_.ssid, config_.password, getConnectTimeoutMs());
 
         if (!connected || !wifi->isConnected()) {
             lastError_ = "Connect failed";

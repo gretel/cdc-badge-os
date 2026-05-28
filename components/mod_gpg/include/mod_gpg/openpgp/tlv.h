@@ -19,9 +19,7 @@
  * by OpenPGP (1-/2-byte tags, 1-/2-/3-byte length).
  */
 
-#ifndef MOD_GPG_OPENPGP_TLV_H
-#define MOD_GPG_OPENPGP_TLV_H
-
+#pragma once
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -143,4 +141,3 @@ tlv_status_t tlv_parse(const uint8_t *buf, size_t buf_len, size_t *pos, tlv_t *o
 }
 #endif
 
-#endif  // MOD_GPG_OPENPGP_TLV_H

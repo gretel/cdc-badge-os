@@ -18,46 +18,14 @@ static const char* TAG = "BLE_SERIAL";
 
 namespace cdc::mod_ble_serial {
 
-/** \brief Module-local i18n string offsets. */
+constexpr ui::I18nEntry kStrings[] = {
+    {"mod_ble_serial.title",    "BLE Serial"},
+    {"mod_ble_serial.enabled",  "Enabled"},
+    {"mod_ble_serial.disabled", "Disabled"},
+};
 
-uint16_t BleSerialModule::s_strIdBase = 0;
-
-static constexpr uint16_t STR_BLE_SERIAL = 0;
-static constexpr uint16_t STR_ENABLED = 1;
-static constexpr uint16_t STR_DISABLED = 2;
-static constexpr uint16_t STR_COUNT = 3;
-
-/**
- * \brief Registers BLE-serial module translations.
- */
 void BleSerialModule::registerStrings() {
-    auto& i18n = ui::I18n::instance();
-    s_strIdBase = i18n.registerModule("mod_ble_serial", STR_COUNT);
-    if (s_strIdBase == 0) {
-        LOG_E(TAG, "Failed to register i18n strings");
-        return;
-    }
-
-    // English
-    i18n.registerTranslation(s_strIdBase + STR_BLE_SERIAL, ui::Language::EN, "BLE Serial");
-    i18n.registerTranslation(s_strIdBase + STR_ENABLED, ui::Language::EN, "Enabled");
-    i18n.registerTranslation(s_strIdBase + STR_DISABLED, ui::Language::EN, "Disabled");
-
-    // German
-    i18n.registerTranslation(s_strIdBase + STR_BLE_SERIAL, ui::Language::DE, "BLE Seriell");
-    i18n.registerTranslation(s_strIdBase + STR_ENABLED, ui::Language::DE, "Aktiviert");
-    i18n.registerTranslation(s_strIdBase + STR_DISABLED, ui::Language::DE, "Deaktiviert");
-
-    LOG_I(TAG, "Registered i18n strings (base=%d)", s_strIdBase);
-}
-
-/**
- * \brief Resolves module-localized string by offset.
- * \param offset Module string-table offset.
- * \return Translated string pointer.
- */
-const char* BleSerialModule::mstr(uint16_t offset) const {
-    return ui::tr(s_strIdBase + offset);
+    ui::I18n::instance().registerEnglishTable(kStrings, std::size(kStrings));
 }
 
 /** \brief Console hook bridge between shell I/O and BLE UART transport. */
@@ -233,7 +201,7 @@ void BleSerialModule::toggle() {
         if (uart.init()) {
             registerConsoleHooks();
             registerPairingCallback();
-            ui::showToastSuccess(mstr(STR_ENABLED));
+            ui::showToastSuccess(ui::tr("mod_ble_serial.enabled"));
         } else {
             enabled_ = false;
             saveSettings();
@@ -242,7 +210,7 @@ void BleSerialModule::toggle() {
     } else {
         unregisterConsoleHooks();
         BleUartService::instance().deinit();
-        ui::showToastInfo(mstr(STR_DISABLED));
+        ui::showToastInfo(ui::tr("mod_ble_serial.disabled"));
     }
 }
 
@@ -257,8 +225,8 @@ uint8_t BleSerialModule::getMenuItems(core::ModuleMenuItem* items, uint8_t maxIt
 
     // Build label with status
     snprintf(labelBuf_, LABEL_BUF_SIZE, "%s: %s",
-             mstr(STR_BLE_SERIAL),
-             enabled_ ? mstr(STR_ENABLED) : mstr(STR_DISABLED));
+             ui::tr("mod_ble_serial.title"),
+             enabled_ ? ui::tr("mod_ble_serial.enabled") : ui::tr("mod_ble_serial.disabled"));
 
     items[0].label = labelBuf_;
     items[0].priority = 50;

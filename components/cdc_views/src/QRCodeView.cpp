@@ -117,7 +117,7 @@ const char* QRCodeView::getFooterHint() const {
     if (customHint_) {
         return customHint_;
     }
-    return tr(StringId::HINT_BACK);
+    return ui::tr("core.hint_back");
 }
 
 /**
@@ -199,7 +199,7 @@ void QRCodeView::renderQrCode() {
         LOG_E(TAG, "QR render failed: %s", esp_err_to_name(err));
         gfx->setFont(nullptr);
         gfx->setCursor(10, 64);
-        gfx->print(tr(StringId::QR_ERROR));
+        gfx->print(ui::tr("core.qr_error"));
     }
 }
 
@@ -303,7 +303,7 @@ void QRCodeView::render(bool partial) {
     if (!data_) {
         gfx->setFont(nullptr);
         gfx->setCursor(10, 64);
-        gfx->print(tr(StringId::NO_DATA));
+        gfx->print(ui::tr("core.no_data"));
         dirty_ = false;
         return;
     }

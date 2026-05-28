@@ -91,6 +91,7 @@ public:
     // IView implementation
     void render(bool partial) override;
     InputResult onKey(char key) override;
+    void onTick(uint32_t nowMs) override;
     const char* getName() const override { return "SliderView"; }
     const char* getFooterHint() const override;
 
@@ -106,6 +107,8 @@ private:
     SaveCallback onSave_ = nullptr;
     ChangeCallback onChange_ = nullptr;
     StepCallback stepCallback_ = nullptr;
+    uint32_t repeatStartMs_ = 0;
+    uint32_t lastRepeatMs_ = 0;
 
     void adjust(bool increase);
 };

@@ -1,380 +1,408 @@
 /**
- * I18n Implementation
- *
- * Modular internationalization with:
- * - Core system strings
- * - Module registration for dynamic strings
- * - English fallback
- * - NVS persistence for language selection
+ * \file I18n.cpp
+ * \brief Translation lookup with English fallback in rodata and overlay
+ *        translations loaded at runtime from a JSON file on the plugins FAT.
  */
 
 #include "cdc_ui/I18n.h"
-#include "nvs_flash.h"
-#include "nvs.h"
-#include "cdc_log.h"
-#include <cstring>
 
-static const char* TAG = "I18n";
+#include "cdc_core/Raii.h"
+#include "cdc_log.h"
+
+#include "cJSON.h"
+#include "esp_err.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
 
 namespace cdc::ui {
 
-/**
- * \brief NVS namespace and key used for persisted language selection.
- */
-static constexpr const char* NVS_NAMESPACE = "i18n";
-static constexpr const char* NVS_KEY_LANG = "lang";
+static const char* TAG = "I18n";
 
-/**
- * \brief Returns singleton I18n instance.
- * \return Reference to global `I18n` instance.
- */
-I18n& I18n::instance() {
-    static I18n instance;
-    return instance;
+namespace {
+
+constexpr const char* NVS_NAMESPACE = "i18n";
+constexpr const char* NVS_KEY_LANG_CODE = "langc";
+
+/// Core firmware strings, indexed by StringId. Keys are stable
+/// "core.<snake_case>" identifiers and must match assets/i18n/lang.json.
+constexpr I18nEntry kCoreStrings[] = {
+    {"core.main_menu",          "Main Menu"},
+    {"core.settings",           "Settings"},
+    {"core.hardware",           "Hardware"},
+    {"core.tools",              "Tools"},
+    {"core.hardware_info",      "Hardware Info"},
+    {"core.name",               "Name"},
+    {"core.info",               "Info"},
+    {"core.info2",              "Info 2"},
+    {"core.default_name",       "CDC Badge"},
+    {"core.default_info",       "v" APP_VERSION},
+    {"core.back",               "Back"},
+    {"core.ok",                 "OK"},
+    {"core.cancel",             "Cancel"},
+    {"core.save",               "Save"},
+    {"core.delete",             "Delete"},
+    {"core.edit",               "Edit"},
+    {"core.view",               "View"},
+    {"core.select",             "Select"},
+    {"core.yes",                "Yes"},
+    {"core.no",                 "No"},
+    {"core.on",                 "On"},
+    {"core.off",                "Off"},
+    {"core.saved",              "Saved"},
+    {"core.deleted",            "Deleted"},
+    {"core.failed",             "Failed"},
+    {"core.timeout",            "Timeout"},
+    {"core.empty",              "empty"},
+
+    {"core.lock",               "Lock"},
+    {"core.unlock",             "Unlock"},
+    {"core.enter_pin",          "Enter PIN"},
+    {"core.press_any_key",      "Any key: unlock  [3]: menu"},
+    {"core.deep_sleep",         "Deep Sleep"},
+    {"core.wrong_pin",          "Wrong PIN"},
+    {"core.locked_out",         "Locked out"},
+    {"core.too_many_attempts",  "Too many attempts"},
+
+    {"core.change_pin",         "Change PIN"},
+    {"core.current_pin",        "Current PIN"},
+    {"core.new_pin",            "New PIN"},
+    {"core.confirm_pin",        "Confirm PIN"},
+    {"core.pin_changed",        "PIN changed"},
+    {"core.pins_dont_match",    "PINs don't match"},
+    {"core.pin_too_short",      "PIN too short"},
+    {"core.pin_mismatch",       "PINs don't match"},
+    {"core.retries",            "Retries"},
+    {"core.error_generic",      "Error"},
+
+    {"core.brightness",         "Brightness"},
+    {"core.language",           "Language"},
+    {"core.timezone",           "Timezone"},
+    {"core.summer_time",        "Daylight Saving"},
+    {"core.badge_text",         "Badge Text"},
+    {"core.auto_sleep",         "Sleep Interval"},
+    {"core.set_date",           "Set Date"},
+    {"core.set_time",           "Set Time"},
+    {"core.date",               "Date"},
+    {"core.time",               "Time"},
+    {"core.date_saved",         "Date saved"},
+    {"core.time_saved",         "Time saved"},
+    {"core.modules",            "Modules"},
+    {"core.never",              "Never"},
+    {"core.minutes",            "min"},
+
+    {"core.wifi_menu",          "WiFi"},
+    {"core.wifi_setup",         "WiFi Setup"},
+    {"core.wifi_connect",       "Connect"},
+    {"core.wifi_details",       "Details"},
+    {"core.wifi_disconnect",    "Disconnect"},
+    {"core.wifi_scanning",      "Scanning..."},
+    {"core.wifi_no_networks",   "No networks"},
+    {"core.wifi_connecting",    "Connecting..."},
+    {"core.wifi_connected",     "Connected!"},
+    {"core.wifi_disconnected",  "Disconnected"},
+    {"core.wifi_failed",        "Connection failed"},
+    {"core.wifi_no_config",     "No WiFi configured"},
+    {"core.wifi_password",      "Password"},
+    {"core.wifi_add_manual",    "Add Manual"},
+    {"core.wifi_ssid",          "SSID"},
+    {"core.wifi_encryption",    "Encryption"},
+    {"core.wifi_ip_mode",       "IP Mode"},
+    {"core.wifi_dhcp",          "DHCP (Auto)"},
+    {"core.wifi_static",        "Static IP"},
+    {"core.wifi_gateway",       "Gateway"},
+    {"core.wifi_netmask",       "Netmask"},
+    {"core.wifi_dns",           "DNS"},
+    {"core.wifi_saved_config",  "Saved Config"},
+    {"core.wifi_signal",        "Signal"},
+    {"core.ntp_sync",           "Sync Time"},
+    {"core.ntp_syncing",        "Syncing time..."},
+    {"core.ntp_success",        "Time synced!"},
+    {"core.ntp_failed",         "Sync failed"},
+    {"core.ntp_timeout",        "Sync timeout"},
+    {"core.bluetooth",          "Bluetooth"},
+    {"core.bluetooth_on",       "Bluetooth ON"},
+    {"core.bluetooth_off",      "Bluetooth OFF"},
+    {"core.ble_status",         "BLE Status"},
+    {"core.ble_scan",           "Scan Devices"},
+    {"core.ble_scanning",       "Scanning..."},
+    {"core.ble_no_devices",     "No devices found"},
+    {"core.ble_connected_to",   "Connected to"},
+    {"core.ble_not_connected",  "Not connected"},
+    {"core.ble_mac_address",    "MAC"},
+    {"core.ble_signal",         "Signal"},
+    {"core.ble_paired_devices", "Paired devices"},
+    {"core.system_test",        "System Test"},
+    {"core.tr01_cache_rebuild", "TR01 Cache Rebuild"},
+    {"core.tr01_cache_cleanup", "TR01 Cache Cleanup"},
+    {"core.expert",             "Expert"},
+    {"core.expert_warning",     "Caution"},
+    {"core.bootloader",         "Bootloader"},
+    {"core.plugins",            "Plugins"},
+    {"core.task_working",       "Please wait"},
+    {"core.sleep",              "Sleep"},
+    {"core.usb_replug_required","USB replug may be needed"},
+    {"core.module_error_generic","Module error"},
+    {"core.module_retry_prompt","Reload module?"},
+
+    {"core.hw_section_memory",  "Memory"},
+    {"core.hw_section_runtime", "Runtime"},
+    {"core.hw_i2c_bus",         "I2C Bus"},
+    {"core.hw_bq25895",         "BQ25895"},
+    {"core.hw_tca9535",         "TCA9535"},
+    {"core.hw_display",         "Display"},
+    {"core.hw_tropic01",        "TROPIC01"},
+    {"core.hw_tr01_session",    "TR01 Session"},
+    {"core.hw_tr01_riscv_fw",   "TR01 RISC-V FW"},
+    {"core.hw_tr01_spect_fw",   "TR01 SPECT FW"},
+    {"core.hw_tr01_rmem_slot",  "TR01 R-Mem slot"},
+    {"core.hw_wifi",            "WiFi"},
+    {"core.hw_ble",             "BLE"},
+    {"core.hw_heap",            "Heap"},
+    {"core.hw_psram",           "PSRAM"},
+    {"core.hw_nvs",             "NVS"},
+    {"core.hw_entries",         "entries"},
+    {"core.hw_battery",         "Battery"},
+    {"core.hw_temp",            "Temp"},
+    {"core.hw_uptime",          "Uptime"},
+    {"core.hw_charging_suffix", " (chg)"},
+    {"core.hw_not_available",   "n/a"},
+
+    {"core.actions",            "Actions"},
+    {"core.light",              "Light"},
+
+    {"core.hint_back",          "[N] Back"},
+    {"core.hint_select",        "[Y] Select"},
+    {"core.hint_ok_back",       "[Y] OK [N] Back"},
+    {"core.hint_approve_deny",  "[Y] Approve  [N] Deny"},
+    {"core.hint_brightness",    "<4 6> Adjust [Y] Save"},
+    {"core.hint_pin_input",     "[0-9] Input [Y] OK"},
+    {"core.hint_t9_input",      "[0-9] T9 [Y] OK"},
+    {"core.t9_full",            "Full"},
+    {"core.hint_list_menu",     "[3] Menu"},
+    {"core.hint_scroll_back",   "[2/8] Scroll [N] Back"},
+    {"core.hint_field_nav",     "[4] <  [6] >"},
+    {"core.hint_date_input",    "[0-9] [Y] OK [N] Clear"},
+    {"core.hint_time_input",    "[0-9] [Y] OK [N] Clear"},
+
+    {"core.wifi_connecting",    "Connecting to"},
+    {"core.plugin_loading",     "Loading"},
+    {"core.hint_password_hidden",   "[hold Y] Show [Y] Save"},
+    {"core.hint_password_revealed", "[hold Y] Hide [Y] Save"},
+
+    {"core.qr_error",           "QR Error"},
+    {"core.no_data",            "No data"},
+};
+
+constexpr std::size_t kCoreCount =
+    sizeof(kCoreStrings) / sizeof(kCoreStrings[0]);
+
+}  // namespace
+
+I18n::I18n() = default;
+
+I18n& I18n::instance()
+{
+    static I18n s;
+    return s;
 }
 
-/**
- * \brief Initializes translations and loads persisted language.
- * \return `true` when initialization completed.
- */
-bool I18n::init() {
-    // Initialize core strings
-    initCoreStrings();
+void I18n::registerCoreEnglishTable()
+{
+    registerEnglishTable(kCoreStrings, kCoreCount);
+}
 
-    // Load language from NVS
-    loadFromNvs();
-
-    LOG_I(TAG, "I18n initialized, lang=%s, strings=%d",
-             getLanguageName(currentLang_), nextModuleId_);
+bool I18n::init()
+{
+    registerCoreEnglishTable();
+    loadLanguageFromNvs();
+    LOG_I(TAG, "I18n initialized, lang=%s, core=%u entries",
+          currentLang_.c_str(), static_cast<unsigned>(kCoreCount));
     return true;
 }
 
-/**
- * \brief Sets active UI language and persists it.
- * \param lang Target language.
- * \return void
- */
-void I18n::setLanguage(Language lang) {
-    if (lang >= Language::COUNT) {
-        lang = Language::EN;
-    }
-    if (currentLang_ != lang) {
-        currentLang_ = lang;
-        saveToNvs();
-        LOG_I(TAG, "Language changed to %s", getLanguageName(lang));
-    }
+void I18n::registerEnglishTable(const I18nEntry* entries, std::size_t count)
+{
+    if (!entries || count == 0) return;
+    en_.reserve(en_.size() + count);
+    en_.insert(en_.end(), entries, entries + count);
+    enSorted_ = false;
 }
 
-/**
- * \brief Returns human-readable language name.
- * \param lang Language identifier.
- * \return Display name string for the language.
- */
-const char* I18n::getLanguageName(Language lang) const {
-    switch (lang) {
-        case Language::EN: return "English";
-        case Language::DE: return "Deutsch";
-        default: return "?";
-    }
+bool I18n::sortIfNeeded() const
+{
+    if (enSorted_) return true;
+    std::sort(en_.begin(), en_.end(),
+              [](const I18nEntry& a, const I18nEntry& b) {
+                  return std::strcmp(a.key, b.key) < 0;
+              });
+    enSorted_ = true;
+    return true;
 }
 
-/**
- * \brief Resolves translation text for a core string ID.
- * \param id Core string identifier.
- * \return Translated string or fallback marker.
- */
-const char* I18n::str(StringId id) const {
-    return str(static_cast<uint16_t>(id));
+const char* I18n::enLookup(const char* key) const
+{
+    sortIfNeeded();
+    I18nEntry probe{key, nullptr};
+    auto it = std::lower_bound(en_.begin(), en_.end(), probe,
+                                [](const I18nEntry& a, const I18nEntry& b) {
+                                    return std::strcmp(a.key, b.key) < 0;
+                                });
+    if (it != en_.end() && std::strcmp(it->key, key) == 0) return it->en;
+    return nullptr;
 }
 
-/**
- * \brief Resolves translation text for a raw string ID.
- * \param id Raw string table ID.
- * \return Translated string or fallback marker.
- */
-const char* I18n::str(uint16_t id) const {
-    if (id >= MAX_STRINGS) {
-        return "?";
-    }
-
-    // Try current language first
-    const char* text = strings_[static_cast<uint8_t>(currentLang_)][id];
-    if (text) {
-        return text;
-    }
-
-    // Fallback to English
-    text = strings_[static_cast<uint8_t>(Language::EN)][id];
-    if (text) {
-        return text;
-    }
-
-    // No translation found
-    return "?";
+const char* I18n::overlayLookup(const char* key) const
+{
+    if (activeOverlay_.empty()) return nullptr;
+    auto it = std::lower_bound(
+        activeOverlay_.begin(), activeOverlay_.end(), key,
+        [](const OverlayEntry& e, const char* k) { return e.key < k; });
+    if (it != activeOverlay_.end() && it->key == key) return it->value.c_str();
+    return nullptr;
 }
 
-/**
- * \brief Reserves a contiguous ID range for module-owned strings.
- * \param moduleName Module name used for logging.
- * \param count Number of string IDs to reserve.
- * \return Base string ID of reserved range, or `0` on failure.
- */
-uint16_t I18n::registerModule(const char* moduleName, uint16_t count) {
-    if (nextModuleId_ + count > MAX_STRINGS) {
-        LOG_E(TAG, "Cannot register module '%s': out of string slots", moduleName);
-        return 0;
-    }
-
-    uint16_t baseId = nextModuleId_;
-    nextModuleId_ += count;
-
-    LOG_I(TAG, "Module '%s' registered IDs %d-%d", moduleName, baseId, baseId + count - 1);
-    return baseId;
+const char* I18n::overlayTr(const char* key) const
+{
+    if (!key || currentLang_ == "en") return nullptr;
+    return overlayLookup(key);
 }
 
-/**
- * \brief Registers one translation entry.
- * \param stringId String ID to set.
- * \param lang Language bucket.
- * \param text Translation text pointer.
- * \return `true` if registration succeeded.
- */
-bool I18n::registerTranslation(uint16_t stringId, Language lang, const char* text) {
-    if (stringId >= MAX_STRINGS || lang >= Language::COUNT || !text) {
+const char* I18n::tr(const char* key) const
+{
+    if (!key) return "";
+    if (currentLang_ != "en") {
+        if (const char* s = overlayLookup(key)) return s;
+    }
+    if (const char* s = enLookup(key)) return s;
+    static thread_local char missing[64];
+    std::snprintf(missing, sizeof(missing), "?%s", key);
+    return missing;
+}
+
+bool I18n::setLanguageCode(const char* code)
+{
+    std::string newLang = (code && *code) ? code : "en";
+    if (newLang == currentLang_) return true;
+    currentLang_ = std::move(newLang);
+
+    if (currentLang_ != "en") {
+        activeOverlay_.clear();
+        const char* path = overlayJsonPath_.empty()
+                               ? DEFAULT_OVERLAY_PATH
+                               : overlayJsonPath_.c_str();
+        // loadOverlay() fires onChanged_ on success.
+        loadOverlay(path);
+    } else {
+        activeOverlay_.clear();
+        if (onChanged_) onChanged_();
+    }
+
+    saveLanguageToNvs();
+    LOG_I(TAG, "Language changed to %s", currentLang_.c_str());
+    return true;
+}
+
+bool I18n::loadOverlay(const char* path)
+{
+    if (!path) return false;
+    overlayJsonPath_ = path;
+
+    auto fp = cdc::core::openFile(path, "rb");
+    if (!fp) {
+        LOG_W(TAG, "Overlay file not found: %s", path);
+        overlayLangs_.clear();
         return false;
     }
 
-    strings_[static_cast<uint8_t>(lang)][stringId] = text;
+    std::fseek(fp.get(), 0, SEEK_END);
+    long size = std::ftell(fp.get());
+    std::fseek(fp.get(), 0, SEEK_SET);
+    if (size <= 0 || size > 1024 * 1024) {
+        LOG_W(TAG, "Overlay file size invalid: %ld", size);
+        return false;
+    }
+
+    auto buf = cdc::core::psramAlloc<char>(static_cast<std::size_t>(size) + 1);
+    if (!buf) {
+        LOG_E(TAG, "Overlay PSRAM allocation failed (%ld bytes)", size);
+        return false;
+    }
+    if (std::fread(buf.get(), 1, size, fp.get()) != static_cast<size_t>(size)) {
+        LOG_E(TAG, "Overlay file read failed");
+        return false;
+    }
+    buf.get()[size] = '\0';
+
+    cJSON* root = cJSON_Parse(buf.get());
+    if (!root) {
+        LOG_E(TAG, "Overlay JSON parse failed near: %s",
+              cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "<unknown>");
+        return false;
+    }
+
+    cJSON* translations = cJSON_GetObjectItemCaseSensitive(root, "translations");
+    if (!translations || !cJSON_IsObject(translations)) {
+        LOG_E(TAG, "Overlay missing 'translations' object");
+        cJSON_Delete(root);
+        return false;
+    }
+
+    overlayLangs_.clear();
+    activeOverlay_.clear();
+
+    cJSON* lang_obj = nullptr;
+    cJSON_ArrayForEach(lang_obj, translations) {
+        if (!cJSON_IsObject(lang_obj) || !lang_obj->string) continue;
+        overlayLangs_.emplace_back(lang_obj->string);
+
+        if (currentLang_ != lang_obj->string) continue;
+
+        cJSON* entry = nullptr;
+        cJSON_ArrayForEach(entry, lang_obj) {
+            if (!cJSON_IsString(entry) || !entry->string || !entry->valuestring) continue;
+            activeOverlay_.push_back({entry->string, entry->valuestring});
+        }
+    }
+
+    std::sort(activeOverlay_.begin(), activeOverlay_.end(),
+              [](const OverlayEntry& a, const OverlayEntry& b) {
+                  return a.key < b.key;
+              });
+
+    cJSON_Delete(root);
+
+    LOG_I(TAG, "Overlay loaded: %u languages, %u entries for '%s'",
+          static_cast<unsigned>(overlayLangs_.size()),
+          static_cast<unsigned>(activeOverlay_.size()),
+          currentLang_.c_str());
+
+    if (onChanged_) onChanged_();
     return true;
 }
 
-/**
- * \brief Registers a zero-terminated translation table.
- * \param translations Pointer to translation entries ending at `stringId == 0xFFFF`.
- * \return void
- */
-void I18n::registerTranslations(const Translation* translations) {
-    if (!translations) return;
-
-    while (translations->stringId != 0xFFFF) {
-        registerTranslation(translations->stringId, translations->lang, translations->text);
-        translations++;
+void I18n::loadLanguageFromNvs()
+{
+    cdc::core::NvsScope nvs(NVS_NAMESPACE, NVS_READONLY);
+    if (!nvs) return;
+    size_t len = 0;
+    if (nvs_get_str(nvs, NVS_KEY_LANG_CODE, nullptr, &len) != ESP_OK || len == 0) return;
+    if (len > 8) len = 8;
+    char buf[9] = {};
+    if (nvs_get_str(nvs, NVS_KEY_LANG_CODE, buf, &len) == ESP_OK) {
+        currentLang_ = buf;
     }
 }
 
-/**
- * \brief Loads selected language from NVS.
- * \return void
- */
-void I18n::loadFromNvs() {
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
-    if (err == ESP_OK) {
-        uint8_t lang = 0;
-        if (nvs_get_u8(handle, NVS_KEY_LANG, &lang) == ESP_OK) {
-            if (lang < static_cast<uint8_t>(Language::COUNT)) {
-                currentLang_ = static_cast<Language>(lang);
-            }
-        }
-        nvs_close(handle);
-    }
+void I18n::saveLanguageToNvs()
+{
+    cdc::core::NvsScope nvs(NVS_NAMESPACE, NVS_READWRITE);
+    if (!nvs) return;
+    nvs_set_str(nvs, NVS_KEY_LANG_CODE, currentLang_.c_str());
+    nvs.commit();
 }
 
-/**
- * \brief Saves selected language to NVS.
- * \return void
- */
-void I18n::saveToNvs() {
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err == ESP_OK) {
-        nvs_set_u8(handle, NVS_KEY_LANG, static_cast<uint8_t>(currentLang_));
-        nvs_commit(handle);
-        nvs_close(handle);
-    }
-}
-
-/**
- * \brief Registers built-in core string translations.
- * \return void
- */
-void I18n::initCoreStrings() {
-    // Macro for cleaner registration
-    #define REG(id, en, de) \
-        strings_[0][static_cast<uint16_t>(StringId::id)] = en; \
-        strings_[1][static_cast<uint16_t>(StringId::id)] = de
-
-    // === System ===
-    REG(MAIN_MENU,      "Main Menu",        "Hauptmenu");
-    REG(SETTINGS,       "Settings",         "Einstellungen");
-    REG(HARDWARE,       "Hardware",         "Hardware");
-    REG(TOOLS,          "Tools",            "Werkzeuge");
-    REG(HARDWARE_INFO,  "Hardware Info",    "Hardware-Info");
-    REG(NAME,           "Name",             "Name");
-    REG(INFO,           "Info",             "Info");
-    REG(INFO2,          "Info 2",            "Info 2");
-    REG(DEFAULT_NAME,   "CDC Badge",        "CDC Badge");
-    REG(DEFAULT_INFO,   "v" APP_VERSION,    "v" APP_VERSION);
-    REG(BACK,           "Back",             "Zuruck");
-    REG(OK,             "OK",               "OK");
-    REG(CANCEL,         "Cancel",           "Abbrechen");
-    REG(SAVE,           "Save",             "Speichern");
-    REG(DELETE,         "Delete",           "Loschen");
-    REG(EDIT,           "Edit",             "Bearbeiten");
-    REG(VIEW,           "View",             "Anzeigen");
-    REG(SELECT,         "Select",           "Auswahlen");
-    REG(YES,            "Yes",              "Ja");
-    REG(NO,             "No",               "Nein");
-    REG(ON,             "On",               "Ein");
-    REG(OFF,            "Off",              "Aus");
-    REG(SAVED,          "Saved",            "Gespeichert");
-    REG(DELETED,        "Deleted",          "Geloscht");
-    REG(FAILED,         "Failed",           "Fehlgeschlagen");
-    REG(TIMEOUT,        "Timeout",          "Zeituberschreitung");
-    REG(EMPTY,          "empty",            "leer");
-
-    // === Lock Screen ===
-    REG(LOCK,               "Lock",                 "Sperren");
-    REG(UNLOCK,             "Unlock",               "Entsperren");
-    REG(ENTER_PIN,          "Enter PIN",            "PIN eingeben");
-    REG(PRESS_ANY_KEY,      "Any key: unlock  [3]: menu",  "Taste: entsperren  [3]: Menue");
-    REG(DEEP_SLEEP,         "Deep Sleep",               "Tiefschlaf");
-    REG(WRONG_PIN,          "Wrong PIN",            "Falsche PIN");
-    REG(LOCKED_OUT,         "Locked out",           "Gesperrt");
-    REG(TOO_MANY_ATTEMPTS,  "Too many attempts",    "Zu viele Versuche");
-
-    // === PIN ===
-    REG(CHANGE_PIN,         "Change PIN",           "PIN andern");
-    REG(CURRENT_PIN,        "Current PIN",          "Aktuelle PIN");
-    REG(NEW_PIN,            "New PIN",              "Neue PIN");
-    REG(CONFIRM_PIN,        "Confirm PIN",          "PIN bestatigen");
-    REG(PIN_CHANGED,        "PIN changed",          "PIN geandert");
-    REG(PINS_DONT_MATCH,    "PINs don't match",     "PINs stimmen nicht");
-    REG(PIN_TOO_SHORT,      "PIN too short",        "PIN zu kurz");
-    REG(PIN_MISMATCH,       "PINs don't match",     "PINs stimmen nicht");
-    REG(RETRIES,            "Retries",              "Versuche");
-    REG(ERROR_GENERIC,      "Error",                "Fehler");
-
-    // === Settings ===
-    REG(BRIGHTNESS,     "Brightness",       "Helligkeit");
-    REG(LANGUAGE,       "Language",         "Sprache");
-    REG(TIMEZONE,       "Timezone",         "Zeitzone");
-    REG(SUMMER_TIME,    "Daylight Saving",  "Sommerzeit");
-    REG(BADGE_TEXT,     "Badge Text",       "Badge-Text");
-    REG(AUTO_SLEEP,     "Sleep Interval",   "Schlafintervall");
-    REG(SET_DATE,       "Set Date",         "Datum einstellen");
-    REG(SET_TIME,       "Set Time",         "Uhrzeit einstellen");
-    REG(DATE,           "Date",             "Datum");
-    REG(TIME,           "Time",             "Uhrzeit");
-    REG(DATE_SAVED,     "Date saved",       "Datum gespeichert");
-    REG(TIME_SAVED,     "Time saved",       "Uhrzeit gespeichert");
-    REG(MODULES,        "Modules",          "Module");
-    REG(NEVER,          "Never",            "Nie");
-    REG(MINUTES,        "min",              "min");
-
-    // === Hardware ===
-    REG(WIFI_MENU,          "WiFi",                 "WLAN");
-    REG(WIFI_SETUP,         "WiFi Setup",           "WLAN Setup");
-    REG(WIFI_CONNECT,       "Connect",              "Verbinden");
-    REG(WIFI_DETAILS,       "Details",              "Details");
-    REG(WIFI_DISCONNECT,    "Disconnect",           "Trennen");
-    REG(WIFI_SCANNING,      "Scanning...",          "Suche...");
-    REG(WIFI_NO_NETWORKS,   "No networks",          "Keine Netzwerke");
-    REG(WIFI_CONNECTING,    "Connecting...",        "Verbinde...");
-    REG(WIFI_CONNECTED,     "Connected!",           "Verbunden!");
-    REG(WIFI_DISCONNECTED,  "Disconnected",         "Getrennt");
-    REG(WIFI_FAILED,        "Connection failed",    "Verbindung fehlgeschlagen");
-    REG(WIFI_NO_CONFIG,     "No WiFi configured",   "Kein WLAN konfiguriert");
-    REG(WIFI_PASSWORD,      "Password",             "Passwort");
-    REG(WIFI_ADD_MANUAL,    "Add Manual",           "Manuell hinzufuegen");
-    REG(WIFI_SSID,          "SSID",                 "SSID");
-    REG(WIFI_ENCRYPTION,    "Encryption",           "Verschluesselung");
-    REG(WIFI_IP_MODE,       "IP Mode",              "IP Modus");
-    REG(WIFI_DHCP,          "DHCP (Auto)",          "DHCP (Auto)");
-    REG(WIFI_STATIC,        "Static IP",            "Statische IP");
-    REG(WIFI_GATEWAY,       "Gateway",              "Gateway");
-    REG(WIFI_NETMASK,       "Netmask",              "Netzmaske");
-    REG(WIFI_DNS,           "DNS",                  "DNS");
-    REG(WIFI_SAVED_CONFIG,  "Saved Config",         "Gespeicherte Config");
-    REG(WIFI_SIGNAL,        "Signal",               "Signal");
-    REG(NTP_SYNC,           "Sync Time",            "Zeit synchronisieren");
-    REG(NTP_SYNCING,        "Syncing time...",      "Synchronisiere Zeit...");
-    REG(NTP_SUCCESS,        "Time synced!",         "Zeit synchronisiert!");
-    REG(NTP_FAILED,         "Sync failed",          "Sync fehlgeschlagen");
-    REG(NTP_TIMEOUT,        "Sync timeout",         "Sync Timeout");
-    REG(BLUETOOTH,          "Bluetooth",            "Bluetooth");
-    REG(BLUETOOTH_ON,       "Bluetooth ON",         "Bluetooth EIN");
-    REG(BLUETOOTH_OFF,      "Bluetooth OFF",        "Bluetooth AUS");
-    REG(BLE_STATUS,         "BLE Status",           "BLE Status");
-    REG(BLE_SCAN,           "Scan Devices",         "Geraete suchen");
-    REG(BLE_SCANNING,       "Scanning...",          "Suche...");
-    REG(BLE_NO_DEVICES,     "No devices found",     "Keine Geraete gefunden");
-    REG(BLE_CONNECTED_TO,   "Connected to",         "Verbunden mit");
-    REG(BLE_NOT_CONNECTED,  "Not connected",        "Nicht verbunden");
-    REG(BLE_MAC_ADDRESS,    "MAC",                  "MAC");
-    REG(BLE_SIGNAL,         "Signal",               "Signal");
-    REG(BLE_PAIRED_DEVICES, "Paired devices",       "Gekoppelte Geraete");
-    REG(SYSTEM_TEST,        "System Test",          "Systemtest");
-    REG(TR01_CACHE_REBUILD, "TR01 Cache Rebuild",   "TR01 Cache neu aufbauen");
-    REG(TR01_CACHE_CLEANUP, "TR01 Cache Cleanup",   "TR01 Cache aufraeumen");
-    REG(EXPERT,             "Expert",               "Experte");
-    REG(EXPERT_WARNING,     "Caution",              "Vorsicht");
-    REG(TASK_WORKING,       "Please wait",          "Bitte warten");
-    REG(USB_REPLUG_REQUIRED,"USB replug may be needed", "USB replug ggf. noetig");
-    REG(SLEEP,              "Sleep",                "Schlafmodus");
-    REG(MODULE_ERROR_GENERIC,"Module error",        "Modul-Fehler");
-    REG(MODULE_RETRY_PROMPT,"Reload module?",       "Modul neu laden?");
-
-    // === Hardware Info ===
-    REG(HW_SECTION_MEMORY,  "Memory",               "Speicher");
-    REG(HW_SECTION_RUNTIME, "Runtime",              "Laufzeit");
-    REG(HW_I2C_BUS,         "I2C Bus",              "I2C Bus");
-    REG(HW_BQ25895,         "BQ25895",              "BQ25895");
-    REG(HW_TCA9535,         "TCA9535",              "TCA9535");
-    REG(HW_DISPLAY,         "Display",              "Display");
-    REG(HW_TROPIC01,        "TROPIC01",             "TROPIC01");
-    REG(HW_TR01_SESSION,    "TR01 Session",         "TR01 Sitzung");
-    REG(HW_TR01_RISCV_FW,   "TR01 RISC-V FW",       "TR01 RISC-V FW");
-    REG(HW_TR01_SPECT_FW,   "TR01 SPECT FW",        "TR01 SPECT FW");
-    REG(HW_TR01_RMEM_SLOT,  "TR01 R-Mem slot",      "TR01 R-Mem Slot");
-    REG(HW_WIFI,            "WiFi",                 "WiFi");
-    REG(HW_BLE,             "BLE",                  "BLE");
-    REG(HW_HEAP,            "Heap",                 "Heap");
-    REG(HW_PSRAM,           "PSRAM",                "PSRAM");
-    REG(HW_NVS,             "NVS",                  "NVS");
-    REG(HW_ENTRIES,         "entries",              "Eintraege");
-    REG(HW_BATTERY,         "Battery",              "Batterie");
-    REG(HW_TEMP,            "Temp",                 "Temperatur");
-    REG(HW_UPTIME,          "Uptime",               "Uptime");
-    REG(HW_CHARGING_SUFFIX, " (chg)",               " (laden)");
-    REG(HW_NOT_AVAILABLE,   "n/a",                  "n/v");
-
-    // === Actions ===
-    REG(ACTIONS,            "Actions",              "Aktionen");
-    REG(LIGHT,              "Light",                "Licht");
-
-    // === Footer Hints ===
-    REG(HINT_BACK,          "[N] Back",             "[N] Zuruck");
-    REG(HINT_SELECT,        "[Y] Select",           "[Y] Auswahlen");
-    REG(HINT_OK_BACK,       "[Y] OK [N] Back",      "[Y] OK [N] Zuruck");
-    REG(HINT_APPROVE_DENY,  "[Y] Approve  [N] Deny","[Y] OK  [N] Abbruch");
-    REG(HINT_BRIGHTNESS,    "<4 6> Adjust [Y] Save", "<4 6> Anpassen [Y] Speichern");
-    REG(HINT_PIN_INPUT,     "[0-9] Input [Y] OK",   "[0-9] Eingabe [Y] OK");
-    REG(HINT_T9_INPUT,      "[0-9] T9 [Y] OK",      "[0-9] T9 [Y] OK");
-    REG(T9_FULL,            "Full",                 "Voll");
-    REG(HINT_LIST_MENU,     "[3] Menu",             "[3] Menu");
-    REG(HINT_SCROLL_BACK,   "[2/8] Scroll [N] Back","[2/8] Scrollen [N] Zuruck");
-    REG(HINT_FIELD_NAV,     "[4] <  [6] >",         "[4] <  [6] >");
-    REG(HINT_DATE_INPUT,    "[0-9] [Y] OK [N] Clear",   "[0-9] [Y] OK [N] Loeschen");
-    REG(HINT_TIME_INPUT,    "[0-9] [Y] OK [N] Clear",   "[0-9] [Y] OK [N] Loeschen");
-    REG(HINT_PASSWORD_HIDDEN,   "[hold Y] Show [Y] Save", "[Y halten] Zeigen [Y] Speichern");
-    REG(HINT_PASSWORD_REVEALED, "[hold Y] Hide [Y] Save", "[Y halten] Verbergen [Y] Speichern");
-
-    // === QR ===
-    REG(QR_ERROR,           "QR Error",            "QR Fehler");
-    REG(NO_DATA,            "No data",             "Keine Daten");
-
-    #undef REG
-}
-
-} // namespace cdc::ui
+}  // namespace cdc::ui

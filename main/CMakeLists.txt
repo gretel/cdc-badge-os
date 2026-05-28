@@ -6,7 +6,6 @@
 # Each module must provide a <modulename>_register() function.
 # =============================================================================
 set(MODULES
-    grove_led
     mod_totp
     mod_fido2
     mod_password
@@ -16,7 +15,6 @@ set(MODULES
     mod_ble_serial
     mod_nvsedit
     mod_hid
-    mod_homeassistant
 )
 # =============================================================================
 
@@ -25,6 +23,7 @@ idf_component_register(
         "main.cpp"
     INCLUDE_DIRS "." "${CMAKE_CURRENT_BINARY_DIR}"
     REQUIRES nvs_flash freertos esp_timer cdc_core usb_badge serial_cmd cdc_hal cdc_log cdc_os_ui
+        wamr_runtime plugin_manager
         ${MODULES}
 )
 

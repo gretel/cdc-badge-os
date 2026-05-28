@@ -160,7 +160,7 @@ static void wizardFinish() {
     size_t len = vcard_generate_from_struct(&s_wizard.data, buf, sizeof(buf));
     if (len == 0) {
         ui::showToastError(s_resolver ? s_resolver(s_failedOffset)
-                                      : ui::tr(ui::StringId::FAILED));
+                                      : ui::tr("core.failed"));
         s_wizard.active = false;
         return;
     }
@@ -170,7 +170,7 @@ static void wizardFinish() {
         LOG_W(TAG, "set_own failed: %s", err[0] ? err : "(no detail)");
         ui::showToastError(err[0] ? err
                                   : (s_resolver ? s_resolver(s_failedOffset)
-                                                : ui::tr(ui::StringId::FAILED)));
+                                                : ui::tr("core.failed")));
         s_wizard.active = false;
         return;
     }

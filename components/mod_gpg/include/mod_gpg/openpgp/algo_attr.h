@@ -27,9 +27,7 @@
  * as a fallback per the plan in plan2.md §10.
  */
 
-#ifndef MOD_GPG_OPENPGP_ALGO_ATTR_H
-#define MOD_GPG_OPENPGP_ALGO_ATTR_H
-
+#pragma once
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -131,4 +129,3 @@ algo_attr_status_t algo_attr_validate_capability(const algo_attr_t *attr,
 }
 #endif
 
-#endif  // MOD_GPG_OPENPGP_ALGO_ATTR_H

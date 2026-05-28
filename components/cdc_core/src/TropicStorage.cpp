@@ -1,6 +1,7 @@
 #include "cdc_core/TropicStorage.h"
 #include "cdc_core/TropicSlotMap.h"
 #include "cdc_core/Hash.h"
+#include "cdc_core/Raii.h"
 #include "cdc_log.h"
 #include "nvs_flash.h"
 #include <cstring>
@@ -325,14 +326,11 @@ bool TropicStorage::cleanup() {
  * \return `true` when valid header loaded, otherwise `false`.
  */
 bool TropicStorage::loadHeader() {
-    nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) {
-        return false;
-    }
+    NvsScope nvs(NVS_NAMESPACE, NVS_READONLY);
+    if (!nvs) return false;
     size_t len = sizeof(CacheHeader);
     CacheHeader stored = {};
     esp_err_t err = nvs_get_blob(nvs, NVS_KEY_HEADER, &stored, &len);
-    nvs_close(nvs);
     if (err != ESP_OK || len != sizeof(CacheHeader)) {
         return false;
     }
@@ -353,15 +351,10 @@ bool TropicStorage::loadHeader() {
  * \return `true` on success, otherwise `false`.
  */
 bool TropicStorage::saveHeader() {
-    nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
-        return false;
-    }
+    NvsScope nvs(NVS_NAMESPACE, NVS_READWRITE);
+    if (!nvs) return false;
     esp_err_t err = nvs_set_blob(nvs, NVS_KEY_HEADER, &header_, sizeof(header_));
-    if (err == ESP_OK) {
-        err = nvs_commit(nvs);
-    }
-    nvs_close(nvs);
+    if (err == ESP_OK) err = nvs.commit();
     return err == ESP_OK;
 }
 
@@ -375,15 +368,12 @@ bool TropicStorage::loadChunk(uint16_t chunkIndex, CacheEntry* entries) {
     if (!entries) return false;
     memset(entries, 0, sizeof(CacheEntry) * CHUNK_SLOTS);
 
-    nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) {
-        return true;
-    }
+    NvsScope nvs(NVS_NAMESPACE, NVS_READONLY);
+    if (!nvs) return true;
     char key[12];
     snprintf(key, sizeof(key), "c%u", chunkIndex);
     size_t len = sizeof(CacheEntry) * CHUNK_SLOTS;
     esp_err_t err = nvs_get_blob(nvs, key, entries, &len);
-    nvs_close(nvs);
 
     if (err != ESP_OK || len != sizeof(CacheEntry) * CHUNK_SLOTS) {
         memset(entries, 0, sizeof(CacheEntry) * CHUNK_SLOTS);
@@ -400,17 +390,12 @@ bool TropicStorage::loadChunk(uint16_t chunkIndex, CacheEntry* entries) {
  */
 bool TropicStorage::saveChunk(uint16_t chunkIndex, const CacheEntry* entries) {
     if (!entries) return false;
-    nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
-        return false;
-    }
+    NvsScope nvs(NVS_NAMESPACE, NVS_READWRITE);
+    if (!nvs) return false;
     char key[12];
     snprintf(key, sizeof(key), "c%u", chunkIndex);
     esp_err_t err = nvs_set_blob(nvs, key, entries, sizeof(CacheEntry) * CHUNK_SLOTS);
-    if (err == ESP_OK) {
-        err = nvs_commit(nvs);
-    }
-    nvs_close(nvs);
+    if (err == ESP_OK) err = nvs.commit();
     return err == ESP_OK;
 }
 

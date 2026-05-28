@@ -10,23 +10,12 @@ static const char* TAG = "SAO";
 
 namespace cdc::mod_sao {
 
-static uint16_t s_strIdBase = 0;
-static constexpr uint16_t STR_SAO = 0;
-static constexpr uint16_t STR_COUNT = 1;
-
-static const char* mstr(uint16_t offset) {
-    return ui::tr(s_strIdBase + offset);
-}
+constexpr ui::I18nEntry kStrings[] = {
+    {"mod_sao.title", "SAO"},
+};
 
 static void registerStrings() {
-    auto& i18n = ui::I18n::instance();
-    s_strIdBase = i18n.registerModule("mod_sao", STR_COUNT);
-    if (s_strIdBase == 0) {
-        LOG_E(TAG, "Failed to register i18n strings");
-        return;
-    }
-    i18n.registerTranslation(s_strIdBase + STR_SAO, ui::Language::EN, "SAO");
-    i18n.registerTranslation(s_strIdBase + STR_SAO, ui::Language::DE, "SAO");
+    ui::I18n::instance().registerEnglishTable(kStrings, std::size(kStrings));
 }
 
 static ui::InfoView s_infoView;
@@ -34,7 +23,7 @@ static char s_infoText[256];
 
 static ui::IView* getInfoView() {
     sao_get_info_string(s_infoText, sizeof(s_infoText));
-    s_infoView.init(mstr(STR_SAO), s_infoText);
+    s_infoView.init(ui::tr("mod_sao.title"), s_infoText);
     return &s_infoView;
 }
 
@@ -70,7 +59,7 @@ void SaoModule::stop() {
 uint8_t SaoModule::getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems) {
     if (!items || maxItems == 0) return 0;
     items[0] = {
-        mstr(STR_SAO),
+        ui::tr("mod_sao.title"),
         120,
         getInfoView,
         nullptr,

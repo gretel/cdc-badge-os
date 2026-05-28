@@ -15,6 +15,7 @@
 #include "cdc_views/ConfirmView.h"
 #include "cdc_views/ToastView.h"
 #include "serial_cmd/ICommandRegistry.h"
+#include "serial_cmd/SubCommand.h"
 #include "serial_cmd/Console.h"
 #include "cdc_log.h"
 #include <cctype>
@@ -28,96 +29,32 @@ static const char* TAG = "PASSWORD";
 
 namespace cdc::mod_password {
 
-/** \brief Module-specific i18n string offsets. */
-static uint16_t s_strIdBase = 0;
-static constexpr uint16_t STR_PASSWORDS = 0;
-static constexpr uint16_t STR_NEW_ENTRY = 1;
-static constexpr uint16_t STR_TITLE = 2;
-static constexpr uint16_t STR_USERNAME = 3;
-static constexpr uint16_t STR_PASSWORD = 4;
-static constexpr uint16_t STR_URL = 5;
-static constexpr uint16_t STR_TOTP_SLOT = 6;
-static constexpr uint16_t STR_NOTES = 7;
-static constexpr uint16_t STR_VIEW = 8;
-static constexpr uint16_t STR_EDIT = 9;
-static constexpr uint16_t STR_DELETE = 10;
-static constexpr uint16_t STR_ACTIONS = 11;
-static constexpr uint16_t STR_SAVED = 12;
-static constexpr uint16_t STR_DELETED = 13;
-static constexpr uint16_t STR_INVALID_INPUT = 14;
-static constexpr uint16_t STR_SLOT_ERROR = 15;
-static constexpr uint16_t STR_DETAILS = 16;
-static constexpr uint16_t STR_HINT_LIST = 17;
-static constexpr uint16_t STR_CONFIRM_DELETE = 18;
-static constexpr uint16_t STR_HINT_TYPE = 19;
-static constexpr uint16_t STR_NO_KEYBOARD = 20;
-static constexpr uint16_t STR_COUNT = 21;
+constexpr ui::I18nEntry kStrings[] = {
+    {"mod_password.title",          "Passwords"},
+    {"mod_password.new_entry",      "New Entry"},
+    {"mod_password.field_title",    "Title"},
+    {"mod_password.username",       "Username"},
+    {"mod_password.password",       "Password"},
+    {"mod_password.url",            "URL"},
+    {"mod_password.totp_slot",      "TOTP Slot (optional)"},
+    {"mod_password.notes",          "Notes"},
+    {"mod_password.view",           "View"},
+    {"mod_password.edit",           "Edit"},
+    {"mod_password.delete",         "Delete"},
+    {"mod_password.actions",        "Actions"},
+    {"mod_password.saved",          "Saved"},
+    {"mod_password.deleted",        "Deleted"},
+    {"mod_password.invalid_input",  "Invalid input"},
+    {"mod_password.slot_error",     "Slot map error"},
+    {"mod_password.details",        "Details"},
+    {"mod_password.hint_list",      "[Y] View  [3] Menu  [N] Back"},
+    {"mod_password.confirm_delete", "Delete entry?"},
+    {"mod_password.hint_type",      "[Y] Type  [2/8] Scroll  [N] Back"},
+    {"mod_password.no_keyboard",    "No keyboard connected"},
+};
 
-/**
- * \brief Resolves a module-localized string by offset.
- * \param offset Module string-table offset.
- * \return Translated string pointer.
- */
-static const char* mstr(uint16_t offset) {
-    return ui::tr(s_strIdBase + offset);
-}
-
-/**
- * \brief Registers all password-module translations for supported languages.
- */
 static void registerStrings() {
-    auto& i18n = ui::I18n::instance();
-    s_strIdBase = i18n.registerModule("mod_password", STR_COUNT);
-    if (s_strIdBase == 0) {
-        LOG_E(TAG, "Failed to register i18n strings");
-        return;
-    }
-
-    i18n.registerTranslation(s_strIdBase + STR_PASSWORDS, ui::Language::EN, "Passwords");
-    i18n.registerTranslation(s_strIdBase + STR_NEW_ENTRY, ui::Language::EN, "New Entry");
-    i18n.registerTranslation(s_strIdBase + STR_TITLE, ui::Language::EN, "Title");
-    i18n.registerTranslation(s_strIdBase + STR_USERNAME, ui::Language::EN, "Username");
-    i18n.registerTranslation(s_strIdBase + STR_PASSWORD, ui::Language::EN, "Password");
-    i18n.registerTranslation(s_strIdBase + STR_URL, ui::Language::EN, "URL");
-    i18n.registerTranslation(s_strIdBase + STR_TOTP_SLOT, ui::Language::EN, "TOTP Slot (optional)");
-    i18n.registerTranslation(s_strIdBase + STR_NOTES, ui::Language::EN, "Notes");
-    i18n.registerTranslation(s_strIdBase + STR_VIEW, ui::Language::EN, "View");
-    i18n.registerTranslation(s_strIdBase + STR_EDIT, ui::Language::EN, "Edit");
-    i18n.registerTranslation(s_strIdBase + STR_DELETE, ui::Language::EN, "Delete");
-    i18n.registerTranslation(s_strIdBase + STR_ACTIONS, ui::Language::EN, "Actions");
-    i18n.registerTranslation(s_strIdBase + STR_SAVED, ui::Language::EN, "Saved");
-    i18n.registerTranslation(s_strIdBase + STR_DELETED, ui::Language::EN, "Deleted");
-    i18n.registerTranslation(s_strIdBase + STR_INVALID_INPUT, ui::Language::EN, "Invalid input");
-    i18n.registerTranslation(s_strIdBase + STR_SLOT_ERROR, ui::Language::EN, "Slot map error");
-    i18n.registerTranslation(s_strIdBase + STR_DETAILS, ui::Language::EN, "Details");
-    i18n.registerTranslation(s_strIdBase + STR_HINT_LIST, ui::Language::EN, "[Y] View  [3] Menu  [N] Back");
-    i18n.registerTranslation(s_strIdBase + STR_CONFIRM_DELETE, ui::Language::EN, "Delete entry?");
-    i18n.registerTranslation(s_strIdBase + STR_HINT_TYPE, ui::Language::EN, "[Y] Type  [2/8] Scroll  [N] Back");
-    i18n.registerTranslation(s_strIdBase + STR_NO_KEYBOARD, ui::Language::EN, "No keyboard connected");
-
-    i18n.registerTranslation(s_strIdBase + STR_PASSWORDS, ui::Language::DE, "Passwoerter");
-    i18n.registerTranslation(s_strIdBase + STR_NEW_ENTRY, ui::Language::DE, "Neuer Eintrag");
-    i18n.registerTranslation(s_strIdBase + STR_TITLE, ui::Language::DE, "Titel");
-    i18n.registerTranslation(s_strIdBase + STR_USERNAME, ui::Language::DE, "Benutzername");
-    i18n.registerTranslation(s_strIdBase + STR_PASSWORD, ui::Language::DE, "Passwort");
-    i18n.registerTranslation(s_strIdBase + STR_URL, ui::Language::DE, "URL");
-    i18n.registerTranslation(s_strIdBase + STR_TOTP_SLOT, ui::Language::DE, "TOTP Slot (optional)");
-    i18n.registerTranslation(s_strIdBase + STR_NOTES, ui::Language::DE, "Notizen");
-    i18n.registerTranslation(s_strIdBase + STR_VIEW, ui::Language::DE, "Ansehen");
-    i18n.registerTranslation(s_strIdBase + STR_EDIT, ui::Language::DE, "Bearbeiten");
-    i18n.registerTranslation(s_strIdBase + STR_DELETE, ui::Language::DE, "Loeschen");
-    i18n.registerTranslation(s_strIdBase + STR_ACTIONS, ui::Language::DE, "Aktionen");
-    i18n.registerTranslation(s_strIdBase + STR_SAVED, ui::Language::DE, "Gespeichert");
-    i18n.registerTranslation(s_strIdBase + STR_DELETED, ui::Language::DE, "Geloescht");
-    i18n.registerTranslation(s_strIdBase + STR_INVALID_INPUT, ui::Language::DE, "Ungueltige Eingabe");
-    i18n.registerTranslation(s_strIdBase + STR_SLOT_ERROR, ui::Language::DE, "Slot-Map Fehler");
-    i18n.registerTranslation(s_strIdBase + STR_DETAILS, ui::Language::DE, "Details");
-    i18n.registerTranslation(s_strIdBase + STR_HINT_LIST, ui::Language::DE, "[Y] Ansehen  [3] Menu  [N] Zurueck");
-    i18n.registerTranslation(s_strIdBase + STR_CONFIRM_DELETE, ui::Language::DE, "Eintrag loeschen?");
-    i18n.registerTranslation(s_strIdBase + STR_HINT_TYPE, ui::Language::DE, "[Y] Tippen  [2/8] Scrollen  [N] Zurueck");
-    i18n.registerTranslation(s_strIdBase + STR_NO_KEYBOARD, ui::Language::DE, "Keine Tastatur verbunden");
-
-    LOG_I(TAG, "Registered i18n strings (base=%d)", s_strIdBase);
+    ui::I18n::instance().registerEnglishTable(kStrings, std::size(kStrings));
 }
 
 /** \brief Serial command handlers for password module. */
@@ -181,7 +118,7 @@ static void cmd_password_get(const char* args) {
     char slotBuf[8] = {};
     const char* p = nextToken(args, slotBuf, sizeof(slotBuf));
     if (!p || !slotBuf[0]) {
-        cdc::serial::Console::printf("Usage: PASSWORD_GET <slot>\r\n");
+        cdc::serial::Console::printf("Usage: PASSWORD GET <slot>\r\n");
         return;
     }
     uint16_t slot = static_cast<uint16_t>(atoi(slotBuf));
@@ -255,7 +192,7 @@ static void cmd_password_add(const char* args) {
     char totpBuf[8] = {};
 
     static constexpr const char* USAGE =
-        "Usage: PASSWORD_ADD <slot|x> <title> <username|x> <password|x> <url|x> <totp|-> [notes]\r\n"
+        "Usage: PASSWORD ADD <slot|x> <title> <username|x> <password|x> <url|x> <totp|-> [notes]\r\n"
         "  <slot>: target RMEM slot, or 'x' for next free. Overwrites if occupied.\r\n"
         "  <password>: value, or 'x' to generate a random 16-char password.\r\n"
         "  <totp>: linked TOTP slot number, or '-' for no link.\r\n"
@@ -345,7 +282,7 @@ static void cmd_password_edit(const char* args) {
     char slotBuf[8] = {};
     char field[16] = {};
     const char* usage =
-        "Usage: PASSWORD_EDIT <slot> <title|username|password|url|totp|notes> <value>\r\n"
+        "Usage: PASSWORD EDIT <slot> <title|username|password|url|totp|notes> <value>\r\n"
         "  Use '\\\\ ' for spaces inside values.\r\n";
 
     const char* p = nextToken(args, slotBuf, sizeof(slotBuf));
@@ -441,7 +378,7 @@ static void cmd_password_del(const char* args) {
     char slotBuf[8] = {};
     const char* p = nextToken(args, slotBuf, sizeof(slotBuf));
     if (!p || !slotBuf[0]) {
-        cdc::serial::Console::printf("Usage: PASSWORD_DEL <slot>\r\n");
+        cdc::serial::Console::printf("Usage: PASSWORD DEL <slot>\r\n");
         return;
     }
     uint16_t slot = static_cast<uint16_t>(atoi(slotBuf));
@@ -453,6 +390,19 @@ static void cmd_password_del(const char* args) {
     cdc::serial::Console::printf(ok ? "OK\r\n" : "ERROR\r\n");
 }
 
+static const cdc::serial::SubCommand kPasswordSubs[] = {
+    {"LIST", "",                                                                        "List password entries (sorted by title)", cmd_password_list},
+    {"GET",  "<slot>",                                                                  "Show one entry by slot",                  cmd_password_get},
+    {"ADD",  "<slot|x> <title> <user|x> <pw|x> <url|x> <totp|-> [notes]",                "Add entry; 'x' for fields skips them",    cmd_password_add},
+    {"EDIT", "<slot> <field> <value>",                                                   "Edit one field of an existing entry",     cmd_password_edit},
+    {"DEL",  "<slot>",                                                                  "Delete entry by slot",                    cmd_password_del},
+    {nullptr, nullptr, nullptr, nullptr},
+};
+
+static void cmd_password(const char* args) {
+    cdc::serial::dispatchSubCommand("PASSWORD", args, kPasswordSubs);
+}
+
 /**
  * \brief Registers serial commands exposed by the password module.
  */
@@ -461,11 +411,9 @@ static void registerCommands() {
     s_commandsRegistered = true;
 
     auto& reg = cdc::serial::getCommandRegistry();
-    reg.registerCommand({"PASSWORD_LIST", "List password entries", cmd_password_list, CMD_MODULE, true});
-    reg.registerCommand({"PASSWORD_GET", "Get password entry", cmd_password_get, CMD_MODULE, true});
-    reg.registerCommand({"PASSWORD_ADD", "Add password entry", cmd_password_add, CMD_MODULE, true});
-    reg.registerCommand({"PASSWORD_EDIT", "Edit password entry", cmd_password_edit, CMD_MODULE, true});
-    reg.registerCommand({"PASSWORD_DEL", "Delete password entry", cmd_password_del, CMD_MODULE, true});
+    reg.registerCommand({"PASSWORD",
+                         "Password vault: LIST/GET/ADD/EDIT/DEL",
+                         cmd_password, CMD_MODULE, true, kPasswordSubs});
 }
 
 /** \brief Password module UI state and reusable view instances. */
@@ -541,7 +489,7 @@ static bool ensureListBuffers() {
  */
 static void rebuildList() {
     if (!PasswordStore::instance().hasSlotRange()) {
-        ui::showToastError(mstr(STR_SLOT_ERROR));
+        ui::showToastError(ui::tr("mod_password.slot_error"));
         return;
     }
     if (!ensureListBuffers()) {
@@ -550,7 +498,7 @@ static void rebuildList() {
         return;
     }
     s_entryCount = 0;
-    s_listItems[0] = {mstr(STR_NEW_ENTRY), 0, false, nullptr};
+    s_listItems[0] = {ui::tr("mod_password.new_entry"), 0, false, nullptr};
 
     uint16_t count = 0;
     PasswordStore::instance().listEntriesSorted(s_entries, s_capacity, &count);
@@ -564,8 +512,8 @@ static void rebuildList() {
         s_listItems[idx].userData = reinterpret_cast<void*>(static_cast<uintptr_t>(s_entries[i].slot));
     }
 
-    s_listView.init(mstr(STR_PASSWORDS), s_listItems, static_cast<uint16_t>(s_entryCount + 1));
-s_listView.setHint(mstr(STR_HINT_LIST));
+    s_listView.init(ui::tr("mod_password.title"), s_listItems, static_cast<uint16_t>(s_entryCount + 1));
+s_listView.setHint(ui::tr("mod_password.hint_list"));
 }
 
 /** \brief Shared output buffer used for keyboard typing callback payload. */
@@ -584,7 +532,7 @@ static void onTypePassword(void* userData) {
             ui::showToastSuccess("Typed");
         }
     } else {
-        ui::showToastError(mstr(STR_NO_KEYBOARD));
+        ui::showToastError(ui::tr("mod_password.no_keyboard"));
     }
 }
 
@@ -595,7 +543,7 @@ static void onTypePassword(void* userData) {
 static void showDetails(uint16_t slot) {
     PasswordEntry entry = {};
     if (!PasswordStore::instance().readEntry(slot, &entry)) {
-        ui::showToastError(ui::tr(ui::StringId::FAILED));
+        ui::showToastError(ui::tr("core.failed"));
         return;
     }
 
@@ -605,7 +553,7 @@ static void showDetails(uint16_t slot) {
 
     static char detailText[ui::InfoView::MAX_TEXT_LEN];
     char totpBuf[16] = {};
-    const char* emptyText = ui::tr(ui::StringId::EMPTY);
+    const char* emptyText = ui::tr("core.empty");
     char emptyWrapped[16] = {};
     snprintf(emptyWrapped, sizeof(emptyWrapped), "(%s)", emptyText);
     const char* totpText = emptyWrapped;
@@ -632,13 +580,13 @@ static void showDetails(uint16_t slot) {
              totpText,
              notesText);
 
-    s_infoView.init(mstr(STR_DETAILS), detailText);
+    s_infoView.init(ui::tr("mod_password.details"), detailText);
 
     // Set up Type callback if keyboard is available
     auto* kb = core::getKeyboard();
     if (kb && kb->isConnected() && s_passwordToType[0]) {
         s_infoView.setYesNoCallbacks(onTypePassword, nullptr, nullptr);
-        s_infoView.setHint(mstr(STR_HINT_TYPE));
+        s_infoView.setHint(ui::tr("mod_password.hint_type"));
     } else {
         s_infoView.setYesNoCallbacks(nullptr, nullptr, nullptr);
         s_infoView.setHint(nullptr);
@@ -659,12 +607,12 @@ static void wizardFinish() {
     }
 
     if (ok) {
-        ui::showToastSuccess(mstr(STR_SAVED));
+        ui::showToastSuccess(ui::tr("mod_password.saved"));
         s_listView.preservePosition();
         rebuildList();
         ui::ViewStack::instance().popToAnchor(&s_listView);
     } else {
-        ui::showToastError(ui::tr(ui::StringId::FAILED));
+        ui::showToastError(ui::tr("core.failed"));
     }
 }
 
@@ -698,7 +646,7 @@ static void wizardStart() {
     s_wizard.editMode = false;
     s_wizard.editSlot = 0;
 
-    pushT9WizardStep(mstr(STR_TITLE), nullptr, PasswordStore::TITLE_LEN, onWizardTitle);
+    pushT9WizardStep(ui::tr("mod_password.field_title"), nullptr, PasswordStore::TITLE_LEN, onWizardTitle);
 }
 
 /**
@@ -708,7 +656,7 @@ static void wizardStart() {
 static void wizardEdit(uint16_t slot) {
     PasswordEntry entry = {};
     if (!PasswordStore::instance().readEntry(slot, &entry)) {
-        ui::showToastError(ui::tr(ui::StringId::FAILED));
+        ui::showToastError(ui::tr("core.failed"));
         return;
     }
 
@@ -717,7 +665,7 @@ static void wizardEdit(uint16_t slot) {
     s_wizard.editMode = true;
     s_wizard.editSlot = slot;
 
-    pushT9WizardStep(mstr(STR_TITLE), s_wizard.entry.title, PasswordStore::TITLE_LEN, onWizardTitle);
+    pushT9WizardStep(ui::tr("mod_password.field_title"), s_wizard.entry.title, PasswordStore::TITLE_LEN, onWizardTitle);
 }
 
 /**
@@ -727,7 +675,7 @@ static void wizardEdit(uint16_t slot) {
 static void onWizardTitle(const char* text) {
     strncpy(s_wizard.entry.title, text ? text : "", sizeof(s_wizard.entry.title) - 1);
     s_wizard.entry.title[sizeof(s_wizard.entry.title) - 1] = '\0';
-    pushT9WizardStep(mstr(STR_USERNAME), s_wizard.entry.username, PasswordStore::USERNAME_LEN, onWizardUsername);
+    pushT9WizardStep(ui::tr("mod_password.username"), s_wizard.entry.username, PasswordStore::USERNAME_LEN, onWizardUsername);
 }
 
 /**
@@ -737,7 +685,7 @@ static void onWizardTitle(const char* text) {
 static void onWizardUsername(const char* text) {
     strncpy(s_wizard.entry.username, text ? text : "", sizeof(s_wizard.entry.username) - 1);
     s_wizard.entry.username[sizeof(s_wizard.entry.username) - 1] = '\0';
-    s_t9Input.init(mstr(STR_PASSWORD), s_wizard.entry.password, PasswordStore::PASSWORD_LEN);
+    s_t9Input.init(ui::tr("mod_password.password"), s_wizard.entry.password, PasswordStore::PASSWORD_LEN);
     s_t9Input.setHint("x=Random Y=OK N=Back");
     s_t9Input.setOnSave(onWizardPassword);
     ui::ViewStack::instance().push(&s_t9Input);
@@ -757,7 +705,7 @@ static void onWizardPassword(const char* text) {
         strncpy(s_wizard.entry.password, text ? text : "", sizeof(s_wizard.entry.password) - 1);
     }
     s_wizard.entry.password[sizeof(s_wizard.entry.password) - 1] = '\0';
-    pushT9WizardStep(mstr(STR_URL), s_wizard.entry.url, PasswordStore::URL_LEN, onWizardUrl);
+    pushT9WizardStep(ui::tr("mod_password.url"), s_wizard.entry.url, PasswordStore::URL_LEN, onWizardUrl);
 }
 
 /**
@@ -772,7 +720,7 @@ static void onWizardUrl(const char* text) {
     if (s_wizard.entry.totpSlot != PasswordStore::TOTP_SLOT_NONE) {
         snprintf(totpBuf, sizeof(totpBuf), "%u", s_wizard.entry.totpSlot);
     }
-    pushT9WizardStep(mstr(STR_TOTP_SLOT), totpBuf, 3, onWizardTotp);
+    pushT9WizardStep(ui::tr("mod_password.totp_slot"), totpBuf, 3, onWizardTotp);
 }
 
 /**
@@ -785,14 +733,14 @@ static void onWizardTotp(const char* text) {
     } else {
         int value = atoi(text);
         if (value < 0 || value > 254) {
-            ui::showToastError(mstr(STR_INVALID_INPUT));
-            pushT9WizardStep(mstr(STR_TOTP_SLOT), text, 3, onWizardTotp);
+            ui::showToastError(ui::tr("mod_password.invalid_input"));
+            pushT9WizardStep(ui::tr("mod_password.totp_slot"), text, 3, onWizardTotp);
             return;
         }
         s_wizard.entry.totpSlot = static_cast<uint8_t>(value);
     }
 
-    pushT9WizardStep(mstr(STR_NOTES), s_wizard.entry.notes, NOTES_INPUT_MAX, onWizardNotes);
+    pushT9WizardStep(ui::tr("mod_password.notes"), s_wizard.entry.notes, NOTES_INPUT_MAX, onWizardNotes);
 }
 
 /**
@@ -827,12 +775,12 @@ static void onMenuDeleteConfirm(void* userData) {
     uint16_t slot = *static_cast<uint16_t*>(userData);
     bool ok = PasswordStore::instance().deleteEntry(slot);
     if (ok) {
-        ui::showToastSuccess(mstr(STR_DELETED));
+        ui::showToastSuccess(ui::tr("mod_password.deleted"));
         s_listView.preservePosition();
         rebuildList();
         ui::ViewStack::instance().popToAnchor(&s_listView);
     } else {
-        ui::showToastError(ui::tr(ui::StringId::FAILED));
+        ui::showToastError(ui::tr("core.failed"));
     }
 }
 
@@ -842,7 +790,7 @@ static void onMenuDeleteConfirm(void* userData) {
 static void onMenuDelete() {
     static uint16_t slot = 0;
     slot = s_activeSlot;
-    ui::showConfirm(mstr(STR_CONFIRM_DELETE), onMenuDeleteConfirm, nullptr,
+    ui::showConfirm(ui::tr("mod_password.confirm_delete"), onMenuDeleteConfirm, nullptr,
                     ui::ConfirmView::Icon::WARNING, &slot);
 }
 
@@ -855,20 +803,20 @@ static void onListMenu(uint16_t index, void* userData) {
     (void)userData;
     if (index == 0) {
         static ui::ContextMenuItem items[] = {
-            {mstr(STR_NEW_ENTRY), []() { wizardStart(); }}
+            {ui::tr("mod_password.new_entry"), []() { wizardStart(); }}
         };
-        ui::showContextMenu(mstr(STR_ACTIONS), items, 1);
+        ui::showContextMenu(ui::tr("mod_password.actions"), items, 1);
         return;
     }
     if (index - 1 >= s_entryCount) return;
     s_activeSlot = s_entries[index - 1].slot;
 
     static ui::ContextMenuItem items[] = {
-        {mstr(STR_VIEW), onMenuView},
-        {mstr(STR_EDIT), onMenuEdit},
-        {mstr(STR_DELETE), onMenuDelete}
+        {ui::tr("mod_password.view"), onMenuView},
+        {ui::tr("mod_password.edit"), onMenuEdit},
+        {ui::tr("mod_password.delete"), onMenuDelete}
     };
-    ui::showContextMenu(mstr(STR_ACTIONS), items, 3);
+    ui::showContextMenu(ui::tr("mod_password.actions"), items, 3);
 }
 
 /**
@@ -954,14 +902,14 @@ core::IModule::SlotRequest PasswordModule::getSlotRequest() const {
 uint8_t PasswordModule::getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems) {
     if (!items || maxItems == 0) return 0;
 
-    items[0] = {mstr(STR_PASSWORDS), 55, []() -> ui::IView* {
+    items[0] = {ui::tr("mod_password.title"), 55, []() -> ui::IView* {
         if (!s_viewsInitialized) {
             s_listView.setOnSelect(onListSelect);
             s_listView.setOnMenu(onListMenu);
             s_viewsInitialized = true;
         }
         if (!PasswordStore::instance().hasSlotRange()) {
-            ui::showToastError(mstr(STR_SLOT_ERROR));
+            ui::showToastError(ui::tr("mod_password.slot_error"));
             return nullptr;
         }
         rebuildList();

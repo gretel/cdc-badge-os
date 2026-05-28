@@ -8,6 +8,7 @@
 #include "cdc_core/feature_flags.h"
 #include "cdc_core/PinManager.h"
 #include "cdc_log.h"
+#include <cstdio>
 #include <cstring>
 #include <cctype>
 
@@ -85,6 +86,14 @@ public:
      */
     void setLineInterceptor(LineInterceptor interceptor) override {
         lineInterceptor_ = interceptor;
+    }
+
+    void setByteInterceptor(ByteInterceptor interceptor) override {
+        byteInterceptor_ = interceptor;
+    }
+
+    ByteInterceptor getByteInterceptor() const override {
+        return byteInterceptor_;
     }
 
     /**
@@ -177,16 +186,26 @@ public:
         for (size_t i = 0; i < count_; i++) {
             const char* module = commands_[i].moduleName ? commands_[i].moduleName : "system";
 
-            // Print module header if changed
             if (!currentModule || strcmp(currentModule, module) != 0) {
                 Console::printf("\r\n[%s]\r\n", module);
                 currentModule = module;
             }
 
-            // Print command
             Console::printf("  %-20s %s\r\n",
                            commands_[i].name,
                            commands_[i].help ? commands_[i].help : "");
+
+            if (!commands_[i].subCommands) continue;
+            for (const SubCommand* e = commands_[i].subCommands; e->name; ++e) {
+                char head[40];
+                if (e->args && *e->args) {
+                    std::snprintf(head, sizeof(head), "%s %s", e->name, e->args);
+                } else {
+                    std::snprintf(head, sizeof(head), "%s", e->name);
+                }
+                Console::printf("    %-22s %s\r\n",
+                               head, e->help ? e->help : "");
+            }
         }
 
         Console::printf("\r\n");
@@ -216,6 +235,7 @@ private:
     bool (*authCheck_)() = nullptr;
     void (*onCommandExecuted_)() = nullptr;
     LineInterceptor lineInterceptor_ = nullptr;
+    ByteInterceptor byteInterceptor_ = nullptr;
 };
 
 /**

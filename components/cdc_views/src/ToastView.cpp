@@ -34,7 +34,7 @@ void ToastView::init(const char* message, Icon icon, uint16_t durationMs, bool d
     icon_ = icon;
     durationMs_ = durationMs;
     dismissible_ = dismissible;
-    startMs_ = esp_timer_get_time() / 1000;
+    startMs_ = 0;
     expired_ = false;
     dirty_ = true;
 }
@@ -45,14 +45,14 @@ void ToastView::init(const char* message, Icon icon, uint16_t durationMs, bool d
  * \return void
  */
 void ToastView::onTick(uint32_t nowMs) {
-    if (durationMs_ > 0 && !expired_) {
-        // Enforce a minimum visible duration so a brief flash isn't all the user sees.
-        static constexpr uint32_t MIN_DISPLAY_MS = 800;
-        uint32_t effective = durationMs_ < MIN_DISPLAY_MS ? MIN_DISPLAY_MS : durationMs_;
-        if (nowMs - startMs_ >= effective) {
-            expired_ = true;
-            ViewStack::instance().hideModal();
-        }
+    if (startMs_ == 0 || expired_) return;
+    if (durationMs_ == 0) return;
+    if (nowMs < startMs_) return;
+    static constexpr uint32_t MIN_DISPLAY_MS = 1000;
+    uint32_t effective = durationMs_ < MIN_DISPLAY_MS ? MIN_DISPLAY_MS : durationMs_;
+    if (nowMs - startMs_ >= effective) {
+        expired_ = true;
+        ViewStack::instance().hideModal();
     }
 }
 
@@ -78,6 +78,10 @@ InputResult ToastView::onKey(char key) {
  */
 void ToastView::render(bool partial) {
     (void)partial;
+
+    if (startMs_ == 0) {
+        startMs_ = esp_timer_get_time() / 1000;
+    }
 
     hal::IDisplay* display = hal::getDisplayInstance();
     if (!display) return;

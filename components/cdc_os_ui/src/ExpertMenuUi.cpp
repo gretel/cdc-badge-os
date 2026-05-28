@@ -10,6 +10,11 @@
 #include "cdc_core/UsbManager.h"
 #include "cdc_core/EventBus.h"
 
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "soc/rtc_cntl_reg.h"
+
 #include <cstdio>
 #include <cstring>
 
@@ -17,7 +22,7 @@ namespace cdc::ui {
 
 /** \brief Expert menu sizing constants. */
 
-static constexpr uint8_t EXPERT_FIXED_COUNT = 3;
+static constexpr uint8_t EXPERT_FIXED_COUNT = 4;
 static constexpr uint8_t EXPERT_MAX_ITEMS = 12;
 static constexpr uint8_t MODULES_VIEW_MAX = 16;
 
@@ -47,7 +52,7 @@ static void onModuleRetryConfirm(void* userData) {
         showToastSuccess("OK", TOAST_DURATION_SHORT_MS);
     } else {
         const char* error = moduleReg.getModuleSlotError(index);
-        showToastError(error ? error : tr(StringId::FAILED), TOAST_DURATION_MEDIUM_MS);
+        showToastError(error ? error : ui::tr("core.failed"), TOAST_DURATION_MEDIUM_MS);
     }
 
     ui_rebuild_menus();
@@ -76,8 +81,8 @@ static void onModuleSelect(uint16_t index, void* userData) {
 
         static char confirmMsg[128];
         snprintf(confirmMsg, sizeof(confirmMsg), "%s\n%s",
-                 error ? error : tr(StringId::MODULE_ERROR_GENERIC),
-                 tr(StringId::MODULE_RETRY_PROMPT));
+                 error ? error : ui::tr("core.module_error_generic"),
+                 ui::tr("core.module_retry_prompt"));
 
         showConfirm(confirmMsg, onModuleRetryConfirm, nullptr,
                     ConfirmView::Icon::ERROR, reinterpret_cast<void*>(static_cast<uintptr_t>(idx)));
@@ -96,7 +101,7 @@ static void onModuleSelect(uint16_t index, void* userData) {
             if (error) {
                 showToastError(error, TOAST_DURATION_MEDIUM_MS);
             } else {
-                showToastError(tr(StringId::FAILED), TOAST_DURATION_MEDIUM_MS);
+                showToastError(ui::tr("core.failed"), TOAST_DURATION_MEDIUM_MS);
             }
         }
     } else {
@@ -108,7 +113,7 @@ static void onModuleSelect(uint16_t index, void* userData) {
     // If USB config changed by THIS module toggle, show sticky alert
     bool needsReplugAfter = core::UsbManager::instance().needsReplug();
     if (!needsReplugBefore && needsReplugAfter) {
-        showToastAlertSticky(tr(StringId::USB_REPLUG_REQUIRED));
+        showToastAlertSticky(ui::tr("core.usb_replug_required"));
     }
 
     ui_rebuild_menus();
@@ -147,7 +152,7 @@ static void rebuildModulesView() {
     }
 
     if (s_modulesView) {
-        s_modulesView->init(tr(StringId::MODULES), s_modulesItems, count);
+        s_modulesView->init(ui::tr("core.modules"), s_modulesItems, count);
     }
 }
 
@@ -175,13 +180,13 @@ static void runSystemTest() {
  * \brief Rebuilds cached TROPIC metadata and reports operation result.
  */
 static void runTropicCacheRebuild() {
-    showToastTask(tr(StringId::TASK_WORKING), 0);
+    showToastTask(ui::tr("core.task_working"), 0);
     bool ok = core::TropicStorage::instance().rebuild();
     ViewStack::instance().hideModal();
     if (ok) {
-        showToastSuccess(tr(StringId::OK));
+        showToastSuccess(ui::tr("core.ok"));
     } else {
-        showToastError(tr(StringId::FAILED));
+        showToastError(ui::tr("core.failed"));
     }
 }
 
@@ -189,13 +194,13 @@ static void runTropicCacheRebuild() {
  * \brief Cleans cached TROPIC metadata and reports operation result.
  */
 static void runTropicCacheCleanup() {
-    showToastTask(tr(StringId::TASK_WORKING), 0);
+    showToastTask(ui::tr("core.task_working"), 0);
     bool ok = core::TropicStorage::instance().cleanup();
     ViewStack::instance().hideModal();
     if (ok) {
-        showToastSuccess(tr(StringId::OK));
+        showToastSuccess(ui::tr("core.ok"));
     } else {
-        showToastError(tr(StringId::FAILED));
+        showToastError(ui::tr("core.failed"));
     }
 }
 
@@ -208,7 +213,7 @@ static void onExpertMenuSelect(uint16_t index, void* userData);
  * \brief Shows expert menu and initial warning toast.
  */
 void showExpertMenu() {
-    showToastInfo(tr(StringId::EXPERT_WARNING), TOAST_DURATION_MEDIUM_MS);
+    showToastInfo(ui::tr("core.expert_warning"), TOAST_DURATION_MEDIUM_MS);
     if (!s_expertMenu) {
         s_expertMenu = new ListView();
         s_expertMenu->setOnSelect(onExpertMenuSelect);
@@ -224,9 +229,10 @@ void showExpertMenu() {
 static void rebuildExpertMenu() {
     auto& moduleReg = core::ModuleRegistry::instance();
 
-    s_expertItems[0] = {tr(StringId::HARDWARE_INFO), 0, false, nullptr};
-    s_expertItems[1] = {tr(StringId::TR01_CACHE_REBUILD), 0, false, nullptr};
-    s_expertItems[2] = {tr(StringId::TR01_CACHE_CLEANUP), 0, false, nullptr};
+    s_expertItems[0] = {ui::tr("core.hardware_info"), 0, false, nullptr};
+    s_expertItems[1] = {ui::tr("core.tr01_cache_rebuild"), 0, false, nullptr};
+    s_expertItems[2] = {ui::tr("core.tr01_cache_cleanup"), 0, false, nullptr};
+    s_expertItems[3] = {ui::tr("core.bootloader"), 0, false, nullptr};
 
     s_expertModuleCount = moduleReg.getMenuItems(
         core::MenuLocation::EXPERT_MENU,
@@ -247,7 +253,43 @@ static void rebuildExpertMenu() {
     }
 
     uint8_t totalCount = EXPERT_FIXED_COUNT + s_expertModuleCount;
-    s_expertMenu->init(tr(StringId::EXPERT), s_expertItems, totalCount);
+    s_expertMenu->init(ui::tr("core.expert"), s_expertItems, totalCount);
+}
+
+/**
+ * \brief Worker that detaches USB, arms the download-boot bit and
+ *        triggers a hard system reset.
+ *
+ * - `tud_disconnect()` first so the host sees a USB disconnect and will
+ *   re-enumerate after the reset; without this, the CDC endpoint stays
+ *   "connected but unresponsive" until the cable is unplugged manually.
+ * - `esp_rom_software_reset_system()` instead of `esp_restart()` because
+ *   shutdown handlers can hang in the active state (USB CDC enumerated,
+ *   BLE/HID running, plugins ticking).
+ * - `RTC_CNTL_FORCE_DOWNLOAD_BOOT` survives the soft reset, so the ROM
+ *   bootloader enters USB download mode on the next boot.
+ */
+[[noreturn]] static void bootloaderResetTask(void*) {
+    vTaskDelay(pdMS_TO_TICKS(200));
+    REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+    esp_restart();
+    while (true) { vTaskDelay(portMAX_DELAY); }
+}
+
+/**
+ * \brief Reboots into USB download mode.
+ *
+ * Forces the UI to the lock screen with a "BOOTLOADER MODE" banner,
+ * flushes the EPD and switches the backlight off (the lock-screen path is
+ * the known-quiet rendering state), then spawns a dedicated worker that
+ * detaches USB and triggers the hard reset. The caller returns
+ * immediately so any locks it holds are released before reset proceeds.
+ */
+void rebootIntoBootloader() {
+    prepareForBootloaderReset();
+
+    xTaskCreate(bootloaderResetTask, "btldr_reset", 4096, nullptr,
+                configMAX_PRIORITIES - 1, nullptr);
 }
 
 /**
@@ -263,6 +305,7 @@ static void onExpertMenuSelect(uint16_t index, void* userData) {
             case 0: runSystemTest(); break;
             case 1: runTropicCacheRebuild(); break;
             case 2: runTropicCacheCleanup(); break;
+            case 3: rebootIntoBootloader(); break;
         }
         return;
     }

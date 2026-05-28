@@ -12,14 +12,29 @@ namespace cdc::serial {
 using CommandHandler = void (*)(const char* args);
 
 /**
+ * Sub-command descriptor.
+ *
+ * Used to attach a list of sub-commands to a top-level Command. The registry
+ * uses this for help output; dispatch is done with dispatchSubCommand() from
+ * SubCommand.h, which walks the same table.
+ */
+struct SubCommand {
+    const char* name;      ///< Sub-command keyword, e.g. "LIST". `nullptr` terminates the array.
+    const char* args;      ///< Argument hint shown in HELP, e.g. "<ns> <key>". May be "" or nullptr.
+    const char* help;      ///< One-line description.
+    CommandHandler handler;///< Invoked with the args following the sub-command keyword.
+};
+
+/**
  * Command entry for registration
  */
 struct Command {
-    const char* name;           // Command name (e.g., "TOTP_LIST")
-    const char* help;           // Help text
-    CommandHandler handler;     // Handler function
-    const char* moduleName;     // Module that registered this command (for grouping in HELP)
-    bool requiresAuth;          // Requires authentication (when FEATURE_SECURE_SERIAL)
+    const char* name;                       ///< Top-level command (e.g. "TOTP" or "PING").
+    const char* help;                       ///< One-line summary shown in HELP.
+    CommandHandler handler;                 ///< Top-level dispatcher / handler.
+    const char* moduleName;                 ///< Module that registered the command (used for HELP grouping).
+    bool requiresAuth;                      ///< Whether the command needs an authenticated session.
+    const SubCommand* subCommands = nullptr;///< Optional null-terminated sub-command table for HELP.
 };
 
 /**
@@ -88,6 +103,24 @@ public:
      * @param interceptor Callback, or nullptr to clear
      */
     virtual void setLineInterceptor(LineInterceptor interceptor) { (void)interceptor; }
+
+    /**
+     * Byte interceptor for binary streaming modes (e.g. raw plugin upload).
+     *
+     * While installed, every byte received from serial is passed directly to
+     * the handler instead of being echoed, accumulated in the line buffer or
+     * dispatched as a command. The interceptor decides when to remove itself
+     * (typically once the expected payload size has been received) by
+     * calling `setByteInterceptor(nullptr)`.
+     */
+    using ByteInterceptor = void (*)(uint8_t byte);
+
+    /**
+     * Set or clear the byte interceptor. While set, line-based parsing is
+     * fully bypassed.
+     */
+    virtual void setByteInterceptor(ByteInterceptor interceptor) { (void)interceptor; }
+    virtual ByteInterceptor getByteInterceptor() const { return nullptr; }
 };
 
 // Get global command registry instance

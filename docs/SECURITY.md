@@ -66,10 +66,12 @@ This catches two cases:
 
 - **Honest user reflashes with different `DEBUG_MODE` / `FEATURE_SECURE_SERIAL`:**
   the device returns to defaults instead of presenting a confused mix of
-  state from the previous build profile. This doubles as the forgotten-PIN
-  recovery path: rebuild with the other value, flash, the badge resets.
+  state from the previous build profile.
 - **Fresh device, missing profile byte, or malformed value:** previous
   firmware state is wiped before the new profile starts persisting data.
+
+A forgotten PIN is recovered via the web-flasher's reset action, not by
+hand-flipping build flags.
 
 A structural NVS error during the check (partition unreadable for reasons
 unrelated to the profile byte's presence or format) is treated as a hardware
@@ -209,9 +211,7 @@ Permanently disables JTAG via fuse burn. Irreversible.
 If you want to harden your own beta unit before 1.0 lands, the minimum
 useful set is:
 
-1. Set `DEBUG_MODE=0` and `FEATURE_SECURE_SERIAL=1` in your build flags (this
-   already triggers a factory reset on the next boot via the build-profile
-   guard).
+1. Set `DEBUG_MODE=0` and `FEATURE_SECURE_SERIAL=1` in your build flags.
 2. Enable Flash Encryption in release mode in your local sdkconfig and
    re-flash. From this point the chip is locked to your encrypted images.
 3. Enable Secure Boot v2 with your own signing key. Keep the signing key
@@ -233,12 +233,12 @@ configuration.
 
 The supported recovery path during beta development is:
 
-- **Forgotten Badge PIN:** rebuild the firmware with the other value of
-  `DEBUG_MODE` or `FEATURE_SECURE_SERIAL`, flash, and let the build-profile
-  guard wipe NVS and TROPIC01 on the next boot. The default PIN is restored.
+- **Forgotten Badge PIN:** trigger a full factory reset from the web-flasher.
+  NVS and every used TROPIC01 R-Memory / ECC slot are wiped and the default
+  PIN is restored.
 - **Locked PW1 / PW3:** PW1 can be reset by PW3; PW3 has no software reset
-  path. If both are exhausted the only recovery is the same factory wipe via
-  build-profile change.
+  path. If both are exhausted the only recovery is the same web-flasher
+  factory wipe.
 - **Lost/forgotten passphrase entirely:** factory wipe as above.
 
 Once Secure Boot + anti-rollback are in place (1.0), these recovery paths

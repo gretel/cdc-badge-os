@@ -1,0 +1,13 @@
+menu "WAMR Runtime"
+
+config WAMR_PSRAM_LINEAR_MEMORY_KB_DEFAULT
+    int "Default WASM linear memory size per plugin (KB, in PSRAM)"
+    range 16 1024
+    default 128
+
+config WAMR_PSRAM_OPERAND_STACK_KB
+    int "WAMR operand+frame stack size per plugin (KB, in PSRAM)"
+    range 4 128
+    default 16
+
+endmenu

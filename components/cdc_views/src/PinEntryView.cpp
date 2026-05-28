@@ -138,7 +138,7 @@ uint32_t PinEntryView::getLockoutRemaining() const {
 void PinEntryView::verify() {
     if (length_ < minLength_) {
         if (showMessages_) {
-            showMessage(tr(StringId::PIN_TOO_SHORT), MessageIcon::WARNING, TOAST_DURATION_SHORT_MS);
+            showMessage(ui::tr("core.pin_too_short"), MessageIcon::WARNING, TOAST_DURATION_SHORT_MS);
         }
         return;
     }
@@ -166,11 +166,11 @@ void PinEntryView::verify() {
         if (pm.isBadgeBlocked()) {
             lockedOut_ = true;
             if (showMessages_) {
-                showMessage(tr(StringId::LOCKED_OUT), MessageIcon::ERROR, TOAST_DURATION_LONG_MS);
+                showMessage(ui::tr("core.locked_out"), MessageIcon::ERROR, TOAST_DURATION_LONG_MS);
             }
         } else {
             if (showMessages_) {
-                showMessage(tr(StringId::WRONG_PIN), MessageIcon::ERROR, TOAST_DURATION_SHORT_MS);
+                showMessage(ui::tr("core.wrong_pin"), MessageIcon::ERROR, TOAST_DURATION_SHORT_MS);
             }
         }
         clear();
@@ -224,7 +224,7 @@ InputResult PinEntryView::onKey(char key) {
  * \return Footer hint string.
  */
 const char* PinEntryView::getFooterHint() const {
-    return tr(StringId::HINT_PIN_INPUT);
+    return ui::tr("core.hint_pin_input");
 }
 
 /**
@@ -288,10 +288,10 @@ void PinEntryView::render(bool partial) {
         if (pm.isBadgeBlocked()) {
             uint32_t remainingMs = pm.getLockoutRemainingMs();
             uint32_t remainingSec = (remainingMs + 999) / 1000;  // Round up
-            snprintf(statusStr, sizeof(statusStr), "%s: %lus", tr(StringId::LOCKED_OUT), remainingSec);
+            snprintf(statusStr, sizeof(statusStr), "%s: %lus", ui::tr("core.locked_out"), remainingSec);
         } else {
             uint8_t retries = pm.getBadgeRetries();
-            snprintf(statusStr, sizeof(statusStr), "%s: %d", tr(StringId::RETRIES), retries);
+            snprintf(statusStr, sizeof(statusStr), "%s: %d", ui::tr("core.retries"), retries);
         }
 
         gfx->getTextBounds(statusStr, 0, 0, &x1, &y1, &w, &h);

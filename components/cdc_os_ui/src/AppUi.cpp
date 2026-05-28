@@ -26,6 +26,8 @@
 #include "cdc_views/PinEntryView.h"
 #include "cdc_views/DateInputView.h"
 #include "cdc_views/TimeInputView.h"
+#include "plugin_manager/PluginListView.h"
+#include "plugin_manager/PluginManager.h"
 
 #include "cdc_hal/IDisplay.h"
 #include "cdc_hal/IKeypad.h"
@@ -51,7 +53,7 @@ namespace cdc::ui {
 /** \brief Menu sizing and inactivity timeout constants. */
 
 static constexpr uint8_t MAIN_MENU_MAX_ITEMS = 16;
-static constexpr uint8_t MAIN_MENU_FIXED_COUNT = 2;  // Tools + Settings
+static constexpr uint8_t MAIN_MENU_FIXED_COUNT = 3;  // Plugins + Tools + Settings
 static constexpr uint8_t TOOLS_FIXED_COUNT = 4;       // Modules, WiFi, Bluetooth, Expert
 static constexpr uint8_t TOOLS_MAX_ITEMS = 16;
 
@@ -91,6 +93,7 @@ static DateInputView* s_dateInput = nullptr;
 static TimeInputView* s_timeInput = nullptr;
 static PinChangeView* s_pinChangeView = nullptr;
 static BlePairingPromptView* s_pairingPrompt = nullptr;
+static cdc::plugin_manager::PluginListView* s_pluginListView = nullptr;
 
 /** \brief Runtime dependencies provided during `ui_init`. */
 static UiDeps s_deps = {};
@@ -132,10 +135,12 @@ static uint32_t s_lastBatterySampleMs = 0;
 /** \brief Prevents stale key events directly after unlock transition. */
 static bool s_ignoreKeyUntilRelease = false;
 
+/** \brief Returns main-menu index of the fixed "Plugins" item. */
+static inline uint8_t getPluginsIndex()  { return s_mainMenuPluginCount; }
 /** \brief Returns main-menu index of the fixed "Tools" item. */
-static inline uint8_t getToolsIndex() { return s_mainMenuPluginCount; }
+static inline uint8_t getToolsIndex()    { return s_mainMenuPluginCount + 1; }
 /** \brief Returns main-menu index of the fixed "Settings" item. */
-static inline uint8_t getSettingsIndex() { return s_mainMenuPluginCount + 1; }
+static inline uint8_t getSettingsIndex() { return s_mainMenuPluginCount + 2; }
 /** \brief Returns effective main-menu item count including fixed entries. */
 static inline uint8_t getMainMenuCount() { return s_mainMenuPluginCount + MAIN_MENU_FIXED_COUNT; }
 
@@ -361,11 +366,12 @@ void rebuildMainMenu() {
         s_mainMenuItems[i] = {s_mainMenuModuleItems[i].label, 0, false, nullptr};
     }
 
-    s_mainMenuItems[getToolsIndex()] = {tr(StringId::TOOLS), 0, false, nullptr};
-    s_mainMenuItems[getSettingsIndex()] = {tr(StringId::SETTINGS), 0, false, nullptr};
+    s_mainMenuItems[getPluginsIndex()]  = {ui::tr("core.plugins"),  0, false, nullptr};
+    s_mainMenuItems[getToolsIndex()]    = {ui::tr("core.tools"),    0, false, nullptr};
+    s_mainMenuItems[getSettingsIndex()] = {ui::tr("core.settings"), 0, false, nullptr};
 
     if (s_mainMenu) {
-        s_mainMenu->init(tr(StringId::MAIN_MENU), s_mainMenuItems, getMainMenuCount());
+        s_mainMenu->init(ui::tr("core.main_menu"), s_mainMenuItems, getMainMenuCount());
     }
 }
 
@@ -374,11 +380,11 @@ void rebuildMainMenu() {
  */
 void rebuildToolsMenu() {
     // Fixed items
-    s_toolsItems[0] = {tr(StringId::MODULES), 0, false, nullptr};
-    s_toolsItems[1] = {tr(StringId::WIFI_MENU), 0, false, nullptr};
+    s_toolsItems[0] = {ui::tr("core.modules"), 0, false, nullptr};
+    s_toolsItems[1] = {ui::tr("core.wifi_menu"), 0, false, nullptr};
     auto* ble = hal::getBluetoothControllerInstance();
-    s_toolsItems[2] = {tr(StringId::BLUETOOTH), static_cast<uint8_t>(ble && ble->isEnabled() ? '*' : 0), false, nullptr};
-    s_toolsItems[3] = {tr(StringId::EXPERT), 0, false, nullptr};
+    s_toolsItems[2] = {ui::tr("core.bluetooth"), static_cast<uint8_t>(ble && ble->isEnabled() ? '*' : 0), false, nullptr};
+    s_toolsItems[3] = {ui::tr("core.expert"), 0, false, nullptr};
 
     auto& moduleReg = core::ModuleRegistry::instance();
     s_toolsModuleCount = moduleReg.getMenuItems(
@@ -392,7 +398,7 @@ void rebuildToolsMenu() {
     }
 
     if (s_toolsMenu) {
-        s_toolsMenu->init(tr(StringId::TOOLS), s_toolsItems, TOOLS_FIXED_COUNT + s_toolsModuleCount);
+        s_toolsMenu->init(ui::tr("core.tools"), s_toolsItems, TOOLS_FIXED_COUNT + s_toolsModuleCount);
     }
 }
 
@@ -401,17 +407,17 @@ void rebuildToolsMenu() {
  */
 static void rebuildMenuLabels() {
     // Settings items
-    s_settingsItems[SETTINGS_IDX_BRIGHTNESS] = {tr(StringId::BRIGHTNESS), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_LANGUAGE] = {tr(StringId::LANGUAGE), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_TIMEZONE] = {tr(StringId::TIMEZONE), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_AUTO_SLEEP] = {tr(StringId::AUTO_SLEEP), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_BADGE_TEXT] = {tr(StringId::BADGE_TEXT), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_SET_DATE] = {tr(StringId::SET_DATE), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_SET_TIME] = {tr(StringId::SET_TIME), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_CHANGE_PIN] = {tr(StringId::CHANGE_PIN), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_BRIGHTNESS] = {ui::tr("core.brightness"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_LANGUAGE] = {ui::tr("core.language"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_TIMEZONE] = {ui::tr("core.timezone"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_AUTO_SLEEP] = {ui::tr("core.auto_sleep"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_BADGE_TEXT] = {ui::tr("core.badge_text"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_SET_DATE] = {ui::tr("core.set_date"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_SET_TIME] = {ui::tr("core.set_time"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_CHANGE_PIN] = {ui::tr("core.change_pin"), 0, false, nullptr};
 
     if (s_settingsMenu) {
-        s_settingsMenu->init(tr(StringId::SETTINGS), s_settingsItems, SETTINGS_IDX_COUNT);
+        s_settingsMenu->init(ui::tr("core.settings"), s_settingsItems, SETTINGS_IDX_COUNT);
     }
 
     rebuildMainMenu();
@@ -436,7 +442,10 @@ static void onMainMenuSelect(uint16_t index, void* userData) {
         return;
     }
 
-    if (index == getToolsIndex()) {
+    if (index == getPluginsIndex()) {
+        if (!s_pluginListView) s_pluginListView = new cdc::plugin_manager::PluginListView();
+        ViewStack::instance().push(s_pluginListView);
+    } else if (index == getToolsIndex()) {
         ViewStack::instance().push(s_toolsMenu);
     } else if (index == getSettingsIndex()) {
         ViewStack::instance().push(s_settingsMenu);
@@ -515,13 +524,13 @@ static void onSettingsSelect(uint16_t index, void* userData) {
 static void onLanguageSelect(uint16_t index, void* userData) {
     (void)userData;
 
-    Language newLang = Language::EN;
+    const char* code = "en";
     switch (index) {
-        case LANG_IDX_ENGLISH: newLang = Language::EN; break;
-        case LANG_IDX_GERMAN: newLang = Language::DE; break;
+        case LANG_IDX_ENGLISH: code = "en"; break;
+        case LANG_IDX_GERMAN:  code = "de"; break;
     }
-    I18n::instance().setLanguage(newLang);
-    rebuildMenuLabels();
+    I18n::instance().setLanguageCode(code);
+    cdc::plugin_manager::PluginManager::instance().reloadActiveLangOverlay();
     ViewStack::instance().pop();
 }
 
@@ -565,6 +574,12 @@ void ui_init(const UiDeps& deps) {
     // Initialize I18n
     I18n::instance().init();
 
+    // Refresh menu labels whenever the active translation table changes,
+    // so item label pointers stay in sync with the loaded overlay.
+    I18n::instance().setOnLanguageChanged([]() {
+        ui_rebuild_menus();
+    });
+
     // Create LockScreen
     s_lockScreen = new LockScreenView();
     s_lockScreen->init();
@@ -588,14 +603,14 @@ void ui_init(const UiDeps& deps) {
             if (nvs_get_str(nvs, "name", buf, &len) == ESP_OK && len > 1) {
                 s_lockScreen->setDisplayName(buf);
             } else {
-                s_lockScreen->setDisplayName(tr(StringId::DEFAULT_NAME));
+                s_lockScreen->setDisplayName(ui::tr("core.default_name"));
             }
 
             len = sizeof(buf);
             if (nvs_get_str(nvs, "info", buf, &len) == ESP_OK && len > 1) {
                 s_lockScreen->setInfo(buf);
             } else {
-                s_lockScreen->setInfo(tr(StringId::DEFAULT_INFO));
+                s_lockScreen->setInfo(ui::tr("core.default_info"));
             }
 
             len = sizeof(buf);
@@ -605,8 +620,8 @@ void ui_init(const UiDeps& deps) {
 
             nvs_close(nvs);
         } else {
-            s_lockScreen->setDisplayName(tr(StringId::DEFAULT_NAME));
-            s_lockScreen->setInfo(tr(StringId::DEFAULT_INFO));
+            s_lockScreen->setDisplayName(ui::tr("core.default_name"));
+            s_lockScreen->setInfo(ui::tr("core.default_info"));
         }
     }
 
@@ -654,7 +669,7 @@ void ui_init(const UiDeps& deps) {
 
     // Create PinEntryView
     s_pinEntry = new PinEntryView();
-    s_pinEntry->init(tr(StringId::ENTER_PIN), 8, 3);
+    s_pinEntry->init(ui::tr("core.enter_pin"), 8, 3);
     s_pinEntry->setOnVerify(onPinVerify);
     s_pinEntry->setOnSuccess(onPinSuccess);
 
@@ -671,16 +686,16 @@ void ui_init(const UiDeps& deps) {
     rebuildToolsMenu();
 
     // Settings Menu
-    s_settingsItems[SETTINGS_IDX_BRIGHTNESS] = {tr(StringId::BRIGHTNESS), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_LANGUAGE] = {tr(StringId::LANGUAGE), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_TIMEZONE] = {tr(StringId::TIMEZONE), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_AUTO_SLEEP] = {tr(StringId::AUTO_SLEEP), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_BADGE_TEXT] = {tr(StringId::BADGE_TEXT), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_SET_DATE] = {tr(StringId::SET_DATE), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_SET_TIME] = {tr(StringId::SET_TIME), 0, false, nullptr};
-    s_settingsItems[SETTINGS_IDX_CHANGE_PIN] = {tr(StringId::CHANGE_PIN), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_BRIGHTNESS] = {ui::tr("core.brightness"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_LANGUAGE] = {ui::tr("core.language"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_TIMEZONE] = {ui::tr("core.timezone"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_AUTO_SLEEP] = {ui::tr("core.auto_sleep"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_BADGE_TEXT] = {ui::tr("core.badge_text"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_SET_DATE] = {ui::tr("core.set_date"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_SET_TIME] = {ui::tr("core.set_time"), 0, false, nullptr};
+    s_settingsItems[SETTINGS_IDX_CHANGE_PIN] = {ui::tr("core.change_pin"), 0, false, nullptr};
     s_settingsMenu = new ListView();
-    s_settingsMenu->init(tr(StringId::SETTINGS), s_settingsItems, SETTINGS_IDX_COUNT);
+    s_settingsMenu->init(ui::tr("core.settings"), s_settingsItems, SETTINGS_IDX_COUNT);
     s_settingsMenu->setOnSelect(onSettingsSelect);
 
     // Initialize settings handlers
@@ -689,7 +704,7 @@ void ui_init(const UiDeps& deps) {
     // Brightness Slider
     s_brightnessSlider = new SliderView();
     uint16_t currentBrightness = s_deps.display ? s_deps.display->getBacklight() / 10 : 50;
-    s_brightnessSlider->init(tr(StringId::BRIGHTNESS), 0, 100, currentBrightness, 1, "%");
+    s_brightnessSlider->init(ui::tr("core.brightness"), 0, 100, currentBrightness, 1, "%");
     s_brightnessSlider->setStepCallback(settings::brightnessStepCallback);
     s_brightnessSlider->setOnSave(settings::onBrightnessSave);
     s_brightnessSlider->setOnChange(settings::onBrightnessChange);
@@ -700,8 +715,8 @@ void ui_init(const UiDeps& deps) {
     if (s_deps.sleep) {
         currentSleepMin = static_cast<uint16_t>(s_deps.sleep->getLightSleepInterval() / 60);
     }
-    s_sleepSlider->init(tr(StringId::AUTO_SLEEP), 0, 60, currentSleepMin, 1, tr(StringId::MINUTES));
-    s_sleepSlider->setZeroLabel(tr(StringId::NEVER));
+    s_sleepSlider->init(ui::tr("core.auto_sleep"), 0, 60, currentSleepMin, 1, ui::tr("core.minutes"));
+    s_sleepSlider->setZeroLabel(ui::tr("core.never"));
     s_sleepSlider->setOnSave(settings::onSleepIntervalSave);
 
     // Timezone Slider
@@ -710,30 +725,30 @@ void ui_init(const UiDeps& deps) {
         auto* rtcTz = hal::getRtcInstance();
         int8_t currentTz = rtcTz ? rtcTz->getTimezoneOffset() : 0;
         uint16_t tzSliderValue = static_cast<uint16_t>(currentTz + 12);
-        s_timezoneSlider->init(tr(StringId::TIMEZONE), 0, 26, tzSliderValue, 1, "h");
+        s_timezoneSlider->init(ui::tr("core.timezone"), 0, 26, tzSliderValue, 1, "h");
         s_timezoneSlider->setDisplayOffset(-12);
         s_timezoneSlider->setOnSave(settings::onTimezoneSave);
     }
 
     // Language Menu
-    s_languageItems[LANG_IDX_ENGLISH] = {I18n::instance().getLanguageName(Language::EN), 0, false, nullptr};
-    s_languageItems[LANG_IDX_GERMAN] = {I18n::instance().getLanguageName(Language::DE), 0, false, nullptr};
+    s_languageItems[LANG_IDX_ENGLISH] = {"English", 0, false, nullptr};
+    s_languageItems[LANG_IDX_GERMAN]  = {"Deutsch", 0, false, nullptr};
     s_languageMenu = new ListView();
-    s_languageMenu->init(tr(StringId::LANGUAGE), s_languageItems, LANG_IDX_COUNT);
+    s_languageMenu->init(ui::tr("core.language"), s_languageItems, LANG_IDX_COUNT);
     s_languageMenu->setOnSelect(onLanguageSelect);
 
     // Date/Time Input Views
     time_t now = time(nullptr);
     struct tm* tm = localtime(&now);
     s_dateInput = new DateInputView();
-    s_dateInput->init(tr(StringId::SET_DATE),
+    s_dateInput->init(ui::tr("core.set_date"),
                       tm ? tm->tm_mday : 1,
                       tm ? tm->tm_mon + 1 : 1,
                       tm ? tm->tm_year + 1900 : 2026);
     s_dateInput->setOnConfirm(settings::onDateConfirm);
 
     s_timeInput = new TimeInputView();
-    s_timeInput->init(tr(StringId::SET_TIME),
+    s_timeInput->init(ui::tr("core.set_time"),
                       tm ? tm->tm_hour : 12,
                       tm ? tm->tm_min : 0);
     s_timeInput->setOnConfirm(settings::onTimeConfirm);
@@ -802,10 +817,49 @@ void ui_on_modules_ready() {
 
 /**
  * \brief Rebuilds dynamic UI menus.
+ *
+ * Re-runs all `tr()` lookups for settings, main and tools menus so that
+ * label pointers reflect the currently active i18n overlay. Must be called
+ * after the overlay has been (re)loaded.
  */
 void ui_rebuild_menus() {
-    rebuildToolsMenu();
-    rebuildMainMenu();
+    rebuildMenuLabels();
+}
+
+/**
+ * \brief Puts the badge into a quiet pre-reset state.
+ *
+ * Replaces lock-screen text with a clear "BOOTLOADER MODE" banner, drops
+ * any open views/modals, forces a full EPD refresh and switches the
+ * backlight off. The follow-up download-boot reset is triggered by the
+ * caller from a separate worker task.
+ */
+void prepareForBootloaderReset() {
+    if (s_lockScreen) {
+        s_lockScreen->setDisplayName("BOOTLOADER MODE");
+        s_lockScreen->setInfo("Awaiting flash...");
+        s_lockScreen->setInfo2("Press RESET to resume");
+        s_lockScreen->markDirty();
+    }
+
+    auto& stack = ViewStack::instance();
+    stack.hideModal();
+    while (stack.depth() > 1) {
+        stack.pop();
+    }
+
+    if (s_lockScreen) {
+        s_lockScreen->render(false);
+        if (s_deps.display) {
+            s_deps.display->flushSync(hal::RefreshMode::FULL);
+            // Defensive wait in case the driver returns from flushSync()
+            // before the panel busy line has fully deasserted.
+            for (int i = 0; i < 50 && s_deps.display->isBusy(); ++i) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+            s_deps.display->backlightOff();
+        }
+    }
 }
 
 /**
@@ -840,7 +894,7 @@ void ui_process(uint32_t nowMs) {
 
     settings::processPendingBadgeText();
 
-    // Dispatch tick + inactivity
+    nowMs = static_cast<uint32_t>(esp_timer_get_time() / 1000ULL);
     ViewStack::instance().dispatchTick(nowMs);
     if (ViewStack::instance().depth() > 1) {
         ViewStack::instance().checkInactivity(nowMs);

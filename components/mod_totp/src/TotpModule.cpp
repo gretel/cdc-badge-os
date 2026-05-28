@@ -11,6 +11,7 @@
 #include "cdc_views/ToastView.h"
 #include "cdc_hal/IDisplay.h"
 #include "serial_cmd/ICommandRegistry.h"
+#include "serial_cmd/SubCommand.h"
 #include "serial_cmd/Console.h"
 #include "cdc_log.h"
 #include <goodisplay/gdey029T94.h>
@@ -22,75 +23,25 @@ static const char* TAG = "TOTP";
 
 namespace cdc::mod_totp {
 
-/** \brief Module-specific i18n string offsets. */
-static uint16_t s_strIdBase = 0;
-static constexpr uint16_t STR_TOTP = 0;
-static constexpr uint16_t STR_ADD_ACCOUNT = 1;
-static constexpr uint16_t STR_ACCOUNT_NAME = 2;
-static constexpr uint16_t STR_SECRET = 3;
-static constexpr uint16_t STR_ISSUER = 4;
-static constexpr uint16_t STR_DIGITS = 5;
-static constexpr uint16_t STR_ALGORITHM = 6;
-static constexpr uint16_t STR_PERIOD = 7;
-static constexpr uint16_t STR_CODE = 8;
-static constexpr uint16_t STR_TIME_INVALID = 9;
-static constexpr uint16_t STR_INVALID_INPUT = 10;
-static constexpr uint16_t STR_HINT_EDIT = 11;
-static constexpr uint16_t STR_HINT_TYPE = 12;
-static constexpr uint16_t STR_NO_KEYBOARD = 13;
-static constexpr uint16_t STR_COUNT = 14;
+constexpr ui::I18nEntry kStrings[] = {
+    {"mod_totp.title",         "TOTP"},
+    {"mod_totp.add_account",   "Add Account"},
+    {"mod_totp.account_name",  "Account Name"},
+    {"mod_totp.secret",        "Secret (Base32)"},
+    {"mod_totp.issuer",        "Issuer (optional)"},
+    {"mod_totp.digits",        "Digits"},
+    {"mod_totp.algorithm",     "Algorithm"},
+    {"mod_totp.period",        "Period"},
+    {"mod_totp.code",          "TOTP Code"},
+    {"mod_totp.time_invalid",  "Time not set"},
+    {"mod_totp.invalid_input", "Invalid input"},
+    {"mod_totp.hint_edit",     "[3] Edit  [N] Back"},
+    {"mod_totp.hint_type",     "[Y] Type  [3] Edit  [N] Back"},
+    {"mod_totp.no_keyboard",   "No keyboard connected"},
+};
 
-/**
- * \brief Resolves a module-localized string by offset.
- * \param offset Module string-table offset.
- * \return Translated string pointer.
- */
-static const char* mstr(uint16_t offset) {
-    return ui::tr(s_strIdBase + offset);
-}
-
-/**
- * \brief Registers all TOTP module translations for supported languages.
- */
 static void registerStrings() {
-    auto& i18n = ui::I18n::instance();
-    s_strIdBase = i18n.registerModule("mod_totp", STR_COUNT);
-    if (s_strIdBase == 0) {
-        LOG_E(TAG, "Failed to register i18n strings");
-        return;
-    }
-
-    i18n.registerTranslation(s_strIdBase + STR_TOTP, ui::Language::EN, "TOTP");
-    i18n.registerTranslation(s_strIdBase + STR_ADD_ACCOUNT, ui::Language::EN, "Add Account");
-    i18n.registerTranslation(s_strIdBase + STR_ACCOUNT_NAME, ui::Language::EN, "Account Name");
-    i18n.registerTranslation(s_strIdBase + STR_SECRET, ui::Language::EN, "Secret (Base32)");
-    i18n.registerTranslation(s_strIdBase + STR_ISSUER, ui::Language::EN, "Issuer (optional)");
-    i18n.registerTranslation(s_strIdBase + STR_DIGITS, ui::Language::EN, "Digits");
-    i18n.registerTranslation(s_strIdBase + STR_ALGORITHM, ui::Language::EN, "Algorithm");
-    i18n.registerTranslation(s_strIdBase + STR_PERIOD, ui::Language::EN, "Period");
-    i18n.registerTranslation(s_strIdBase + STR_CODE, ui::Language::EN, "TOTP Code");
-    i18n.registerTranslation(s_strIdBase + STR_TIME_INVALID, ui::Language::EN, "Time not set");
-    i18n.registerTranslation(s_strIdBase + STR_INVALID_INPUT, ui::Language::EN, "Invalid input");
-    i18n.registerTranslation(s_strIdBase + STR_HINT_EDIT, ui::Language::EN, "[3] Edit  [N] Back");
-    i18n.registerTranslation(s_strIdBase + STR_HINT_TYPE, ui::Language::EN, "[Y] Type  [3] Edit  [N] Back");
-    i18n.registerTranslation(s_strIdBase + STR_NO_KEYBOARD, ui::Language::EN, "No keyboard connected");
-
-    i18n.registerTranslation(s_strIdBase + STR_TOTP, ui::Language::DE, "TOTP");
-    i18n.registerTranslation(s_strIdBase + STR_ADD_ACCOUNT, ui::Language::DE, "Account hinzufuegen");
-    i18n.registerTranslation(s_strIdBase + STR_ACCOUNT_NAME, ui::Language::DE, "Account Name");
-    i18n.registerTranslation(s_strIdBase + STR_SECRET, ui::Language::DE, "Secret (Base32)");
-    i18n.registerTranslation(s_strIdBase + STR_ISSUER, ui::Language::DE, "Issuer (optional)");
-    i18n.registerTranslation(s_strIdBase + STR_DIGITS, ui::Language::DE, "Digits");
-    i18n.registerTranslation(s_strIdBase + STR_ALGORITHM, ui::Language::DE, "Algorithmus");
-    i18n.registerTranslation(s_strIdBase + STR_PERIOD, ui::Language::DE, "Periode");
-    i18n.registerTranslation(s_strIdBase + STR_CODE, ui::Language::DE, "TOTP Code");
-    i18n.registerTranslation(s_strIdBase + STR_TIME_INVALID, ui::Language::DE, "Zeit nicht gesetzt");
-    i18n.registerTranslation(s_strIdBase + STR_INVALID_INPUT, ui::Language::DE, "Ungueltige Eingabe");
-    i18n.registerTranslation(s_strIdBase + STR_HINT_EDIT, ui::Language::DE, "[3] Edit  [N] Zurueck");
-    i18n.registerTranslation(s_strIdBase + STR_HINT_TYPE, ui::Language::DE, "[Y] Tippen  [3] Edit  [N] Zurueck");
-    i18n.registerTranslation(s_strIdBase + STR_NO_KEYBOARD, ui::Language::DE, "Keine Tastatur verbunden");
-
-    LOG_I(TAG, "Registered i18n strings (base=%d)", s_strIdBase);
+    ui::I18n::instance().registerEnglishTable(kStrings, std::size(kStrings));
 }
 
 /** \brief Serial command handlers for TOTP module. */
@@ -212,12 +163,12 @@ static void cmd_totp_add(const char* args) {
 
     const char* p = nextToken(args, name, sizeof(name));
     if (!p || !*name) {
-        cdc::serial::Console::printf("Usage: TOTP_ADD name secret [issuer] [digits] [period] [algo]\r\n");
+        cdc::serial::Console::printf("Usage: TOTP ADD <name> <secret> [issuer] [digits] [period] [algo]\r\n");
         return;
     }
     p = nextToken(p, secret, sizeof(secret));
     if (!p || !*secret) {
-        cdc::serial::Console::printf("Usage: TOTP_ADD name secret [issuer] [digits] [period] [algo]\r\n");
+        cdc::serial::Console::printf("Usage: TOTP ADD <name> <secret> [issuer] [digits] [period] [algo]\r\n");
         return;
     }
     p = nextToken(p, issuer, sizeof(issuer));
@@ -246,7 +197,7 @@ static void cmd_totp_add(const char* args) {
  */
 static void cmd_totp_del(const char* args) {
     if (!args || !*args) {
-        cdc::serial::Console::printf("Usage: TOTP_DEL <index>\r\n");
+        cdc::serial::Console::printf("Usage: TOTP DEL <index>\r\n");
         return;
     }
     uint16_t index = static_cast<uint16_t>(atoi(args));
@@ -265,7 +216,7 @@ static void cmd_totp_del(const char* args) {
  */
 static void cmd_totp_get(const char* args) {
     if (!args || !*args) {
-        cdc::serial::Console::printf("Usage: TOTP_GET <index>\r\n");
+        cdc::serial::Console::printf("Usage: TOTP GET <index>\r\n");
         return;
     }
     uint16_t index = static_cast<uint16_t>(atoi(args));
@@ -293,15 +244,29 @@ static void cmd_totp_get(const char* args) {
 }
 
 /**
+ * \brief Sub-command table for the TOTP serial command group.
+ */
+static const cdc::serial::SubCommand kTotpSubs[] = {
+    {"LIST", "",                                                "List all TOTP accounts",      cmd_totp_list},
+    {"ADD",  "<name> <secret> [issuer] [digits] [period] [algo]","Add TOTP account",            cmd_totp_add},
+    {"DEL",  "<index>",                                         "Delete TOTP account by index", cmd_totp_del},
+    {"GET",  "<index>",                                         "Generate TOTP code by index", cmd_totp_get},
+    {nullptr, nullptr, nullptr, nullptr},
+};
+
+static void cmd_totp(const char* args) {
+    cdc::serial::dispatchSubCommand("TOTP", args, kTotpSubs);
+}
+
+/**
  * \brief Registers serial commands exposed by the TOTP module.
  */
 static void registerCommands() {
     if (s_commandsRegistered) return;
     auto& reg = cdc::serial::getCommandRegistry();
-    reg.registerCommand({"TOTP_LIST", "List all TOTP accounts", cmd_totp_list, CMD_MODULE, true});
-    reg.registerCommand({"TOTP_ADD", "Add TOTP account", cmd_totp_add, CMD_MODULE, true});
-    reg.registerCommand({"TOTP_DEL", "Delete TOTP account by index", cmd_totp_del, CMD_MODULE, true});
-    reg.registerCommand({"TOTP_GET", "Generate TOTP code by index", cmd_totp_get, CMD_MODULE, true});
+    reg.registerCommand({"TOTP",
+                         "TOTP authenticator: LIST/ADD/DEL/GET",
+                         cmd_totp, CMD_MODULE, true, kTotpSubs});
     s_commandsRegistered = true;
 }
 
@@ -333,7 +298,7 @@ public:
         (void)context;
         updateCode();
         if (!timeValid_) {
-            ui::showToastError(mstr(STR_TIME_INVALID));
+            ui::showToastError(ui::tr("mod_totp.time_invalid"));
         }
         dirty_ = true;
     }
@@ -344,7 +309,7 @@ public:
     void onResume() override {
         updateCode();
         if (!timeValid_) {
-            ui::showToastError(mstr(STR_TIME_INVALID));
+            ui::showToastError(ui::tr("mod_totp.time_invalid"));
         }
         dirty_ = true;
     }
@@ -379,7 +344,7 @@ public:
         gfx->setTextColor(EPD_BLACK);
         gfx->setTextSize(1);
         gfx->setCursor(8, 6);
-        gfx->print(mstr(STR_CODE));
+        gfx->print(ui::tr("mod_totp.code"));
         gfx->drawFastHLine(0, 22, display->getWidth(), EPD_BLACK);
 
         gfx->setCursor(8, 28);
@@ -392,7 +357,7 @@ public:
         if (!timeValid_) {
             gfx->setTextSize(1);
             gfx->setCursor(8, 60);
-            gfx->print(mstr(STR_TIME_INVALID));
+            gfx->print(ui::tr("mod_totp.time_invalid"));
             clearDirty();
             return;
         }
@@ -445,7 +410,7 @@ public:
                     ui::showToastSuccess("Typed");
                 }
             } else {
-                ui::showToastError(mstr(STR_NO_KEYBOARD));
+                ui::showToastError(ui::tr("mod_totp.no_keyboard"));
             }
             return ui::InputResult::CONSUMED;
         }
@@ -465,9 +430,9 @@ public:
     const char* getFooterHint() const override {
         auto* kb = core::getKeyboard();
         if (kb && kb->isConnected()) {
-            return mstr(STR_HINT_TYPE);
+            return ui::tr("mod_totp.hint_type");
         }
-        return mstr(STR_HINT_EDIT);
+        return ui::tr("mod_totp.hint_edit");
     }
 
 private:
@@ -670,7 +635,7 @@ static void rebuildList() {
         return;
     }
     s_accountCount = 0;
-    s_listItems[0] = {mstr(STR_ADD_ACCOUNT), 0, false, nullptr};
+    s_listItems[0] = {ui::tr("mod_totp.add_account"), 0, false, nullptr};
 
     auto cb = [](uint16_t slot, const cdc::core::TropicStorage::CacheEntry& entry, void* user) {
         (void)user;
@@ -694,7 +659,7 @@ static void rebuildList() {
         TotpStore::instance().rmemEnd(),
         cb, nullptr);
 
-    s_listView.init(mstr(STR_TOTP), s_listItems, static_cast<uint16_t>(s_accountCount + 1));
+    s_listView.init(ui::tr("mod_totp.title"), s_listItems, static_cast<uint16_t>(s_accountCount + 1));
 }
 
 /**
@@ -727,7 +692,7 @@ static void wizardStart() {
     s_wizard.editMode = false;
     s_wizard.editSlot = 0;
 
-    pushT9WizardStep(mstr(STR_ACCOUNT_NAME), nullptr, TotpStore::NAME_LEN, onWizardName);
+    pushT9WizardStep(ui::tr("mod_totp.account_name"), nullptr, TotpStore::NAME_LEN, onWizardName);
 }
 
 /**
@@ -737,7 +702,7 @@ static void wizardStart() {
 static void wizardEdit(uint16_t slot) {
     TotpAccount account = {};
     if (!TotpStore::instance().readAccount(slot, &account)) {
-        ui::showToastError(ui::tr(ui::StringId::FAILED));
+        ui::showToastError(ui::tr("core.failed"));
         return;
     }
 
@@ -751,7 +716,7 @@ static void wizardEdit(uint16_t slot) {
     s_wizard.editSlot = slot;
     base32Encode(account.secret, account.secretLen, s_wizard.secret, sizeof(s_wizard.secret));
 
-    pushT9WizardStep(mstr(STR_ACCOUNT_NAME), s_wizard.name, TotpStore::NAME_LEN, onWizardName);
+    pushT9WizardStep(ui::tr("mod_totp.account_name"), s_wizard.name, TotpStore::NAME_LEN, onWizardName);
 }
 
 /**
@@ -760,7 +725,7 @@ static void wizardEdit(uint16_t slot) {
  */
 static void onWizardName(const char* text) {
     strncpy(s_wizard.name, text ? text : "", sizeof(s_wizard.name) - 1);
-    pushT9WizardStep(mstr(STR_SECRET), s_wizard.secret, 64, onWizardSecret);
+    pushT9WizardStep(ui::tr("mod_totp.secret"), s_wizard.secret, 64, onWizardSecret);
 }
 
 /**
@@ -769,7 +734,7 @@ static void onWizardName(const char* text) {
  */
 static void onWizardSecret(const char* text) {
     strncpy(s_wizard.secret, text ? text : "", sizeof(s_wizard.secret) - 1);
-    pushT9WizardStep(mstr(STR_ISSUER), s_wizard.issuer, TotpStore::ISSUER_LEN, onWizardIssuer);
+    pushT9WizardStep(ui::tr("mod_totp.issuer"), s_wizard.issuer, TotpStore::ISSUER_LEN, onWizardIssuer);
 }
 
 /**
@@ -785,7 +750,7 @@ static void onWizardIssuer(const char* text) {
         {"8", 0, false, nullptr}
     };
     s_digitsMenu.setOnSelect(onWizardDigits);
-    s_digitsMenu.init(mstr(STR_DIGITS), digitsItems, 3);
+    s_digitsMenu.init(ui::tr("mod_totp.digits"), digitsItems, 3);
     ui::ViewStack::instance().push(&s_digitsMenu);
 }
 
@@ -805,7 +770,7 @@ static void onWizardDigits(uint16_t index, void* userData) {
         {"SHA512", 0, false, nullptr}
     };
     s_algoMenu.setOnSelect(onWizardAlgo);
-    s_algoMenu.init(mstr(STR_ALGORITHM), algoItems, 3);
+    s_algoMenu.init(ui::tr("mod_totp.algorithm"), algoItems, 3);
     ui::ViewStack::instance().push(&s_algoMenu);
 }
 
@@ -823,7 +788,7 @@ static void onWizardAlgo(uint16_t index, void* userData) {
         {"60s", 0, false, nullptr}
     };
     s_periodMenu.setOnSelect(onWizardPeriod);
-    s_periodMenu.init(mstr(STR_PERIOD), periodItems, 2);
+    s_periodMenu.init(ui::tr("mod_totp.period"), periodItems, 2);
     ui::ViewStack::instance().push(&s_periodMenu);
 }
 
@@ -843,7 +808,7 @@ static void onWizardPeriod(uint16_t index, void* userData) {
  */
 static void wizardFinish() {
     if (strlen(s_wizard.name) == 0 || strlen(s_wizard.secret) == 0) {
-        ui::showToastError(mstr(STR_INVALID_INPUT));
+        ui::showToastError(ui::tr("mod_totp.invalid_input"));
         ui::ViewStack::instance().popToAnchor(&s_listView);
         return;
     }
@@ -871,11 +836,11 @@ static void wizardFinish() {
     }
 
     if (ok) {
-        ui::showToastSuccess(ui::tr(ui::StringId::OK));
+        ui::showToastSuccess(ui::tr("core.ok"));
         rebuildList();
         ui::ViewStack::instance().popToAnchor(&s_listView);
     } else {
-        ui::showToastError(ui::tr(ui::StringId::FAILED));
+        ui::showToastError(ui::tr("core.failed"));
     }
 }
 
@@ -946,7 +911,7 @@ core::IModule::SlotRequest TotpModule::getSlotRequest() const {
 uint8_t TotpModule::getMenuItems(core::ModuleMenuItem* items, uint8_t maxItems) {
     if (!items || maxItems == 0) return 0;
 
-    items[0] = {mstr(STR_TOTP), 50, []() -> ui::IView* {
+    items[0] = {ui::tr("mod_totp.title"), 50, []() -> ui::IView* {
         if (!s_viewsInitialized) {
             s_listView.setOnSelect(onListSelect);
             s_viewsInitialized = true;

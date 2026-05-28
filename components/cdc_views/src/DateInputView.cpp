@@ -8,6 +8,7 @@
 #include "cdc_views/KeyCodes.h"
 #include "cdc_views/RenderHelpers.h"
 #include "cdc_ui/I18n.h"
+#include "cdc_ui/ViewStack.h"
 #include "cdc_hal/IDisplay.h"
 #include "cdc_log.h"
 #include <goodisplay/gdey029T94.h>
@@ -185,10 +186,11 @@ InputResult DateInputView::onKey(char key) {
         case KEY_YES:  // Confirm
             validateAndClamp();
             LOG_I(TAG, "Date confirmed: %02d.%02d.%04d", day_, month_, year_);
+            cdc::ui::ViewStack::instance().pop();
             if (onConfirm_) {
                 onConfirm_(day_, month_, year_);
             }
-            return InputResult::REQUEST_POP;
+            return InputResult::CONSUMED;
 
         default:
             return InputResult::IGNORED;
@@ -200,7 +202,7 @@ InputResult DateInputView::onKey(char key) {
  * \return Footer hint string.
  */
 const char* DateInputView::getFooterHint() const {
-    return tr(StringId::HINT_DATE_INPUT);
+    return ui::tr("core.hint_date_input");
 }
 
 /**

@@ -6,7 +6,9 @@
 namespace cdc::ui {
 
 // WiFi timeout constants (milliseconds)
-static constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 15000;
+static constexpr uint32_t WIFI_CONNECT_TIMEOUT_DEFAULT_MS = 15000;
+static constexpr uint32_t WIFI_CONNECT_TIMEOUT_MIN_MS     = 3000;
+static constexpr uint32_t WIFI_CONNECT_TIMEOUT_MAX_MS     = 60000;
 static constexpr uint32_t WIFI_SCAN_TIMEOUT_MS = 10000;
 static constexpr uint32_t NTP_SYNC_TIMEOUT_MS = 10000;
 
@@ -46,6 +48,40 @@ public:
     void saveConfig();
     WifiConfig& config() { return config_; }
     WifiWizard& wizard() { return wizard_; }
+
+    /**
+     * \brief Stores credentials directly (WPA2-PSK, DHCP) and persists them.
+     *
+     * Resets the wizard, fills SSID/password, marks DHCP+WPA2, then writes to NVS
+     * via `saveConfig()` and reloads the cached config.
+     *
+     * \param ssid Null-terminated SSID (max 32 chars, truncated if longer).
+     * \param password Null-terminated password (nullptr or "" for open networks).
+     */
+    void saveCredentials(const char* ssid, const char* password);
+
+    /**
+     * \brief Erases the entire "wifi" NVS namespace and invalidates the cached
+     *        configuration.
+     */
+    void clearConfig();
+
+    /**
+     * \brief Reads the persisted connect timeout (NVS key "tout").
+     * \return Timeout in ms, clamped to [WIFI_CONNECT_TIMEOUT_MIN_MS,
+     *         WIFI_CONNECT_TIMEOUT_MAX_MS]; default
+     *         WIFI_CONNECT_TIMEOUT_DEFAULT_MS if unset.
+     */
+    uint32_t getConnectTimeoutMs() const;
+
+    /**
+     * \brief Persists the connect timeout to NVS.
+     * \param ms Timeout in ms; must lie within
+     *           [WIFI_CONNECT_TIMEOUT_MIN_MS, WIFI_CONNECT_TIMEOUT_MAX_MS].
+     * \return `true` on success, `false` if the value is out of range or NVS
+     *         could not be opened.
+     */
+    bool setConnectTimeoutMs(uint32_t ms);
 
     // Connection management
     bool connect();

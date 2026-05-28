@@ -27,6 +27,16 @@ void drawScrollIndicator(Gdey029T94* gfx, int x, int y, int listHeight,
 void drawDialogFrame(Gdey029T94* gfx, int x, int y, int w, int h);
 
 /**
+ * \brief Print `text` at the current cursor, truncated with an ellipsis to fit
+ *        `maxWidthPx`. Caller must have already called `setCursor` and
+ *        `setTextColor`/`setTextSize`. Adafruit-GFX text wrap should be off.
+ * \param gfx Display drawing context.
+ * \param text Null-terminated text.
+ * \param maxWidthPx Maximum width in pixels.
+ */
+void printTruncated(Gdey029T94* gfx, const char* text, int maxWidthPx);
+
+/**
  * \brief Maps a CP437 byte to the equivalent Latin-1 byte for use with
  *        Unicode/Latin-1 indexed GFX fonts (e.g. FreeMonoBold*pt8b).
  * \param c CP437 byte value.

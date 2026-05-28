@@ -12,280 +12,394 @@
     :root {
       --bg: #0d1117;
       --surface: #161b22;
+      --surface-2: #1c2128;
       --border: #30363d;
+      --border-strong: #484f58;
       --text: #e6edf3;
       --text-muted: #8b949e;
       --accent: #58a6ff;
       --accent-hover: #79c0ff;
+      --accent-soft: rgba(88, 166, 255, 0.12);
       --warning: #d29922;
-      --step-bg: #1c2128;
+      --warning-soft: rgba(210, 153, 34, 0.12);
+      --success: #3fb950;
+      --success-soft: rgba(63, 185, 80, 0.12);
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
+    html, body { height: 100%; }
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-      background: var(--bg);
+      background:
+        radial-gradient(ellipse at top, rgba(88, 166, 255, 0.06), transparent 50%),
+        var(--bg);
       color: var(--text);
-      line-height: 1.6;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
+      line-height: 1.55;
+      min-height: 100%;
     }
 
     .container {
-      max-width: 640px;
-      width: 100%;
-      padding: 2rem 1.5rem;
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem 4rem;
     }
 
+    /* ------- header ------- */
     header {
       text-align: center;
-      margin-bottom: 2rem;
+      margin-bottom: 2.5rem;
     }
-
     header h1 {
-      font-size: 1.75rem;
+      font-size: 2rem;
       font-weight: 600;
-      margin-bottom: 0.25rem;
+      letter-spacing: -0.01em;
     }
-
     header .subtitle {
       color: var(--text-muted);
-      font-size: 0.95rem;
+      font-size: 1rem;
+      margin-top: 0.25rem;
     }
-
     .version-badge {
       display: inline-block;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 2rem;
-      padding: 0.25rem 0.85rem;
+      padding: 0.3rem 0.95rem;
       font-size: 0.85rem;
       color: var(--accent);
-      margin-top: 0.75rem;
+      margin-top: 1rem;
+      font-family: SFMono-Regular, Menlo, Monaco, monospace;
     }
+    .version-badge.loading { color: var(--text-muted); }
 
-    .version-badge.loading {
-      color: var(--text-muted);
-    }
-
+    /* ------- card ------- */
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 0.75rem;
+      border-radius: 0.85rem;
       padding: 1.5rem;
       margin-bottom: 1.25rem;
     }
-
     .card h2 {
-      font-size: 1.1rem;
+      font-size: 1.15rem;
       font-weight: 600;
-      margin-bottom: 1rem;
+      margin-bottom: 0.85rem;
     }
+    .card p { color: var(--text-muted); font-size: 0.92rem; }
+    .card p + p { margin-top: 0.6rem; }
 
-    .steps {
-      list-style: none;
-      counter-reset: step;
-    }
-
-    .steps li {
-      counter-increment: step;
-      position: relative;
-      padding: 0.75rem 0.75rem 0.75rem 3rem;
-      background: var(--step-bg);
-      border-radius: 0.5rem;
-      margin-bottom: 0.5rem;
+    /* ------- alerts ------- */
+    .alert {
+      display: flex;
+      gap: 0.85rem;
+      padding: 0.95rem 1.1rem;
+      border-radius: 0.6rem;
       font-size: 0.9rem;
+      align-items: flex-start;
+      border: 1px solid var(--border);
     }
-
-    .steps li::before {
-      content: counter(step);
-      position: absolute;
-      left: 0.75rem;
-      top: 0.75rem;
+    .alert + .alert { margin-top: 0.75rem; }
+    .alert-icon {
+      flex-shrink: 0;
       width: 1.5rem;
       height: 1.5rem;
-      background: var(--accent);
-      color: var(--bg);
       border-radius: 50%;
-      display: flex;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
-      font-size: 0.8rem;
       font-weight: 700;
-    }
-
-    .steps li strong {
-      color: var(--accent);
-    }
-
-    .notice {
-      display: flex;
-      gap: 0.5rem;
-      align-items: flex-start;
-      padding: 0.75rem;
-      background: rgba(210, 153, 34, 0.1);
-      border: 1px solid rgba(210, 153, 34, 0.3);
-      border-radius: 0.5rem;
-      margin-top: 0.75rem;
-      font-size: 0.85rem;
-      color: var(--warning);
-    }
-
-    .notice-icon {
-      flex-shrink: 0;
-      font-size: 1.1rem;
-      line-height: 1.4;
-    }
-
-    .flash-section {
-      text-align: center;
-      padding: 2rem 1.5rem;
-    }
-
-    .flash-section p {
-      color: var(--text-muted);
       font-size: 0.9rem;
-      margin-bottom: 1.25rem;
+    }
+    .alert.warning {
+      background: var(--warning-soft);
+      border-color: rgba(210, 153, 34, 0.35);
+      color: #e6c87a;
+    }
+    .alert.warning .alert-icon { background: var(--warning); color: #000; }
+    .alert.info {
+      background: var(--accent-soft);
+      border-color: rgba(88, 166, 255, 0.35);
+      color: #b6d4ff;
+    }
+    .alert.info .alert-icon { background: var(--accent); color: #000; }
+    .alert.success {
+      background: var(--success-soft);
+      border-color: rgba(63, 185, 80, 0.35);
+      color: #a8e0aa;
+    }
+    .alert.success .alert-icon { background: var(--success); color: #000; }
+    .alert b { color: var(--text); }
+    .alert code {
+      background: rgba(255, 255, 255, 0.08);
+      padding: 0.05rem 0.35rem;
+      border-radius: 0.25rem;
+      font-size: 0.85em;
     }
 
-    esp-web-install-button {
-      display: inline-block;
+    /* ------- hardware row ------- */
+    .hw-row {
+      display: flex;
+      gap: 1.2rem;
+      align-items: center;
+    }
+    .hw-row img {
+      width: 96px;
+      height: auto;
+      border-radius: 0.6rem;
+      flex-shrink: 0;
+      border: 1px solid var(--border);
+    }
+    .hw-row .text p { font-size: 0.92rem; color: var(--text-muted); }
+    .hw-row .text strong { color: var(--text); }
+
+    /* ------- bootloader options grid ------- */
+    .boot-options {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 0.75rem;
+    }
+    .boot-option {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 0.65rem;
+      padding: 1rem 1.1rem;
+    }
+    .boot-option h3 {
+      font-size: 0.92rem;
+      color: var(--accent);
+      margin-bottom: 0.4rem;
+      font-weight: 600;
+    }
+    .boot-option ol {
+      padding-left: 1.2rem;
+      font-size: 0.88rem;
+      color: var(--text);
+    }
+    .boot-option li { margin: 0.15rem 0; }
+    .boot-option code {
+      background: rgba(255, 255, 255, 0.08);
+      padding: 0.05rem 0.3rem;
+      border-radius: 0.25rem;
+      font-size: 0.88em;
     }
 
+    /* ------- install grid (the 2 buttons) ------- */
+    .install-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+    }
+    .install-tile {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1.5rem 1.25rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+    .install-tile .install-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 0.45rem;
+    }
+    .install-tile .install-desc {
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      min-height: 4rem;
+      margin-bottom: 1rem;
+    }
+    esp-web-install-button { display: inline-block; }
     esp-web-install-button button {
-      background: var(--accent);
-      color: var(--bg);
       border: none;
-      border-radius: 0.5rem;
-      padding: 0.85rem 2rem;
-      font-size: 1rem;
+      border-radius: 0.55rem;
+      padding: 0.85rem 1.6rem;
+      font-size: 0.98rem;
       font-weight: 600;
       cursor: pointer;
-      transition: background 0.15s;
+      transition: background 0.15s, transform 0.05s;
+      min-width: 14rem;
     }
+    esp-web-install-button button:hover { transform: translateY(-1px); }
+    .btn-primary   { background: var(--accent);  color: #000; }
+    .btn-primary:hover   { background: var(--accent-hover); }
+    .btn-warning   { background: var(--warning); color: #000; }
+    .btn-warning:hover   { background: #e0a832; }
 
-    esp-web-install-button button:hover {
-      background: var(--accent-hover);
-    }
-
-    .browser-warning {
-      display: none;
-      text-align: center;
-      padding: 1.5rem;
-      color: var(--warning);
-    }
-
-    .requirements {
-      font-size: 0.85rem;
-      color: var(--text-muted);
-    }
-
+    /* ------- footer / lists ------- */
     .requirements ul {
       list-style: disc;
-      padding-left: 1.25rem;
+      padding-left: 1.4rem;
+      font-size: 0.9rem;
+      color: var(--text-muted);
       margin-top: 0.5rem;
     }
-
-    .requirements li {
-      margin-bottom: 0.25rem;
-    }
+    .requirements li { margin: 0.2rem 0; }
 
     footer {
       text-align: center;
-      padding: 1.5rem;
+      padding-top: 1.5rem;
       color: var(--text-muted);
-      font-size: 0.8rem;
+      font-size: 0.85rem;
     }
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
 
-    footer a {
-      color: var(--accent);
-      text-decoration: none;
-    }
-
-    footer a:hover {
-      text-decoration: underline;
-    }
-
-    @media (max-width: 480px) {
-      .container { padding: 1.25rem 1rem; }
-      header h1 { font-size: 1.4rem; }
+    /* ------- responsive ------- */
+    @media (max-width: 720px) {
+      .container { padding: 1.5rem 1rem 2.5rem; }
+      header h1 { font-size: 1.55rem; }
+      .install-grid, .boot-options { grid-template-columns: 1fr; }
+      .hw-row { flex-direction: column; text-align: center; }
     }
   </style>
 </head>
 <body>
   <div class="container">
+
     <header>
       <h1>CDC Badge OS</h1>
       <p class="subtitle">Web Firmware Flasher</p>
       <span class="version-badge loading" id="version-badge">Checking latest version...</span>
     </header>
 
-    <div class="card" style="display: flex; gap: 1rem; align-items: center;">
-      <img src="badge.jpg" alt="CDC Badge v1.0" style="width: 80px; height: auto; border-radius: 0.5rem; flex-shrink: 0;">
-      <div>
-        <p style="font-size: 0.9rem; color: var(--text-muted);">
-          This firmware is designed exclusively for the <strong style="color: var(--text);">TROPIC01-enhanced CDC Badge v1.0 / v1.1</strong> based on ESP32-S3.
-          Do not flash on other devices.
-        </p>
-        <p style="font-size: 0.85rem; margin-top: 0.5rem;">
-          <a href="https://github.com/riatlabs/cdc-badge" style="color: var(--accent); text-decoration: none;">Hardware details on GitHub</a>
-        </p>
+    <div class="card">
+      <div class="hw-row">
+        <img src="badge.jpg" alt="CDC Badge v1.0 / v1.1">
+        <div class="text">
+          <p>
+            This flasher targets the <strong>TROPIC01-enhanced CDC Badge v1.0 / v1.1</strong>
+            (ESP32-S3 + TROPIC01 secure element). Do not flash it on any other device.
+          </p>
+          <p>
+            <a href="https://github.com/riatlabs/cdc-badge" style="color: var(--accent); text-decoration: none;">Hardware details on GitHub</a>
+          </p>
+        </div>
       </div>
     </div>
 
     <div class="card">
-      <h2>Enter Bootloader Mode</h2>
-      <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 0.75rem;">
-        On the back of the badge, locate the <strong>FLASH</strong> and <strong>RESET</strong> buttons.
-      </p>
-      <ol class="steps">
-        <li>Press and <strong>hold FLASH</strong></li>
-        <li>While holding FLASH, press <strong>RESET</strong> once and release it</li>
-        <li>Release <strong>FLASH</strong></li>
-      <li>After flashing, press <strong>RESET</strong> once to start the new firmware</li>
-      </ol>
-      <div class="notice">
-        <span class="notice-icon">!</span>
+      <h2>1. Put the badge into bootloader mode</h2>
+      <div class="boot-options">
+        <div class="boot-option">
+          <h3>Software (recommended, if already running CDC OS)</h3>
+          <ol>
+            <li>Open <code>Tools &rarr; Expert &rarr; Bootloader</code> on the badge UI <em>(newer firmware versions only)</em>,</li>
+            <li>or send <code>AUTH &lt;pin&gt;</code> followed by <code>BOOTLOADER</code> over the serial console.</li>
+          </ol>
+        </div>
+        <div class="boot-option">
+          <h3>Hardware (always works)</h3>
+          <ol>
+            <li>Press and hold <code>FLASH</code>.</li>
+            <li>Press <code>RESET</code> briefly while still holding <code>FLASH</code>.</li>
+            <li>Release <code>FLASH</code>.</li>
+          </ol>
+        </div>
+      </div>
+      <div class="alert info" style="margin-top: 1rem;">
+        <span class="alert-icon">i</span>
         <span>
-          The display will not react and the device will appear to be turned off.
-          This is expected &mdash; the badge is now in bootloader mode.
+          In bootloader mode the e-paper display will not react and the device looks turned off.
+          That is expected.
         </span>
       </div>
     </div>
 
-    <div class="card flash-section">
-      <p>Connect the badge via USB, enter bootloader mode, then click the button below.</p>
-      <esp-web-install-button manifest="manifest.json">
-        <button slot="activate">Connect (Flash/Serial)</button>
-        <span slot="unsupported">
-          <div class="browser-warning" style="display: block;">
-            Your browser does not support Web Serial.<br>
-            Please use <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong> (desktop).
+    <div class="card">
+      <h2>2. Flash</h2>
+      <div class="install-grid">
+
+        <div class="install-tile">
+          <div class="install-title">Firmware Update</div>
+          <div class="install-desc">
+            Replaces only the firmware. Installed plugins, language overlay,
+            settings and PINs stay intact. Use this for normal version upgrades.
           </div>
-        </span>
-        <span slot="not-allowed">
-          <div class="browser-warning" style="display: block;">
-            Serial access was denied. Please grant permission and try again.
+          <esp-web-install-button manifest="manifest.json">
+            <button slot="activate" class="btn-primary">Update Firmware</button>
+            <span slot="unsupported">
+              <div class="alert warning"><span class="alert-icon">!</span>
+                Web Serial is not supported by this browser. Use Chrome or Edge (desktop).
+              </div>
+            </span>
+            <span slot="not-allowed">
+              <div class="alert warning"><span class="alert-icon">!</span>
+                Serial access was denied. Grant permission and try again.
+              </div>
+            </span>
+          </esp-web-install-button>
+        </div>
+
+        <div class="install-tile">
+          <div class="install-title">Factory Setup</div>
+          <div class="install-desc">
+            <b style="color:var(--warning);">Wipes all installed plugins</b> and re-installs the language
+            overlay. Use this on a fresh badge or when a Firmware Update leaves things broken.
           </div>
+          <esp-web-install-button manifest="manifest_factory.json">
+            <button slot="activate" class="btn-warning">First-time / Factory Setup</button>
+            <span slot="unsupported">
+              <div class="alert warning"><span class="alert-icon">!</span>
+                Web Serial is not supported by this browser. Use Chrome or Edge (desktop).
+              </div>
+            </span>
+          </esp-web-install-button>
+        </div>
+
+      </div>
+
+      <div class="alert warning" style="margin-top: 1.25rem;">
+        <span class="alert-icon">!</span>
+        <span>
+          <b>Pre-1.0 software, breaking changes are expected.</b>
+          If a Firmware Update boots into a corrupted state, or modules misbehave after an upgrade,
+          run <em>Factory Setup</em> to wipe the plugin partition and re-install the language overlay.
         </span>
-      </esp-web-install-button>
+      </div>
+
+      <div class="alert info">
+        <span class="alert-icon">i</span>
+        <span>
+          The first boot after Factory Setup takes noticeably longer (typically 10-20&nbsp;s).
+          The firmware wipes every used TROPIC01 secure-element slot and re-initialises NVS &mdash; do not unplug
+          while the display is still updating.
+        </span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>3. Install plugins (optional)</h2>
+      <p>
+        After flashing, reset the badge and continue with the
+        <a href="https://krim404.github.io/cdc-badge-plugins/" style="color:var(--accent); text-decoration:none;">CDC Badge Plugin Installer</a>
+        to add WebAssembly plugins (Home Assistant, GPIO demos, hello-world, etc.) via WebSerial.
+      </p>
+      <p>
+        Plugins live in a separate 2&nbsp;MB FAT-FS partition and are sandboxed via the WAMR runtime &mdash;
+        no firmware rebuild required to add or remove them.
+      </p>
     </div>
 
     <div class="card requirements">
       <h2>Requirements</h2>
       <ul>
-        <li>Google Chrome or Microsoft Edge (version 89+)</li>
-        <li>USB cable (data-capable, not charge-only)</li>
-        <li>Badge in bootloader mode (see steps above)</li>
+        <li>Google Chrome or Microsoft Edge, version 89 or newer.</li>
+        <li>Data-capable USB cable (charge-only cables will not enumerate).</li>
+        <li>Badge in bootloader mode (see step&nbsp;1).</li>
       </ul>
     </div>
 
     <footer>
       <a href="https://github.com/krim404/cdc-badge-os">CDC Badge OS on GitHub</a>
+      &middot;
+      <a href="https://github.com/krim404/cdc-badge-plugins">Plugins SDK</a>
     </footer>
+
   </div>
 
   <script>

@@ -6,14 +6,20 @@
 #include "serial_cmd/SerialCmd.h"
 #include "serial_cmd/Console.h"
 #include "serial_cmd/ICommandRegistry.h"
+#include "serial_cmd/SubCommand.h"
 #include "cdc_core/feature_flags.h"
 #include "cdc_core/PinManager.h"
 #include "cdc_core/TropicSlotMap.h"
 #include "cdc_core/TropicStorage.h"
 #include "cdc_core/FactoryReset.h"
 #include "cdc_hal/ISecureElement.h"
+#include "cdc_hal/IWifiController.h"
+#include "cdc_os_ui/AppUi.h"
+#include "cdc_os_ui/WifiHandlers.h"
 #include "cdc_log.h"
 #include "cdc_views/RenderHelpers.h"
+#include "cdc_views/T9InputView.h"
+#include "cdc_ui/ViewStack.h"
 #include "esp_timer.h"
 #include "esp_attr.h"
 #include "nvs_flash.h"
@@ -446,32 +452,43 @@ static void cmdStatus(const char* args) {
  * \brief Prints detailed per-task stack watermarks plus heap fragmentation.
  *        Heavier than cmdMem; only relevant for diagnostics.
  */
-static void cmdMemInfo(const char* args) {
-    (void)args;
-    Console::printf("=== Detailed Memory Info ===\r\n");
-
+static void printHeapRegion(const char* label, uint32_t caps) {
     multi_heap_info_t info;
-    heap_caps_get_info(&info, MALLOC_CAP_INTERNAL);
-    Console::printf("\r\n-- Internal DRAM --\r\n");
+    heap_caps_get_info(&info, caps);
+    if (info.total_free_bytes + info.total_allocated_bytes == 0) return;
+    Console::printf("\r\n-- %s --\r\n", label);
     Console::printf("  total free      : %lu\r\n", (unsigned long)info.total_free_bytes);
     Console::printf("  total allocated : %lu\r\n", (unsigned long)info.total_allocated_bytes);
     Console::printf("  largest free    : %lu\r\n", (unsigned long)info.largest_free_block);
     Console::printf("  min ever free   : %lu\r\n", (unsigned long)info.minimum_free_bytes);
     Console::printf("  free blocks     : %lu\r\n", (unsigned long)info.free_blocks);
     Console::printf("  alloc blocks    : %lu\r\n", (unsigned long)info.allocated_blocks);
+}
 
-    heap_caps_get_info(&info, MALLOC_CAP_DMA);
-    Console::printf("\r\n-- DMA-capable --\r\n");
-    Console::printf("  total free      : %lu\r\n", (unsigned long)info.total_free_bytes);
-    Console::printf("  largest free    : %lu\r\n", (unsigned long)info.largest_free_block);
+static void cmdMemInfo(const char* args) {
+    (void)args;
+    Console::printf("=== Detailed Memory Info ===\r\n");
 
-    heap_caps_get_info(&info, MALLOC_CAP_SPIRAM);
-    if (info.total_free_bytes + info.total_allocated_bytes > 0) {
-        Console::printf("\r\n-- PSRAM --\r\n");
-        Console::printf("  total free      : %lu\r\n", (unsigned long)info.total_free_bytes);
-        Console::printf("  total allocated : %lu\r\n", (unsigned long)info.total_allocated_bytes);
-        Console::printf("  largest free    : %lu\r\n", (unsigned long)info.largest_free_block);
-    }
+    printHeapRegion("Internal (any)",       MALLOC_CAP_INTERNAL);
+    printHeapRegion("Internal DRAM (8-bit)", MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    printHeapRegion("Internal 32-bit only",  MALLOC_CAP_INTERNAL | MALLOC_CAP_32BIT);
+    printHeapRegion("IRAM (executable)",     MALLOC_CAP_EXEC);
+    printHeapRegion("DMA-capable",           MALLOC_CAP_DMA);
+    printHeapRegion("PSRAM",                 MALLOC_CAP_SPIRAM);
+    printHeapRegion("RTC slow RAM",          MALLOC_CAP_RTCRAM);
+
+    Console::printf("\r\n-- Heap totals (heap_caps_get_total_size) --\r\n");
+    Console::printf("  INTERNAL : %u\r\n", (unsigned)heap_caps_get_total_size(MALLOC_CAP_INTERNAL));
+    Console::printf("  EXEC     : %u\r\n", (unsigned)heap_caps_get_total_size(MALLOC_CAP_EXEC));
+    Console::printf("  SPIRAM   : %u\r\n", (unsigned)heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
+    Console::printf("  DMA      : %u\r\n", (unsigned)heap_caps_get_total_size(MALLOC_CAP_DMA));
+    Console::printf("  INTERNAL|EXEC : free=%u largest=%u total=%u\r\n",
+                    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_EXEC),
+                    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_EXEC),
+                    (unsigned)heap_caps_get_total_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_EXEC));
+    Console::printf("  32BIT          : free=%u largest=%u\r\n",
+                    (unsigned)heap_caps_get_free_size(MALLOC_CAP_32BIT),
+                    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_32BIT));
 
 #if CONFIG_FREERTOS_USE_TRACE_FACILITY
     UBaseType_t numTasks = uxTaskGetNumberOfTasks();
@@ -564,6 +581,32 @@ static void cmdReboot(const char* args) {
 }
 
 /**
+ * \brief Reboots the device into USB download (bootloader) mode.
+ * \param args Unused command arguments.
+ */
+static void cmdBootloader(const char* args) {
+    (void)args;
+    Console::printf("Rebooting into download mode...\r\n");
+    Console::flush();
+    cdc::ui::rebootIntoBootloader();
+}
+
+static void cmdPaste(const char* args) {
+    if (!args || !*args) {
+        Console::printf("Usage: PASTE <text>\r\n");
+        return;
+    }
+    cdc::ui::IView* top = cdc::ui::ViewStack::instance().current();
+    if (!top || strcmp(top->getName(), "T9InputView") != 0) {
+        Console::printf("ERROR: T9 input view not active\r\n");
+        return;
+    }
+    auto* t9 = static_cast<cdc::ui::T9InputView*>(top);
+    uint16_t added = t9->appendRaw(args);
+    Console::printf("OK: %u chars\r\n", static_cast<unsigned>(added));
+}
+
+/**
  * \brief Displays the error log or clears it when `CLEAR` is passed.
  * \param args Optional action argument.
  */
@@ -591,7 +634,7 @@ static void cmdNvsClear(const char* args) {
         Console::printf("  - All stored preferences\r\n");
         Console::printf("  - WiFi credentials\r\n");
         Console::printf("  - Timezone settings\r\n");
-        Console::printf("\r\nTo proceed, type: NVS_CLEAR YES\r\n");
+        Console::printf("\r\nTo proceed, type: NVS CLEAR YES\r\n");
         return;
     }
 
@@ -662,14 +705,14 @@ static void cmdNvsList(const char* args) {
  */
 static void cmdNvsRead(const char* args) {
     if (!args || !*args) {
-        Console::printf("Usage: NVS_READ <namespace> <key>\r\n");
+        Console::printf("Usage: NVS READ <namespace> <key>\r\n");
         return;
     }
 
     char ns[NVS_NAMESPACE_MAX_LEN + 1] = {0};
     char key[NVS_KEY_MAX_LEN + 1] = {0};
     if (sscanf(args, "%15s %15s", ns, key) != 2) {
-        Console::printf("Usage: NVS_READ <namespace> <key>\r\n");
+        Console::printf("Usage: NVS READ <namespace> <key>\r\n");
         return;
     }
 
@@ -698,7 +741,7 @@ static void cmdNvsRead(const char* args) {
  */
 static void cmdNvsDel(const char* args) {
     if (!args || !*args) {
-        Console::printf("Usage: NVS_DEL <namespace> [key]\r\n");
+        Console::printf("Usage: NVS DEL <namespace> [key]\r\n");
         Console::printf("  Without key: erases entire namespace\r\n");
         return;
     }
@@ -708,7 +751,7 @@ static void cmdNvsDel(const char* args) {
     int parsed = sscanf(args, "%15s %15s", ns, key);
 
     if (parsed < 1) {
-        Console::printf("Usage: NVS_DEL <namespace> [key]\r\n");
+        Console::printf("Usage: NVS DEL <namespace> [key]\r\n");
         return;
     }
 
@@ -988,6 +1031,70 @@ static void cmdPinStatus(const char* args) {
 }
 
 /**
+ * \brief Changes the badge PIN after verifying the current one.
+ * \param args "<currentPin> <newPin>" - both must be 4..8 digits.
+ */
+static void cmdPinChange(const char* args) {
+    if (!args || !args[0]) {
+        Console::printf("Usage: PIN CHANGE <currentPin> <newPin>\r\n");
+        return;
+    }
+
+    const char* space = strchr(args, ' ');
+    if (!space) {
+        Console::printf("Usage: PIN CHANGE <currentPin> <newPin>\r\n");
+        return;
+    }
+
+    char currentPin[core::PinManager::BADGE_PIN_MAX + 1] = {};
+    char newPin[core::PinManager::BADGE_PIN_MAX + 1] = {};
+
+    size_t curLen = static_cast<size_t>(space - args);
+    if (curLen == 0 || curLen > core::PinManager::BADGE_PIN_MAX) {
+        Console::printf("ERROR: PIN length must be %u-%u digits\r\n",
+                        static_cast<unsigned>(core::PinManager::BADGE_PIN_MIN),
+                        static_cast<unsigned>(core::PinManager::BADGE_PIN_MAX));
+        return;
+    }
+    memcpy(currentPin, args, curLen);
+    currentPin[curLen] = '\0';
+
+    const char* p = space + 1;
+    while (*p == ' ') p++;
+    size_t newLen = strlen(p);
+    if (newLen == 0 || newLen > core::PinManager::BADGE_PIN_MAX) {
+        Console::printf("ERROR: PIN length must be %u-%u digits\r\n",
+                        static_cast<unsigned>(core::PinManager::BADGE_PIN_MIN),
+                        static_cast<unsigned>(core::PinManager::BADGE_PIN_MAX));
+        return;
+    }
+    memcpy(newPin, p, newLen);
+    newPin[newLen] = '\0';
+
+    auto isDigits = [](const char* s) {
+        for (; *s; ++s) if (!isdigit(static_cast<unsigned char>(*s))) return false;
+        return true;
+    };
+    if (!isDigits(currentPin) || !isDigits(newPin)) {
+        Console::printf("ERROR: PIN must be digits only\r\n");
+        return;
+    }
+
+    auto& pm = core::PinManager::instance();
+    if (pm.isBadgeBlocked()) {
+        Console::printf("ERROR: PIN entry blocked (lockout active or no retries left)\r\n");
+        return;
+    }
+
+    if (!pm.changeBadgePin(currentPin, newPin)) {
+        Console::printf("ERROR: PIN change failed (current PIN wrong or new PIN invalid)\r\n");
+        return;
+    }
+
+    Console::printf("OK: PIN changed\r\n");
+}
+
+/**
  * \brief TROPIC01 secure-element maintenance and diagnostic handlers.
  */
 
@@ -1099,7 +1206,7 @@ static void cmdTr01Slots(const char* args) {
 static void cmdTr01RmemRead(const char* args) {
     auto result = parseSlotArg(args, hal::ISecureElement::RMEM_SLOT_COUNT, "R-Memory slot");
     if (!result.valid) {
-        Console::printf("Usage: TR01_RMEM_READ <slot>\r\n");
+        Console::printf("Usage: TR01 RMEM_READ <slot>\r\n");
         return;
     }
 
@@ -1127,7 +1234,7 @@ static void cmdTr01RmemRead(const char* args) {
 static void cmdTr01EccDel(const char* args) {
     auto result = parseSlotArg(args, hal::ISecureElement::ECC_SLOT_COUNT, "ECC slot");
     if (!result.valid) {
-        Console::printf("Usage: TR01_ECC_DEL <slot>\r\n");
+        Console::printf("Usage: TR01 ECC_DEL <slot>\r\n");
         return;
     }
 
@@ -1150,7 +1257,7 @@ static void cmdTr01EccDel(const char* args) {
 static void cmdTr01RmemDel(const char* args) {
     auto result = parseSlotArg(args, hal::ISecureElement::RMEM_SLOT_COUNT, "R-Memory slot");
     if (!result.valid) {
-        Console::printf("Usage: TR01_RMEM_DEL <slot>\r\n");
+        Console::printf("Usage: TR01 RMEM_DEL <slot>\r\n");
         return;
     }
 
@@ -1245,7 +1352,7 @@ static void cmdTr01Wipe(const char* args) {
         Console::printf("WARNING: This will ERASE ALL data on TROPIC01!\r\n");
         Console::printf("  - All ECC keys (slots 0-31)\r\n");
         Console::printf("  - All R-Memory data (slots 0-511)\r\n");
-        Console::printf("\r\nTo proceed, type: TR01_WIPE CONFIRM\r\n");
+        Console::printf("\r\nTo proceed, type: TR01 WIPE CONFIRM\r\n");
         return;
     }
 
@@ -1400,6 +1507,14 @@ bool SerialCmd::handleEscape(int c) {
 void SerialCmd::handleSpecialChar(int c, bool& commandReady) {
     commandReady = false;
 
+    // Binary-streaming bypass: while a byte interceptor is installed, every
+    // incoming byte is delivered raw with no echo, no buffering and no line
+    // processing. Used by `PLUGIN UPLOAD` to slurp the raw payload.
+    if (auto bi = getCommandRegistry().getByteInterceptor()) {
+        bi(static_cast<uint8_t>(c));
+        return;
+    }
+
     switch (c) {
         case 0x1B:  // ESC
             s_escState = EscState::ESC;
@@ -1497,14 +1612,21 @@ void SerialCmd::handleSpecialChar(int c, bool& commandReady) {
  * \return `true` if a command line was completed, otherwise `false`.
  */
 bool SerialCmd::process() {
-    int c = Console::getchar();
-    if (c < 0) return false;
+    bool anyCommandReady = false;
+    // Drain every byte that is currently buffered, not just one per main-loop
+    // tick. Without this, binary uploads were rate-limited to one byte per
+    // ~50 ms UI tick (~20 B/s).
+    for (int i = 0; i < 4096; ++i) {
+        int c = Console::getchar();
+        if (c < 0) break;
 
-    if (handleEscape(c)) return false;
+        if (handleEscape(c)) continue;
 
-    bool commandReady = false;
-    handleSpecialChar(c, commandReady);
-    return commandReady;
+        bool commandReady = false;
+        handleSpecialChar(c, commandReady);
+        if (commandReady) anyCommandReady = true;
+    }
+    return anyCommandReady;
 }
 
 /**
@@ -1593,6 +1715,17 @@ bool SerialCmd::authenticate(const char* pin) {
 }
 
 /**
+ * \brief Keeps the auth session alive during a long-running serial activity.
+ */
+void SerialCmd::touchAuthSession() {
+#if FEATURE_SECURE_SERIAL
+    if (s_authenticated) {
+        s_authTimestamp = esp_timer_get_time();
+    }
+#endif
+}
+
+/**
  * \brief Logs out the current serial session.
  */
 void SerialCmd::logout() {
@@ -1643,12 +1776,413 @@ char* SerialCmd::trim(char* str) {
 }
 
 /**
+ * \brief WiFi serial command handlers.
+ *
+ * Thin wrappers around \ref cdc::ui::WifiHandlers for credential storage and
+ * connection lifecycle, plus \ref cdc::hal::IWifiController for runtime state
+ * (scan, mode, IP/MAC/RSSI).
+ */
+
+static constexpr uint32_t WIFI_SCAN_POLL_MS     = 100;
+static constexpr uint8_t  WIFI_MAX_SCAN_RESULTS = 20;
+
+static const char* wifiSecurityName(hal::WifiSecurity sec) {
+    switch (sec) {
+        case hal::WifiSecurity::OPEN:            return "OPEN";
+        case hal::WifiSecurity::WEP:             return "WEP";
+        case hal::WifiSecurity::WPA_PSK:         return "WPA";
+        case hal::WifiSecurity::WPA2_PSK:        return "WPA2";
+        case hal::WifiSecurity::WPA3_PSK:        return "WPA3";
+        case hal::WifiSecurity::WPA2_ENTERPRISE: return "WPA2-E";
+        default:                                 return "?";
+    }
+}
+
+static const char* wifiStateName(hal::WifiState st) {
+    switch (st) {
+        case hal::WifiState::DISCONNECTED:      return "DISCONNECTED";
+        case hal::WifiState::CONNECTING:        return "CONNECTING";
+        case hal::WifiState::CONNECTED:         return "CONNECTED";
+        case hal::WifiState::CONNECTION_FAILED: return "FAILED";
+        case hal::WifiState::GOT_IP:            return "GOT_IP";
+        default:                                return "?";
+    }
+}
+
+static const char* wifiModeName(hal::WifiMode m) {
+    switch (m) {
+        case hal::WifiMode::OFF:    return "OFF";
+        case hal::WifiMode::STA:    return "STA";
+        case hal::WifiMode::AP:     return "AP";
+        case hal::WifiMode::STA_AP: return "STA_AP";
+        default:                    return "?";
+    }
+}
+
+/**
+ * \brief Deduplicates scan results by SSID (keeping strongest RSSI) and sorts
+ *        the survivors descending by RSSI in place.
+ */
+static uint8_t wifiDedupAndSort(hal::WifiScanResult* results, uint8_t count) {
+    if (count <= 1) return count;
+
+    uint8_t unique = 0;
+    for (uint8_t i = 0; i < count; i++) {
+        bool seen = false;
+        for (uint8_t j = 0; j < unique; j++) {
+            if (strcmp(results[i].ssid, results[j].ssid) == 0) {
+                seen = true;
+                if (results[i].rssi > results[j].rssi) results[j] = results[i];
+                break;
+            }
+        }
+        if (!seen && results[i].ssid[0] != '\0') {
+            if (unique != i) results[unique] = results[i];
+            unique++;
+        }
+    }
+
+    for (uint8_t i = 0; i < unique; i++) {
+        for (uint8_t j = i + 1; j < unique; j++) {
+            if (results[j].rssi > results[i].rssi) {
+                hal::WifiScanResult tmp = results[i];
+                results[i] = results[j];
+                results[j] = tmp;
+            }
+        }
+    }
+    return unique;
+}
+
+/**
+ * \brief WIFI_SCAN - scan and print networks (deduplicated, sorted by RSSI).
+ */
+static void cmdWifiScan(const char* args) {
+    (void)args;
+
+    auto* wifi = hal::getWifiControllerInstance();
+    if (!wifi) {
+        Console::printf("ERROR: WiFi not available\r\n");
+        return;
+    }
+
+    if (!wifi->isEnabled() || wifi->getMode() == hal::WifiMode::AP) {
+        if (!wifi->enable(hal::WifiMode::STA)) {
+            Console::printf("ERROR: Failed to enable WiFi\r\n");
+            return;
+        }
+    }
+
+    Console::printf("Scanning...\r\n");
+
+    if (!wifi->startScan()) {
+        Console::printf("ERROR: Scan start failed\r\n");
+        return;
+    }
+
+    uint32_t elapsed = 0;
+    while (!wifi->isScanComplete() && elapsed < ui::WIFI_SCAN_TIMEOUT_MS) {
+        vTaskDelay(pdMS_TO_TICKS(WIFI_SCAN_POLL_MS));
+        elapsed += WIFI_SCAN_POLL_MS;
+    }
+
+    if (!wifi->isScanComplete()) {
+        Console::printf("ERROR: Scan timeout\r\n");
+        return;
+    }
+
+    hal::WifiScanResult results[WIFI_MAX_SCAN_RESULTS];
+    uint8_t count = wifi->getScanResults(results, WIFI_MAX_SCAN_RESULTS);
+    count = wifiDedupAndSort(results, count);
+
+    if (count == 0) {
+        Console::printf("No networks found\r\n");
+    } else {
+        Console::printf("#  %-32s %5s %3s %s\r\n", "SSID", "RSSI", "Ch", "Security");
+        for (uint8_t i = 0; i < count; i++) {
+            Console::printf("%-2u %-32s %4d %3u %s\r\n",
+                            static_cast<unsigned>(i + 1),
+                            results[i].ssid,
+                            results[i].rssi,
+                            static_cast<unsigned>(results[i].channel),
+                            wifiSecurityName(results[i].security));
+        }
+    }
+
+    Console::printf("OK\r\n");
+}
+
+/**
+ * \brief WIFI_STATUS - show runtime state and saved configuration.
+ */
+static void cmdWifiStatus(const char* args) {
+    (void)args;
+
+    auto* wifi = hal::getWifiControllerInstance();
+    if (!wifi) {
+        Console::printf("ERROR: WiFi not available\r\n");
+        return;
+    }
+
+    Console::printf("Mode:      %s\r\n", wifiModeName(wifi->getMode()));
+    Console::printf("Enabled:   %s\r\n", wifi->isEnabled() ? "yes" : "no");
+    Console::printf("State:     %s\r\n", wifiStateName(wifi->getWifiState()));
+
+    if (wifi->isConnected()) {
+        Console::printf("SSID:      %s\r\n", wifi->getCurrentSsid());
+
+        char ip[16] = {};
+        if (wifi->getIpAddress(ip, sizeof(ip))) {
+            Console::printf("IP:        %s\r\n", ip);
+        }
+        uint8_t mac[6] = {};
+        if (wifi->getMacAddress(mac)) {
+            Console::printf("MAC:       %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+                            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        }
+        int8_t rssi = wifi->getRssi();
+        if (rssi != 0) {
+            Console::printf("RSSI:      %d dBm\r\n", rssi);
+        }
+    }
+
+    auto& wh = ui::WifiHandlers::instance();
+    wh.loadConfig();
+    const auto& cfg = wh.config();
+    if (cfg.valid) {
+        Console::printf("\r\nSaved config:\r\n");
+        Console::printf("SSID:      %s\r\n", cfg.ssid);
+        Console::printf("Security:  %s\r\n",
+                        wifiSecurityName(static_cast<hal::WifiSecurity>(cfg.security)));
+        Console::printf("Timeout:   %lu ms\r\n",
+                        static_cast<unsigned long>(wh.getConnectTimeoutMs()));
+    } else {
+        Console::printf("\r\nSaved config: (none)\r\n");
+    }
+
+    Console::printf("OK\r\n");
+}
+
+/**
+ * \brief WIFI_ON [sta|ap|sta_ap] - enable WiFi radio.
+ *
+ * In STA modes, auto-reconnects via WifiHandlers when saved credentials exist.
+ */
+static void cmdWifiOn(const char* args) {
+    hal::WifiMode mode = hal::WifiMode::STA;
+
+    if (args && args[0]) {
+        if (strcasecmp(args, "ap") == 0) {
+            mode = hal::WifiMode::AP;
+        } else if (strcasecmp(args, "sta_ap") == 0) {
+            mode = hal::WifiMode::STA_AP;
+        } else if (strcasecmp(args, "sta") != 0) {
+            Console::printf("Usage: WIFI ON [sta|ap|sta_ap]\r\n");
+            return;
+        }
+    }
+
+    auto* wifi = hal::getWifiControllerInstance();
+    if (!wifi) {
+        Console::printf("ERROR: WiFi not available\r\n");
+        return;
+    }
+
+    if (!wifi->enable(mode)) {
+        Console::printf("ERROR: Failed to enable WiFi\r\n");
+        return;
+    }
+
+    Console::printf("OK: %s mode enabled\r\n", wifiModeName(mode));
+
+    if (mode == hal::WifiMode::AP) return;
+
+    auto& wh = ui::WifiHandlers::instance();
+    wh.loadConfig();
+    if (!wh.config().valid) return;
+
+    Console::printf("Reconnecting to %s...\r\n", wh.config().ssid);
+    if (!wh.connect()) {
+        wifi->disable();
+        const char* err = wh.getLastError();
+        Console::printf("ERROR: Reconnect failed (%s)\r\n", err ? err : "?");
+        return;
+    }
+
+    char ip[16] = {};
+    wifi->getIpAddress(ip, sizeof(ip));
+    Console::printf("OK: %s\r\n", ip[0] ? ip : "connected");
+}
+
+/**
+ * \brief WIFI_OFF - disconnect and disable WiFi radio.
+ */
+static void cmdWifiOff(const char* args) {
+    (void)args;
+
+    auto* wifi = hal::getWifiControllerInstance();
+    if (!wifi) {
+        Console::printf("ERROR: WiFi not available\r\n");
+        return;
+    }
+    if (!wifi->isEnabled()) {
+        Console::printf("OK: already off\r\n");
+        return;
+    }
+    ui::WifiHandlers::instance().disconnect();
+    Console::printf("OK: WiFi disabled\r\n");
+}
+
+/**
+ * \brief WIFI_CONNECT <ssid> <password> - connect and persist credentials.
+ */
+static void cmdWifiConnect(const char* args) {
+    if (!args || !args[0]) {
+        Console::printf("Usage: WIFI CONNECT <ssid> <password>\r\n");
+        return;
+    }
+
+    const char* space = strchr(args, ' ');
+    if (!space) {
+        Console::printf("Usage: WIFI CONNECT <ssid> <password>\r\n");
+        return;
+    }
+
+    char ssid[33] = {};
+    char password[65] = {};
+
+    size_t ssidLen = static_cast<size_t>(space - args);
+    if (ssidLen >= sizeof(ssid)) ssidLen = sizeof(ssid) - 1;
+    memcpy(ssid, args, ssidLen);
+    ssid[ssidLen] = '\0';
+
+    const char* pw = space + 1;
+    while (*pw == ' ') pw++;
+    size_t pwLen = strlen(pw);
+    if (pwLen >= sizeof(password)) pwLen = sizeof(password) - 1;
+    memcpy(password, pw, pwLen);
+    password[pwLen] = '\0';
+
+    if (ssid[0] == '\0') {
+        Console::printf("ERROR: SSID required\r\n");
+        return;
+    }
+
+    auto& wh = ui::WifiHandlers::instance();
+    wh.saveCredentials(ssid, password);
+
+    Console::printf("Connecting to %s (timeout: %lu ms)...\r\n",
+                    ssid, static_cast<unsigned long>(wh.getConnectTimeoutMs()));
+
+    if (!wh.connect()) {
+        const char* err = wh.getLastError();
+        Console::printf("ERROR: Connection failed (%s)\r\n", err ? err : "?");
+        return;
+    }
+
+    auto* wifi = hal::getWifiControllerInstance();
+    char ip[16] = {};
+    if (wifi) wifi->getIpAddress(ip, sizeof(ip));
+    Console::printf("OK: %s\r\n", ip[0] ? ip : "connected");
+}
+
+/**
+ * \brief WIFI_TIMEOUT [ms] - get or set the connect timeout.
+ */
+static void cmdWifiTimeout(const char* args) {
+    auto& wh = ui::WifiHandlers::instance();
+    if (!args || !args[0]) {
+        Console::printf("%lu ms\r\n",
+                        static_cast<unsigned long>(wh.getConnectTimeoutMs()));
+        return;
+    }
+
+    char* end = nullptr;
+    long val = strtol(args, &end, 10);
+    if (end == args || *end != '\0'
+        || val < static_cast<long>(ui::WIFI_CONNECT_TIMEOUT_MIN_MS)
+        || val > static_cast<long>(ui::WIFI_CONNECT_TIMEOUT_MAX_MS)) {
+        Console::printf("Usage: WIFI TIMEOUT [%lu-%lu]\r\n",
+                        static_cast<unsigned long>(ui::WIFI_CONNECT_TIMEOUT_MIN_MS),
+                        static_cast<unsigned long>(ui::WIFI_CONNECT_TIMEOUT_MAX_MS));
+        return;
+    }
+
+    if (!wh.setConnectTimeoutMs(static_cast<uint32_t>(val))) {
+        Console::printf("ERROR: Failed to persist timeout\r\n");
+        return;
+    }
+    Console::printf("OK: %ld ms\r\n", val);
+}
+
+/**
+ * \brief WIFI_FORGET - disable WiFi and erase the saved configuration.
+ */
+static void cmdWifiForget(const char* args) {
+    (void)args;
+
+    auto& wh = ui::WifiHandlers::instance();
+    wh.disconnect();
+    wh.clearConfig();
+
+    Console::printf("OK: WiFi configuration cleared\r\n");
+}
+
+/**
+ * \brief Sub-command tables and dispatchers for grouped commands.
+ */
+
+static const SubCommand kNvsSubs[] = {
+    {"LIST",  "[namespace]",   "List entries (optional namespace filter)", cmdNvsList},
+    {"READ",  "<ns> <key>",    "Read key value",                            cmdNvsRead},
+    {"DEL",   "<ns> [key]",    "Delete key, or entire namespace if omitted",cmdNvsDel},
+    {"CLEAR", "YES",           "Erase entire NVS (confirmation required)",  cmdNvsClear},
+    {nullptr, nullptr, nullptr, nullptr},
+};
+static void cmdNvs(const char* args) { dispatchSubCommand("NVS", args, kNvsSubs); }
+
+static const SubCommand kPinSubs[] = {
+    {"STATUS", "",                          "Show PIN retries / lockout state", cmdPinStatus},
+    {"RESET",  "",                          "Reset PIN retries (debug)",        cmdPinReset},
+    {"CHANGE", "<currentPin> <newPin>",     "Change badge PIN (4-8 digits)",    cmdPinChange},
+    {nullptr, nullptr, nullptr, nullptr},
+};
+static void cmdPin(const char* args) { dispatchSubCommand("PIN", args, kPinSubs); }
+
+static const SubCommand kTr01Subs[] = {
+    {"STATUS",        "",         "Show TR01 connection status",                   cmdTr01Status},
+    {"INFO",          "",         "Show TR01 chip info (ID, firmware)",            cmdTr01Info},
+    {"SESSION",       "",         "Start/restart TR01 session",                    cmdTr01Session},
+    {"SLOTS",         "",         "Show TR01 slot usage summary",                  cmdTr01Slots},
+    {"RMEM_READ",     "<slot>",   "Read and dump R-Memory slot",                   cmdTr01RmemRead},
+    {"ECC_DEL",       "<slot>",   "Delete ECC key slot",                           cmdTr01EccDel},
+    {"RMEM_DEL",      "<slot>",   "Delete R-Memory slot",                          cmdTr01RmemDel},
+    {"RESYNC",        "",         "Resync TR01 session and cache",                 cmdTr01Resync},
+    {"CACHE_REBUILD", "",         "Rebuild TR01 cache from chip",                  cmdTr01CacheRebuild},
+    {"CLEANUP",       "",         "Cleanup mismatched slots and rebuild cache",    cmdTr01Cleanup},
+    {"WIPE",          "CONFIRM",  "Factory reset all TR01 data",                   cmdTr01Wipe},
+    {nullptr, nullptr, nullptr, nullptr},
+};
+static void cmdTr01(const char* args) { dispatchSubCommand("TR01", args, kTr01Subs); }
+
+static const SubCommand kWifiSubs[] = {
+    {"SCAN",    "",                       "Scan for available networks",                       cmdWifiScan},
+    {"STATUS",  "",                       "Show WiFi state and saved configuration",           cmdWifiStatus},
+    {"ON",      "[sta|ap|sta_ap]",        "Enable WiFi radio (default STA, auto-reconnect)",   cmdWifiOn},
+    {"OFF",     "",                       "Disable WiFi radio",                                cmdWifiOff},
+    {"CONNECT", "<ssid> <password>",      "Connect to network and persist credentials",        cmdWifiConnect},
+    {"TIMEOUT", "[ms]",                   "Get or set connect timeout (3000-60000 ms)",        cmdWifiTimeout},
+    {"FORGET",  "",                       "Clear saved WiFi configuration",                    cmdWifiForget},
+    {nullptr, nullptr, nullptr, nullptr},
+};
+static void cmdWifi(const char* args) { dispatchSubCommand("WIFI", args, kWifiSubs); }
+
+/**
  * \brief Registers all built-in serial commands.
  */
 void SerialCmd::registerBuiltinCommands() {
     auto& reg = getCommandRegistry();
 
-    // System commands
     reg.registerCommand({"HELP", "Show available commands", cmdHelp, "system", false});
     reg.registerCommand({"PING", "Check if device is responsive", cmdPing, "system", false});
     reg.registerCommand({"STATUS", "Show system status", cmdStatus, "system", false});
@@ -1656,46 +2190,32 @@ void SerialCmd::registerBuiltinCommands() {
     reg.registerCommand({"MEMINFO", "Show detailed memory + task info", cmdMemInfo, "system", false});
     reg.registerCommand({"ERROR_LOG", "Show error log (CLEAR to reset)", cmdErrorLog, "system", false});
     reg.registerCommand({"REBOOT", "Restart the device", cmdReboot, "system", true});
+    reg.registerCommand({"BOOTLOADER", "Reboot into USB download mode", cmdBootloader, "system", true});
+    reg.registerCommand({"PASTE", "Paste text into the active T9 input", cmdPaste, "system", true});
 
-    // NVS commands
-    reg.registerCommand({"NVS_LIST", "List NVS entries [namespace]", cmdNvsList, "nvs", false});
-    reg.registerCommand({"NVS_READ", "Read NVS key (ns key)", cmdNvsRead, "nvs", false});
-    reg.registerCommand({"NVS_DEL", "Delete NVS key/namespace", cmdNvsDel, "nvs", true});
-    reg.registerCommand({"NVS_CLEAR", "Erase entire NVS (NVS_CLEAR YES)", cmdNvsClear, "nvs", true});
+    reg.registerCommand({"NVS", "NVS storage: LIST/READ/DEL/CLEAR", cmdNvs, "nvs", true, kNvsSubs});
 
-    // Time commands
     reg.registerCommand({"GET_TIME", "Show current time", cmdGetTime, "time", false});
     reg.registerCommand({"GET_DATE", "Show current date", cmdGetDate, "time", false});
     reg.registerCommand({"SET_TIME", "Set time (HH:MM:SS)", cmdSetTime, "time", false});
     reg.registerCommand({"SET_DATE", "Set date (DD.MM.YYYY)", cmdSetDate, "time", false});
 
-    // Display commands
     reg.registerCommand({"SET_NAME", "Set display name", cmdSetName, "display", false});
     reg.registerCommand({"SET_INFO", "Set info line 1", cmdSetInfo, "display", false});
     reg.registerCommand({"SET_INFO2", "Set info line 2", cmdSetInfo2, "display", false});
 
-    // PIN debug commands
-    reg.registerCommand({"PIN_STATUS", "Show PIN status", cmdPinStatus, "pin", false});
-    reg.registerCommand({"PIN_RESET", "Reset PIN retries (debug)", cmdPinReset, "pin", false});
+    reg.registerCommand({"PIN", "PIN management: STATUS/RESET/CHANGE", cmdPin, "pin", true, kPinSubs});
 
-    // TROPIC01 Secure Element commands
-    reg.registerCommand({"TR01_STATUS", "Show TR01 status", cmdTr01Status, "tr01", false});
-    reg.registerCommand({"TR01_INFO", "Show TR01 chip info", cmdTr01Info, "tr01", false});
-    reg.registerCommand({"TR01_SESSION", "Start/restart TR01 session", cmdTr01Session, "tr01", false});
-    reg.registerCommand({"TR01_SLOTS", "Show TR01 slot usage", cmdTr01Slots, "tr01", false});
-    reg.registerCommand({"TR01_RMEM_READ", "Read R-Memory slot", cmdTr01RmemRead, "tr01", false});
-    reg.registerCommand({"TR01_ECC_DEL", "Delete ECC key slot", cmdTr01EccDel, "tr01", true});
-    reg.registerCommand({"TR01_RMEM_DEL", "Delete R-Memory slot", cmdTr01RmemDel, "tr01", true});
-    reg.registerCommand({"TR01_RESYNC", "Resync TR01 session and cache", cmdTr01Resync, "tr01", false});
-    reg.registerCommand({"TR01_CACHE_REBUILD", "Rebuild TR01 cache", cmdTr01CacheRebuild, "tr01", false});
-    reg.registerCommand({"TR01_CLEANUP", "Cleanup mismatched slots + rebuild cache", cmdTr01Cleanup, "tr01", true});
-    reg.registerCommand({"TR01_WIPE", "Factory reset (TR01_WIPE CONFIRM)", cmdTr01Wipe, "tr01", true});
+    reg.registerCommand({"TR01", "TROPIC01 secure element: STATUS/INFO/SESSION/SLOTS/RMEM_*/ECC_DEL/...",
+                         cmdTr01, "tr01", true, kTr01Subs});
 
 #if FEATURE_SECURE_SERIAL
-    // Authentication commands
     reg.registerCommand({"AUTH", "Authenticate with PIN", cmdAuth, "auth", false});
     reg.registerCommand({"LOGOUT", "End authenticated session", cmdLogout, "auth", false});
 #endif
+
+    reg.registerCommand({"WIFI", "WiFi control: SCAN/STATUS/ON/OFF/CONNECT/TIMEOUT/FORGET",
+                         cmdWifi, "wifi", true, kWifiSubs});
 }
 
 } // namespace cdc::serial

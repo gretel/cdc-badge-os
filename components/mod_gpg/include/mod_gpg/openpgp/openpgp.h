@@ -9,9 +9,7 @@
  * https://gnupg.org/ftp/specs/OpenPGP-smart-card-application-3.4.pdf
  */
 
-#ifndef OPENPGP_H
-#define OPENPGP_H
-
+#pragma once
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -167,4 +165,3 @@ bool openpgp_set_cardholder_name(const char *name);
 }
 #endif
 
-#endif // OPENPGP_H

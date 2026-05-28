@@ -182,7 +182,7 @@ void ConfirmView::render(bool partial) {
         gfx->print(lineBuf);
     }
 
-    const char* hint = ui::tr(ui::StringId::HINT_APPROVE_DENY);
+    const char* hint = ui::tr("core.hint_approve_deny");
     int hintWidth = static_cast<int>(std::strlen(hint)) * 6;
     gfx->setCursor(boxX + BOX_WIDTH / 2 - hintWidth / 2, boxY + BOX_HEIGHT - 12);
     gfx->print(hint);

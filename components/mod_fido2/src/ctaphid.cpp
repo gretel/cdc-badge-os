@@ -6,6 +6,7 @@
 #include "mod_fido2/ctaphid.h"
 #include "mod_fido2/ctap2.h"
 #include "mod_fido2/u2f.h"
+#include "cdc_hal/IDisplay.h"
 #include "cdc_log.h"
 #include "cdc_core/feature_flags.h"
 #include <esp_attr.h>
@@ -316,12 +317,8 @@ static void handle_ping(uint32_t cid, const uint8_t *data, uint16_t len) {
  * \param cid Request channel identifier.
  */
 static void handle_wink(uint32_t cid) {
-    // TODO: Trigger visual identification feedback for the user (CTAPHID WINK).
-    // This handler runs in the FIDO2 transport task, so direct display rendering
-    // from here is not thread-safe. When implementing, dispatch a short-lived
-    // event to the UI task (for example via EventBus or a ToastView request) so
-    // the UI thread can show a "WINK" toast or blink an available indicator.
     prepare_response(cid, CTAPHID_WINK, NULL, 0);
+    cdc::hal::winkBacklight();
     if (CTAPHID_DEBUG_PACKETS) LOG_D(TAG, "WINK");
 }
 

@@ -12,6 +12,7 @@
 #include "cdc_hal/IKeypad.h"
 #include "cdc_hal/ISleepController.h"
 #include "cdc_core/ModuleRegistry.h"
+#include "plugin_manager/PluginManager.h"
 #include "cdc_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -267,10 +268,14 @@ static void onLightMenuCallback() {
 /**
  * \brief Storage for dynamic context-menu items contributed by modules.
  */
-static constexpr uint8_t MAX_CONTEXT_ITEMS = 8;
+static constexpr uint8_t MAX_CONTEXT_ITEMS = 12;
+static constexpr uint8_t MAX_PLUGIN_ITEMS  = 4;
 static ContextMenuItem s_contextItems[MAX_CONTEXT_ITEMS];
 static core::LockScreenContextItem s_moduleContextItems[MAX_CONTEXT_ITEMS - 1];
 static uint8_t s_moduleContextCount = 0;
+
+static cdc::plugin_manager::PluginManager::LockscreenItem s_pluginContextItems[MAX_PLUGIN_ITEMS];
+static uint8_t s_pluginContextCount = 0;
 
 /**
  * \brief Wrapper callback for module context item at index 0.
@@ -314,6 +319,27 @@ static void (*const s_moduleCallbacks[])() = {
     moduleContextCallback6
 };
 
+static void pluginContextCallback0() {
+    cdc::plugin_manager::PluginManager::instance().triggerLockscreenItem(s_pluginContextItems[0]);
+    hideContextMenu();
+}
+static void pluginContextCallback1() {
+    cdc::plugin_manager::PluginManager::instance().triggerLockscreenItem(s_pluginContextItems[1]);
+    hideContextMenu();
+}
+static void pluginContextCallback2() {
+    cdc::plugin_manager::PluginManager::instance().triggerLockscreenItem(s_pluginContextItems[2]);
+    hideContextMenu();
+}
+static void pluginContextCallback3() {
+    cdc::plugin_manager::PluginManager::instance().triggerLockscreenItem(s_pluginContextItems[3]);
+    hideContextMenu();
+}
+static void (*const s_pluginCallbacks[MAX_PLUGIN_ITEMS])() = {
+    pluginContextCallback0, pluginContextCallback1,
+    pluginContextCallback2, pluginContextCallback3,
+};
+
 /**
  * \brief Handles lock-screen key actions.
  *
@@ -328,7 +354,7 @@ InputResult LockScreenView::onKey(char key) {
         uint8_t itemCount = 0;
 
         // First item: Light toggle (built-in)
-        s_contextItems[itemCount++] = {tr(StringId::LIGHT), onLightMenuCallback};
+        s_contextItems[itemCount++] = {ui::tr("core.light"), onLightMenuCallback};
 
         // Get module items from registry
         auto& moduleReg = core::ModuleRegistry::instance();
@@ -340,7 +366,14 @@ InputResult LockScreenView::onKey(char key) {
             s_contextItems[itemCount++] = {label, s_moduleCallbacks[i]};
         }
 
-        showContextMenu(tr(StringId::ACTIONS), s_contextItems, itemCount);
+        // Plugin-contributed lockscreen items.
+        s_pluginContextCount = cdc::plugin_manager::PluginManager::instance()
+            .getLockscreenItems(s_pluginContextItems, MAX_PLUGIN_ITEMS);
+        for (uint8_t i = 0; i < s_pluginContextCount && itemCount < MAX_CONTEXT_ITEMS; i++) {
+            s_contextItems[itemCount++] = {s_pluginContextItems[i].label, s_pluginCallbacks[i]};
+        }
+
+        showContextMenu(ui::tr("core.actions"), s_contextItems, itemCount);
         return InputResult::CONSUMED;
     }
 
@@ -413,8 +446,8 @@ void LockScreenView::checkDeepSleepTrigger(uint32_t nowMs) {
  * \return Localized footer hint string.
  */
 const char* LockScreenView::getFooterHint() const {
-    if (deepSleepMode_) return tr(StringId::DEEP_SLEEP);
-    return tr(StringId::PRESS_ANY_KEY);
+    if (deepSleepMode_) return ui::tr("core.deep_sleep");
+    return ui::tr("core.press_any_key");
 }
 
 /**

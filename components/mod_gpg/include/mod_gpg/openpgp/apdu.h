@@ -5,9 +5,7 @@
  * Original: Copyright (c) 2022 Pol Henarejos, AGPLv3
  */
 
-#ifndef APDU_H
-#define APDU_H
-
+#pragma once
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -84,4 +82,3 @@ static inline size_t apdu_sw(uint8_t *buf, uint16_t sw) {
 }
 #endif
 
-#endif // APDU_H

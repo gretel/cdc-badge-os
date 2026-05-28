@@ -7,6 +7,7 @@
 #include "cdc_views/RenderHelpers.h"
 #include <goodisplay/gdey029T94.h>
 #include <algorithm>
+#include <cstring>
 
 namespace cdc::ui::render {
 
@@ -20,6 +21,45 @@ namespace cdc::ui::render {
  * \param underlineOffset Vertical offset for underline.
  * \return void
  */
+void printTruncated(Gdey029T94* gfx, const char* text, int maxWidthPx) {
+    if (!gfx || !text || maxWidthPx <= 0) return;
+
+    int16_t x1, y1;
+    uint16_t w, h;
+    gfx->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+    if (static_cast<int>(w) <= maxWidthPx) {
+        gfx->print(text);
+        return;
+    }
+
+    constexpr char ELLIPSIS[] = "...";
+    uint16_t ew, eh;
+    int16_t ex1, ey1;
+    gfx->getTextBounds(ELLIPSIS, 0, 0, &ex1, &ey1, &ew, &eh);
+
+    const int budget = maxWidthPx - static_cast<int>(ew);
+    if (budget <= 0) {
+        gfx->print(ELLIPSIS);
+        return;
+    }
+
+    char buf[128];
+    size_t len = std::strlen(text);
+    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+    std::memcpy(buf, text, len);
+    buf[len] = '\0';
+
+    while (len > 0) {
+        buf[len] = '\0';
+        gfx->getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
+        if (static_cast<int>(w) <= budget) break;
+        --len;
+    }
+
+    gfx->print(buf);
+    gfx->print(ELLIPSIS);
+}
+
 void drawHeaderLeft(Gdey029T94* gfx, const char* title, int x, int y,
                     uint16_t width, int underlineOffset) {
     if (!gfx) return;

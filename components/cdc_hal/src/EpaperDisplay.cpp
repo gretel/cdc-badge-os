@@ -8,6 +8,7 @@
 
 #include "cdc_hal/IDisplay.h"
 #include "cdc_hal/hw_config.h"
+#include "cdc_core/Raii.h"
 #include "cdc_log.h"
 #include "driver/ledc.h"
 #include "nvs_flash.h"
@@ -106,10 +107,12 @@ static void renderTask(void* arg) {
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        xSemaphoreTake(s_renderMutex, portMAX_DELAY);
-        bool doFull = s_renderFull;
-        s_renderPending = false;
-        xSemaphoreGive(s_renderMutex);
+        bool doFull;
+        {
+            cdc::core::MutexGuard guard(s_renderMutex);
+            doFull = s_renderFull;
+            s_renderPending = false;
+        }
 
         if (s_epd_display) {
             if (doFull) {
@@ -289,15 +292,15 @@ void EpaperDisplay::flush(RefreshMode mode) {
         return;
     }
 
-    xSemaphoreTake(s_renderMutex, portMAX_DELAY);
-    if (s_renderPending) {
-        // Merge request: if FULL is requested, upgrade to FULL
-        if (mode == RefreshMode::FULL) s_renderFull = true;
-    } else {
-        s_renderPending = true;
-        s_renderFull = (mode == RefreshMode::FULL);
+    {
+        cdc::core::MutexGuard guard(s_renderMutex);
+        if (s_renderPending) {
+            if (mode == RefreshMode::FULL) s_renderFull = true;
+        } else {
+            s_renderPending = true;
+            s_renderFull = (mode == RefreshMode::FULL);
+        }
     }
-    xSemaphoreGive(s_renderMutex);
 
     xTaskNotifyGive(s_renderTask);
 }
@@ -522,6 +525,26 @@ IDisplay* getDisplayInstance() {
         s_display = new EpaperDisplay();
     }
     return s_display;
+}
+
+void winkBacklight(uint8_t count, uint16_t period_ms) {
+    if (count == 0) count = 1;
+    if (count > 10) count = 10;
+    if (period_ms < 50)   period_ms = 50;
+    if (period_ms > 1000) period_ms = 1000;
+
+    auto* display = getDisplayInstance();
+    if (!display) return;
+
+    const bool was_on = display->isBacklightOn();
+    const TickType_t ticks = pdMS_TO_TICKS(period_ms);
+    for (uint8_t i = 0; i < count; ++i) {
+        display->backlightOff();
+        vTaskDelay(ticks);
+        display->backlightOn();
+        vTaskDelay(ticks);
+    }
+    if (!was_on) display->backlightOff();
 }
 
 } // namespace cdc::hal

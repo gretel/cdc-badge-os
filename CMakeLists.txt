@@ -55,6 +55,26 @@ if(NOT EXISTS ${LIBTROPIC_PATCH_MARKER})
     file(WRITE ${LIBTROPIC_PATCH_MARKER} "Patched for ESP-IDF GCM")
 endif()
 
+# Patch WAMR ESP-IDF platform port: os_self_thread() must work from any
+# FreeRTOS task, not only pthreads
+set(WAMR_DIR "${CMAKE_SOURCE_DIR}/components/wamr_runtime/wasm-micro-runtime")
+set(WAMR_PATCH_MARKER "${WAMR_DIR}/.patched")
+
+if(NOT EXISTS ${WAMR_PATCH_MARKER})
+    set(PATCH_WAMR "${CMAKE_SOURCE_DIR}/patches/wamr_espidf_self_thread.patch")
+    if(EXISTS ${PATCH_WAMR})
+        execute_process(
+            COMMAND patch -p1 -N -d ${WAMR_DIR} -i ${PATCH_WAMR}
+            RESULT_VARIABLE PATCH_RESULT
+        )
+        if(PATCH_RESULT EQUAL 0)
+            message(STATUS "WAMR: os_self_thread FreeRTOS patch applied")
+        endif()
+    endif()
+
+    file(WRITE ${WAMR_PATCH_MARKER} "Patched for FreeRTOS task self")
+endif()
+
 # Exclude upstream or legacy components
 set(EXCLUDE_COMPONENTS libtropic)
 

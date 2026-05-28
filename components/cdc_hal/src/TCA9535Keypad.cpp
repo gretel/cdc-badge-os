@@ -29,7 +29,7 @@ static constexpr uint8_t REG_CONFIG_0   = 0x06;
 static constexpr uint8_t REG_CONFIG_1   = 0x07;
 
 /** \brief Keypad task scheduling configuration. */
-static constexpr uint32_t TASK_STACK_SIZE = 3584;
+static constexpr uint32_t TASK_STACK_SIZE = 6144;
 static constexpr UBaseType_t TASK_PRIORITY = 5;
 static constexpr uint32_t POLL_TIMEOUT_MS = 50;
 static constexpr uint32_t DEBOUNCE_MS = 10;
