@@ -431,6 +431,9 @@ static int32_t w_host_get_build_profile(wasm_exec_env_t, char* out, uint32_t out
 static int32_t w_host_feature_enabled(wasm_exec_env_t, uint32_t feature_id)
 { return host_feature_enabled(static_cast<uint16_t>(feature_id)) ? 1 : 0; }
 
+static int32_t w_host_cmd_consume(wasm_exec_env_t, char* out, uint32_t out_size)
+{ return host_cmd_consume(out, out_size); }
+
 static int32_t w_host_ui_acquire_exclusive(wasm_exec_env_t)  { return host_ui_acquire_exclusive(); }
 static int32_t w_host_ui_release_exclusive(wasm_exec_env_t)  { return host_ui_release_exclusive(); }
 static int32_t w_host_ui_set_inactivity(wasm_exec_env_t, uint32_t timeout_ms, uint32_t action_id)
@@ -592,6 +595,7 @@ static NativeSymbol s_symbols[] = {
     W("host_str_to_display",        w_host_str_to_display,        "($*~i)i"),
     W("host_get_build_profile",    w_host_get_build_profile,    "(*~)i"),
     W("host_feature_enabled",      w_host_feature_enabled,      "(i)i"),
+    W("host_cmd_consume",          w_host_cmd_consume,          "(*~)i"),
 
     W("host_ui_acquire_exclusive", w_host_ui_acquire_exclusive, "()i"),
     W("host_ui_release_exclusive", w_host_ui_release_exclusive, "()i"),

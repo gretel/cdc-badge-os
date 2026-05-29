@@ -65,6 +65,8 @@ public:
     void                      requestStopActivePlugin();
     [[nodiscard]] bool        hasActivePlugin() const noexcept;
     [[nodiscard]] std::string activePluginId()  const;
+    /// True if a plugin with `id` is loaded in RAM (foreground or background).
+    [[nodiscard]] bool        isLoaded(const std::string& id) const;
 
     void dispatchButton(uint32_t button_code);
     void dispatchAction(uint32_t action_id, uint32_t idx, uint32_t user_data);
@@ -72,6 +74,17 @@ public:
     /// No-op if the plugin pointer is no longer in foreground or background.
     void dispatchActionTo(Plugin* plugin, uint32_t action_id, uint32_t idx, uint32_t user_data);
     void dispatchTick(uint64_t uptime_ms);
+
+    /// Forward a command string to the plugin identified by `id` (foreground
+    /// or background). Buffers the string and fires the optional
+    /// `plugin_on_cmd(len)` export, which the plugin reads back via
+    /// \ref consumeCmd. Returns false if no plugin with that id is loaded.
+    bool dispatchCmd(const std::string& id, const char* cmd, size_t len);
+
+    /// Copy the buffered command string into `out` and clear it. Called from
+    /// the plugin (host_cmd_consume) inside its `plugin_on_cmd` handler.
+    /// Returns the number of bytes copied, or a negative HOST_ERR_* code.
+    int  consumeCmd(char* out, size_t out_size);
 
     /// Dispatch a bus event to every loaded plugin (foreground + background).
     /// Key events still go to the foreground only - see host_api_event.cpp.
@@ -116,6 +129,7 @@ private:
 
     std::unique_ptr<Plugin>              active_;       // foreground (user-visible)
     std::vector<std::unique_ptr<Plugin>> background_;   // auto-loaded resident plugins
+    std::string                          pending_cmd_;  // buffered for plugin_on_cmd pull
     void*                                tick_task_  = nullptr;  // FreeRTOS TaskHandle_t
     void*                                call_mutex_ = nullptr;  // FreeRTOS SemaphoreHandle_t
     volatile bool                        tick_stop_  = false;

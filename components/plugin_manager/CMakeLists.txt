@@ -29,6 +29,7 @@ idf_component_register(
         "src/host_api_crypto.cpp"
         "src/host_api_se.cpp"
         "src/host_api_sysinfo.cpp"
+        "src/host_api_cmd.cpp"
         "src/host_api_ble.cpp"
         "src/host_api_pixel_strip.cpp"
         "src/host_api_lockscreen.cpp"

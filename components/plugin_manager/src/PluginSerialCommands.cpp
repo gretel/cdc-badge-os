@@ -304,6 +304,31 @@ void cmdStop(const char*)
     else send("ERR no_active_plugin");
 }
 
+void cmdCmd(const char* args)
+{
+    if (!args || !*args) { send("ERR missing_id"); return; }
+
+    char id_buf[64] = {0};
+    int  consumed = 0;
+    std::sscanf(args, "%63s%n", id_buf, &consumed);
+    if (id_buf[0] == '\0') { send("ERR missing_id"); return; }
+
+    const char* cmd = args + consumed;
+    while (*cmd == ' ') ++cmd;
+    std::string id = id_buf;
+
+    if (!PluginManager::instance().isLoaded(id)) {
+        auto res = PluginManager::instance().startPlugin(id);
+        if (res != StartResult::Ok && res != StartResult::PluginAlreadyRunning) {
+            sendf("ERR start %d %s", static_cast<int>(res), id.c_str());
+            return;
+        }
+    }
+
+    if (PluginManager::instance().dispatchCmd(id, cmd, std::strlen(cmd))) send("OK");
+    else send("ERR no_handler");
+}
+
 enum class PluginUploadKind { Wasm, Aot, Meta, Lang };
 
 // Parses "<id> <total_size> <crc32_hex>" or the legacy "<id> <total_size>"
@@ -458,6 +483,7 @@ const cdc::serial::SubCommand kPluginSubs[] = {
     {"INFO",        "<id>",                          "Show manifest details for one plugin",              cmdInfo},
     {"START",       "<id>",                          "Start a plugin",                                    cmdStart},
     {"STOP",        "",                              "Stop the currently active plugin",                  cmdStop},
+    {"CMD",         "<id> <args>",                   "Forward a command string to a plugin",              cmdCmd},
     {"DELETE",      "<id>",                          "Delete wasm + meta + lang files for plugin",        cmdDelete},
     {"UPLOAD",      "<id> <size> <crc32_hex>",       "Upload .wasm payload (binary stream)",              cmdUpload},
     {"UPLOAD_AOT",  "<id> <size> <crc32_hex>",       "Upload .aot payload (binary stream)",               cmdUploadAot},

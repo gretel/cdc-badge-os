@@ -1,4 +1,5 @@
 #include "plugin_manager/PluginManager.h"
+#include "plugin_manager/host_api.h"
 #include "plugin_manager/CapabilityChecker.h"
 #include "plugin_manager/Plugin.h"
 #include "plugin_manager/Prerequisites.h"
@@ -459,6 +460,13 @@ void PluginManager::triggerLockscreenItem(const LockscreenItem& item)
 bool        PluginManager::hasActivePlugin() const noexcept { return active_ != nullptr; }
 std::string PluginManager::activePluginId()  const { return active_ ? active_->id() : std::string{}; }
 
+bool PluginManager::isLoaded(const std::string& id) const
+{
+    if (active_ && active_->id() == id) return true;
+    for (const auto& p : background_) if (p->id() == id) return true;
+    return false;
+}
+
 void PluginManager::dispatchButton(uint32_t button_code)
 {
     ScopedLock lock(static_cast<SemaphoreHandle_t>(call_mutex_));
@@ -524,6 +532,34 @@ void PluginManager::dispatchEventAll(uint32_t event_type, uint32_t value)
                        {static_cast<int32_t>(event_type),
                         static_cast<int32_t>(value)}, &rc);
     }
+}
+
+bool PluginManager::dispatchCmd(const std::string& id, const char* cmd, size_t len)
+{
+    ScopedLock lock(static_cast<SemaphoreHandle_t>(call_mutex_));
+
+    Plugin* target = (active_ && active_->id() == id) ? active_.get() : nullptr;
+    if (!target) {
+        for (auto& p : background_) if (p->id() == id) { target = p.get(); break; }
+    }
+    if (!target || !target->hasExport("plugin_on_cmd")) return false;
+
+    pending_cmd_.assign(cmd ? cmd : "", len);
+    int32_t rc = 0;
+    (void)target->callI("plugin_on_cmd", {static_cast<int32_t>(len)}, &rc);
+    pending_cmd_.clear();
+    return true;
+}
+
+int PluginManager::consumeCmd(char* out, size_t out_size)
+{
+    if (!out || out_size == 0) return HOST_ERR_INVALID_ARG;
+    size_t n = pending_cmd_.size();
+    if (n >= out_size) n = out_size - 1;
+    std::memcpy(out, pending_cmd_.data(), n);
+    out[n] = '\0';
+    pending_cmd_.clear();
+    return static_cast<int>(n);
 }
 
 void PluginManager::forEachPlugin(const std::function<bool(Plugin&)>& visitor)
