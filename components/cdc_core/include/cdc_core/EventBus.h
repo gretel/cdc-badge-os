@@ -32,6 +32,8 @@ enum class EventType : uint8_t {
     BLE_CONNECTED,
     BLE_DISCONNECTED,
     BLE_PAIRING_REQUEST,
+    BLE_CONSENT_REQUEST,
+    BLE_EXCHANGE_COMPLETE,
 
     // Timer
     TIMER_TICK,

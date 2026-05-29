@@ -547,6 +547,15 @@ static void runMainLoopIteration() {
 
     cdc::core::ModuleRegistry::instance().dispatchTick(nowMs);
 
+#if DEBUG_MODE
+    static UBaseType_t s_minStackFree = 0xFFFFFFFFu;
+    UBaseType_t stackFree = uxTaskGetStackHighWaterMark(nullptr);
+    if (stackFree < s_minStackFree) {
+        s_minStackFree = stackFree;
+        LOG_I(TAG, "main stack low-water: %lu words", (unsigned long)stackFree);
+    }
+#endif
+
     vTaskDelay(pdMS_TO_TICKS(10));
 }
 

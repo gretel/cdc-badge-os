@@ -317,16 +317,21 @@ void cmdCmd(const char* args)
     while (*cmd == ' ') ++cmd;
     std::string id = id_buf;
 
+    bool started_here = false;
     if (!PluginManager::instance().isLoaded(id)) {
         auto res = PluginManager::instance().startPlugin(id);
         if (res != StartResult::Ok && res != StartResult::PluginAlreadyRunning) {
             sendf("ERR start %d %s", static_cast<int>(res), id.c_str());
             return;
         }
+        started_here = true;
     }
 
     if (PluginManager::instance().dispatchCmd(id, cmd, std::strlen(cmd))) send("OK");
     else send("ERR no_handler");
+
+    // Only unload what this command loaded; a plugin already running stays running.
+    if (started_here) PluginManager::instance().unloadFromRam(id);
 }
 
 enum class PluginUploadKind { Wasm, Aot, Meta, Lang };

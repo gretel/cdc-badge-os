@@ -406,12 +406,10 @@
     async function fetchLatestVersion() {
       const badge = document.getElementById("version-badge");
       try {
-        const resp = await fetch(
-          "https://api.github.com/repos/krim404/cdc-badge-os/releases/latest"
-        );
-        if (!resp.ok) throw new Error("API request failed");
+        const resp = await fetch("manifest.json");
+        if (!resp.ok) throw new Error("manifest request failed");
         const data = await resp.json();
-        badge.textContent = data.tag_name;
+        badge.textContent = data.version || "unknown";
         badge.classList.remove("loading");
       } catch {
         badge.textContent = "Version info unavailable";

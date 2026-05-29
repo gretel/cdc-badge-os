@@ -1,31 +1,20 @@
-name: Deploy GitHub Pages
+name: Deploy Codeberg Pages
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
-
 jobs:
   deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-24.04
+    runs-on: codeberg-medium
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -71,21 +60,15 @@ jobs:
       - name: Build Doxygen documentation
         run: doxygen Doxyfile
 
-      - name: Resolve version
+      - name: Resolve version tag
         id: version
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GIT_REF: ${{ github.ref }}
-          REPO: ${{ github.repository }}
         run: |
-          if [[ "$GIT_REF" == refs/tags/* ]]; then
-            VERSION="${GIT_REF#refs/tags/}"
-          else
-            VERSION="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || echo dev)"
-          fi
+          VERSION="${GIT_REF#refs/tags/}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Assemble site
+      - name: Assemble pages content
         env:
           TAG: ${{ steps.version.outputs.version }}
         run: |
@@ -100,7 +83,7 @@ jobs:
           cp .pio/build/cdc_badge_usb/firmware.bin   _site/firmware.bin
           cp build/plugins_initial.bin               _site/plugins_initial.bin
 
-          cat > _site/manifest.json << MANIFEST
+          cat > _site/manifest.json <<MANIFEST
           {
             "name": "CDC Badge OS (Firmware Update)",
             "version": "${TAG}",
@@ -117,7 +100,7 @@ jobs:
           }
           MANIFEST
 
-          cat > _site/manifest_factory.json << MANIFEST
+          cat > _site/manifest_factory.json <<MANIFEST
           {
             "name": "CDC Badge OS (Factory Setup)",
             "version": "${TAG}",
@@ -135,14 +118,9 @@ jobs:
           }
           MANIFEST
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Deploy to Codeberg Pages
+        uses: https://codeberg.org/git-pages/action@v2
         with:
-          path: _site
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          site: 'https://${{ forge.repository_owner }}.codeberg.page/cdc-badge-os/'
+          token: ${{ forge.token }}
+          source: _site/

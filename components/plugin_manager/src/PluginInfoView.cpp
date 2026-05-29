@@ -4,6 +4,7 @@
 
 #include <sys/stat.h>
 #include <cstdio>
+#include "esp_attr.h"
 
 namespace cdc::plugin_manager {
 
@@ -36,7 +37,7 @@ bool PluginInfoView::loadForPluginId(const std::string& id)
         wasm_bytes = static_cast<long>(st.st_size);
     }
 
-    char buf[512];
+    EXT_RAM_BSS_ATTR static char buf[512];
     std::snprintf(buf, sizeof(buf),
                   "%s\n\nVersion: %s\nAuthor:  %s\nAPI:     %s\nMemory:  %u KB\nWASM:    %ld B\n\n%s",
                   name.c_str(),

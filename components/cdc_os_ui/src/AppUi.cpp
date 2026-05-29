@@ -21,6 +21,7 @@
 #include "cdc_core/TropicSlotMap.h"
 #include "cdc_core/TropicStorage.h"
 #include "cdc_core/UsbManager.h"
+#include "cdc_core/Raii.h"
 
 #include "cdc_views/SliderView.h"
 #include "cdc_views/PinEntryView.h"
@@ -46,6 +47,7 @@
 #include <ctime>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_timer.h"
 
 namespace cdc::ui {
@@ -94,6 +96,17 @@ static TimeInputView* s_timeInput = nullptr;
 static PinChangeView* s_pinChangeView = nullptr;
 static BlePairingPromptView* s_pairingPrompt = nullptr;
 static cdc::plugin_manager::PluginListView* s_pluginListView = nullptr;
+
+// Numeric-comparison pairing is requested from the nimble_host task; the prompt
+// must be shown from the main/UI task. The request is parked here under a mutex
+// and the UI work is deferred via BLE_PAIRING_REQUEST.
+struct PendingPairing {
+    bool     valid = false;
+    uint16_t connHandle = 0xFFFF;
+    uint32_t passkey = 0;
+};
+static PendingPairing s_pendingPairing;
+static SemaphoreHandle_t s_blePendingMutex = nullptr;
 
 /** \brief Runtime dependencies provided during `ui_init`. */
 static UiDeps s_deps = {};
@@ -544,24 +557,69 @@ static bool isBadgeLocked() {
 }
 
 /**
- * \brief Numeric-comparison pairing handler used by all BLE-capable modules.
+ * \brief Numeric-comparison pairing request, invoked on the nimble_host task.
+ * \param connHandle BLE connection handle being paired.
+ * \param passkey Six-digit confirmation code shown by the remote host.
  *
- * If the badge is locked the request is rejected without prompting the user.
- * Otherwise a modal pairing prompt is displayed and the user accepts/rejects
- * via the keypad.
+ * Touches no UI: parks the request under s_blePendingMutex and defers the prompt
+ * to the main task via BLE_PAIRING_REQUEST. A second request arriving before the
+ * first is consumed is rejected inline.
  */
 static void onBleNumericComparison(uint16_t connHandle, uint32_t passkey) {
     auto* ble = hal::getBluetoothControllerInstance();
-    if (isBadgeLocked()) {
+
+    bool dropped = false;
+    {
+        core::MutexGuard guard(s_blePendingMutex);
+        if (s_pendingPairing.valid) {
+            dropped = true;
+        } else {
+            s_pendingPairing.connHandle = connHandle;
+            s_pendingPairing.passkey = passkey;
+            s_pendingPairing.valid = true;
+        }
+    }
+    if (dropped) {
         if (ble) ble->respondToNumericComparison(connHandle, false);
+        return;
+    }
+
+    if (!core::EventBus::instance().publish(core::EventType::BLE_PAIRING_REQUEST)) {
+        {
+            core::MutexGuard guard(s_blePendingMutex);
+            s_pendingPairing.valid = false;
+        }
+        if (ble) ble->respondToNumericComparison(connHandle, false);
+    }
+}
+
+/**
+ * \brief Main-task handler for a deferred numeric-comparison pairing request.
+ * \param evt Unused event payload; the request is read from s_pendingPairing.
+ *
+ * If the badge is locked the request is rejected without prompting. Otherwise a
+ * modal pairing prompt is shown; ui_process renders it on the next pass.
+ */
+static void onBlePairingRequestEvent(const core::Event& evt) {
+    (void)evt;
+    PendingPairing req;
+    {
+        core::MutexGuard guard(s_blePendingMutex);
+        req = s_pendingPairing;
+        s_pendingPairing.valid = false;
+    }
+    if (!req.valid) return;
+
+    auto* ble = hal::getBluetoothControllerInstance();
+    if (isBadgeLocked()) {
+        if (ble) ble->respondToNumericComparison(req.connHandle, false);
         return;
     }
     if (!s_pairingPrompt) {
         s_pairingPrompt = new BlePairingPromptView();
     }
-    s_pairingPrompt->prepare(connHandle, passkey);
+    s_pairingPrompt->prepare(req.connHandle, req.passkey);
     ViewStack::instance().showModal(s_pairingPrompt);
-    ViewStack::instance().render();
 }
 
 /**
@@ -771,9 +829,16 @@ void ui_init(const UiDeps& deps) {
     ViewStack::instance().setInactivityTimeout(onInactivityTimeout, INACTIVITY_TIMEOUT_MS);
 
     // Subscribe to module error events
-    core::EventBus::instance().subscribe(onModuleErrorEvent, static_cast<uint32_t>(core::EventType::MODULE_ERROR));
+    core::EventBus::instance().subscribe(onModuleErrorEvent,
+                                         core::EventBus::eventMask(core::EventType::MODULE_ERROR));
 
-    // Central numeric-comparison pairing prompt
+    // Central numeric-comparison pairing prompt: the request arrives on the
+    // nimble_host task and is deferred to the main task for UI work.
+    if (!s_blePendingMutex) {
+        s_blePendingMutex = xSemaphoreCreateMutex();
+    }
+    core::EventBus::instance().subscribe(onBlePairingRequestEvent,
+                                         core::EventBus::eventMask(core::EventType::BLE_PAIRING_REQUEST));
     if (auto* ble = hal::getBluetoothControllerInstance()) {
         ble->addNumericComparisonCallback(onBleNumericComparison);
     }

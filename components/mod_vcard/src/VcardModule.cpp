@@ -6,6 +6,8 @@
 #include "serial_cmd/SubCommand.h"
 #include "serial_cmd/Console.h"
 #include "cdc_core/ModuleRegistry.h"
+#include "cdc_core/EventBus.h"
+#include "cdc_core/Raii.h"
 #include "cdc_ui/I18n.h"
 #include "cdc_ui/ViewStack.h"
 #include "cdc_views/ListView.h"
@@ -15,6 +17,8 @@
 #include "esp_timer.h"
 #include "cdc_views/ToastView.h"
 #include "cdc_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include <cstring>
 #include <cstdio>
 
@@ -170,16 +174,59 @@ static void onConsentDecline(void* userData) {
     ui::ViewStack::instance().pop();
 }
 
+// Consent and exchange-complete callbacks fire on the nimble_host task; the UI
+// work must run on the main task. Requests are parked here under a mutex and
+// deferred via BLE_CONSENT_REQUEST / BLE_EXCHANGE_COMPLETE.
+struct PendingConsent {
+    bool valid = false;
+    char peerName[32] = {0};
+};
+struct PendingExchange {
+    bool valid = false;
+    bool success = false;
+    char error[64] = {0};
+};
+static PendingConsent s_pendingConsent;
+static PendingExchange s_pendingExchange;
+static SemaphoreHandle_t s_vcardBleMutex = nullptr;
+
 /**
- * \brief Displays consent prompt for incoming exchange request.
+ * \brief Incoming consent request, invoked on the nimble_host task.
  * \param peerName Remote peer display name.
  */
 static void onConsentRequest(const char* peerName) {
+    {
+        core::MutexGuard guard(s_vcardBleMutex);
+        s_pendingConsent.valid = true;
+        if (peerName) {
+            strncpy(s_pendingConsent.peerName, peerName, sizeof(s_pendingConsent.peerName) - 1);
+            s_pendingConsent.peerName[sizeof(s_pendingConsent.peerName) - 1] = '\0';
+        } else {
+            s_pendingConsent.peerName[0] = '\0';
+        }
+    }
+    core::EventBus::instance().publish(core::EventType::BLE_CONSENT_REQUEST);
+}
+
+/**
+ * \brief Main-task handler that displays the consent prompt.
+ * \param evt Unused; the request is read from s_pendingConsent.
+ */
+static void onConsentRequestEvent(const core::Event& evt) {
+    (void)evt;
+    PendingConsent req;
+    {
+        core::MutexGuard guard(s_vcardBleMutex);
+        req = s_pendingConsent;
+        s_pendingConsent.valid = false;
+    }
+    if (!req.valid) return;
+
     static char promptText[256];
     snprintf(promptText, sizeof(promptText),
              "%s\n\n%s\nmoechte vCard tauschen\n\n[Y] %s\n[N] %s",
              mstr(STR_EXCHANGE_REQ),
-             peerName,
+             req.peerName,
              mstr(STR_ACCEPT),
              mstr(STR_DECLINE));
 
@@ -189,19 +236,45 @@ static void onConsentRequest(const char* peerName) {
 }
 
 /**
- * \brief Handles completion callback for exchange operations.
+ * \brief Exchange-completion callback, invoked on the nimble_host task.
  * \param success `true` when exchange succeeded.
  * \param error Optional error text on failure.
  */
 static void onExchangeComplete(bool success, const char* error) {
-    if (success) {
-        ui::showToastSuccess(mstr(STR_EXCHANGE_OK));
-    } else {
-        if (error && error[0]) {
-            ui::showToastError(error);
+    {
+        core::MutexGuard guard(s_vcardBleMutex);
+        s_pendingExchange.valid = true;
+        s_pendingExchange.success = success;
+        if (!success && error && error[0]) {
+            strncpy(s_pendingExchange.error, error, sizeof(s_pendingExchange.error) - 1);
+            s_pendingExchange.error[sizeof(s_pendingExchange.error) - 1] = '\0';
         } else {
-            ui::showToastError(mstr(STR_EXCHANGE_FAIL));
+            s_pendingExchange.error[0] = '\0';
         }
+    }
+    core::EventBus::instance().publish(core::EventType::BLE_EXCHANGE_COMPLETE);
+}
+
+/**
+ * \brief Main-task handler that shows the exchange-completion toast.
+ * \param evt Unused; the result is read from s_pendingExchange.
+ */
+static void onExchangeCompleteEvent(const core::Event& evt) {
+    (void)evt;
+    PendingExchange req;
+    {
+        core::MutexGuard guard(s_vcardBleMutex);
+        req = s_pendingExchange;
+        s_pendingExchange.valid = false;
+    }
+    if (!req.valid) return;
+
+    if (req.success) {
+        ui::showToastSuccess(mstr(STR_EXCHANGE_OK));
+    } else if (req.error[0]) {
+        ui::showToastError(req.error);
+    } else {
+        ui::showToastError(mstr(STR_EXCHANGE_FAIL));
     }
 }
 
@@ -582,6 +655,14 @@ bool VcardModule::init() {
     if (!ble_vcard_init()) {
         LOG_W(TAG, "BLE vCard init failed (BLE might not be available)");
     }
+
+    if (!s_vcardBleMutex) {
+        s_vcardBleMutex = xSemaphoreCreateMutex();
+    }
+    core::EventBus::instance().subscribe(onConsentRequestEvent,
+                                         core::EventBus::eventMask(core::EventType::BLE_CONSENT_REQUEST));
+    core::EventBus::instance().subscribe(onExchangeCompleteEvent,
+                                         core::EventBus::eventMask(core::EventType::BLE_EXCHANGE_COMPLETE));
 
     ble_vcard_set_consent_callback(onConsentRequest);
     ble_vcard_set_exchange_complete_callback(onExchangeComplete);

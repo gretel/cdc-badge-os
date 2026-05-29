@@ -653,6 +653,19 @@ bool BluetoothController::enable() {
     ble_svc_gap_init();
     ble_svc_gatt_init();
 
+    // Commit module GATT services registered before BLE was enabled (and restore
+    // those from a previous session, since disable() tears down the GATT DB).
+    for (int i = 0; i < MAX_REGISTERED_SERVICES; i++) {
+        if (!s_services[i].active) continue;
+        int grc = ble_gatts_count_cfg(s_services[i].nimbleSvcs);
+        if (grc == 0) grc = ble_gatts_add_svcs(s_services[i].nimbleSvcs);
+        if (grc != 0) {
+            LOG_E(TAG, "Deferred GATT service slot %d commit failed: %d", i, grc);
+        } else {
+            LOG_I(TAG, "Committed GATT service slot %d", i);
+        }
+    }
+
     // Wire up the NVS-backed bond store
     ble_store_config_init();
 
@@ -1232,15 +1245,21 @@ uint8_t BluetoothController::getScanResults(BleScanResult* results, uint8_t maxR
  * \return `true` if registration succeeded.
  */
 bool BluetoothController::registerGattService(const GattServiceDef& service) {
-    if (!enabled_) {
-        LOG_E(TAG, "Cannot register GATT service - BLE not enabled");
-        return false;
-    }
-
-    // Find free slot
+    // Reuse the slot already holding this service UUID (idempotent re-register),
+    // otherwise take a free slot. Registration is allowed while BLE is disabled:
+    // the slot is stored and committed to NimBLE later from enable().
+    ble_uuid_any_t wantUuid;
+    convertUuid(service.uuid, wantUuid);
     int slot = -1;
     for (int i = 0; i < MAX_REGISTERED_SERVICES; i++) {
-        if (!s_services[i].active) { slot = i; break; }
+        if (s_services[i].active && ble_uuid_cmp(&s_services[i].svcUuid.u, &wantUuid.u) == 0) {
+            slot = i; break;
+        }
+    }
+    if (slot < 0) {
+        for (int i = 0; i < MAX_REGISTERED_SERVICES; i++) {
+            if (!s_services[i].active) { slot = i; break; }
+        }
     }
     if (slot < 0) {
         LOG_E(TAG, "No free GATT service slots (max %d)", MAX_REGISTERED_SERVICES);
@@ -1317,6 +1336,13 @@ bool BluetoothController::registerGattService(const GattServiceDef& service) {
     s.nimbleSvcs[0].includes = nullptr;
     s.nimbleSvcs[0].characteristics = s.nimbleChars;
     memset(&s.nimbleSvcs[1], 0, sizeof(ble_gatt_svc_def));
+
+    // BLE not enabled yet: keep the converted slot and commit it from enable().
+    if (!enabled_) {
+        s.active = true;
+        LOG_I(TAG, "GATT service stored, deferred until BLE enable (slot %d)", slot);
+        return true;
+    }
 
     // Register with NimBLE
     int rc = ble_gatts_count_cfg(s.nimbleSvcs);
@@ -1617,6 +1643,8 @@ void BluetoothController::onPasskeyAction(uint16_t connHandle,
     switch (params->action) {
         case BLE_SM_IOACT_NUMCMP: {
             LOG_I(TAG, "Numeric comparison: %06lu", (unsigned long)params->numcmp);
+            LOG_I(TAG, "%s stack free: %lu words", pcTaskGetName(nullptr),
+                  (unsigned long)uxTaskGetStackHighWaterMark(nullptr));
             bool dispatched = false;
             for (uint8_t i = 0; i < MAX_CONN_CALLBACKS; i++) {
                 if (numCmpCallbacks_[i].active && numCmpCallbacks_[i].callback) {
