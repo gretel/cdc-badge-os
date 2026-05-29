@@ -19,6 +19,7 @@
 #include "plugin_manager/PluginManager.h"
 #include "plugin_manager/PluginStorage.h"
 #include "plugin_manager/PluginManifest.h"
+#include "plugin_manager/host_api.h"
 #include "serial_cmd/ICommandRegistry.h"
 #include "serial_cmd/SubCommand.h"
 #include "serial_cmd/Console.h"
@@ -33,6 +34,7 @@
 #include <sys/stat.h>
 
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
@@ -371,6 +373,44 @@ void cmdUploadAot (const char* args) { start_upload(args, PluginUploadKind::Aot)
 void cmdUploadMeta(const char* args) { start_upload(args, PluginUploadKind::Meta); }
 void cmdUploadLang(const char* args) { start_upload(args, PluginUploadKind::Lang); }
 
+
+
+
+static void cmdPluginCmd(const char* args) {
+    if (!args || !*args) {
+        send("ERR usage: PLUGIN CMD <id> <args...>");
+        return;
+    }
+    // Extract plugin_id up to first space
+    const char* space = std::strchr(args, ' ');
+    if (!space) {
+        send("ERR usage: PLUGIN CMD <id> <args...>");
+        return;
+    }
+    size_t id_len = static_cast<size_t>(space - args);
+    if (id_len == 0 || id_len >= 64) {
+        send("ERR invalid id");
+        return;
+    }
+    char id_buf[64];
+    std::memcpy(id_buf, args, id_len);
+    id_buf[id_len] = '\0';
+
+    if (!PluginManager::instance().hasActivePlugin() ||
+        PluginManager::instance().activePluginId() != id_buf) {
+        sendf("ERR plugin '%s' not active", id_buf);
+        return;
+    }
+
+    // Skip whitespace after id
+    const char* payload = space + 1;
+    while (*payload == ' ') payload++;
+
+    ::cdc::plugin_manager::plugin_cmd_set_args(payload);
+    PluginManager::instance().dispatchAction(PLUGIN_ACTION_SERIAL_CMD, 0, 0);
+    send("OK");
+}
+
 void cmdAbort(const char*)
 {
     if (!s_upload.active) { send("OK no_upload"); return; }
@@ -463,6 +503,7 @@ const cdc::serial::SubCommand kPluginSubs[] = {
     {"UPLOAD_AOT",  "<id> <size> <crc32_hex>",       "Upload .aot payload (binary stream)",               cmdUploadAot},
     {"UPLOAD_META", "<id> <size> <crc32_hex>",       "Upload .meta payload (binary stream)",              cmdUploadMeta},
     {"UPLOAD_LANG", "<id> <size> <crc32_hex>",       "Upload .lang payload (binary stream)",              cmdUploadLang},
+    {"CMD",         "<id> <data...>",                "Send data to loaded plugin",                        cmdPluginCmd},
     {"ABORT",       "",                              "Abort an active upload session",                    cmdAbort},
     {"DEBUG",       "",                              "Toggle verbose plugin/host_* logging",              cmdDebug},
     {nullptr, nullptr, nullptr, nullptr},

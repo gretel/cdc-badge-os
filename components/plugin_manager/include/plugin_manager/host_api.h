@@ -982,6 +982,33 @@ int  host_key_consume_next(uint8_t* out_key);
 /// \brief Write raw bytes to the USB-CDC TX stream.
 int host_usb_cdc_write(const uint8_t* data, size_t len);
 
+/**
+ * \defgroup serial_cmd Serial Commands
+ * \brief Read arguments from a PLUGIN CMD dispatch.
+ *
+ * When the host receives `PLUGIN CMD <plugin_id> <data...>`, it dispatches
+ * plugin_on_action(PLUGIN_ACTION_SERIAL_CMD, 0, 0) and the plugin calls
+ * this function to retrieve the <data...> portion. The buffer is valid only
+ * during the current plugin_on_action invocation.
+ * \{
+ */
+
+/// Action ID dispatched when PLUGIN CMD targets this plugin
+#define PLUGIN_ACTION_SERIAL_CMD  0x80000000u
+
+/**
+ * \brief Read the last PLUGIN CMD argument string.
+ * \param buf      Output buffer (NUL-terminated on success).
+ * \param buf_size Capacity of buf in bytes.
+ * \return Number of bytes written (excluding NUL), or 0 if no data.
+ */
+int host_serial_consume_args(char* buf, size_t buf_size);
+
+#ifdef __cplusplus
+namespace cdc::plugin_manager { void plugin_cmd_set_args(const char* args); }
+#endif
+/** \} */
+
 /** \} */
 
 /**

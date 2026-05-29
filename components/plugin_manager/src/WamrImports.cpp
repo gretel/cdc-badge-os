@@ -453,6 +453,12 @@ static int32_t w_host_lockscreen_unregister_action(wasm_exec_env_t)
 
 // -- Symbol table -----------------------------------------------------------
 
+
+// -- Serial CMD -------------------------------------------------------------
+
+static int32_t w_host_serial_consume_args(wasm_exec_env_t, char* buf, uint32_t buf_size)
+{ return host_serial_consume_args(buf, static_cast<size_t>(buf_size)); }
+
 static NativeSymbol s_symbols[] = {
     W("host_log",                w_host_log,                "(i$$)"),
     W("host_uptime_ms",          w_host_uptime_ms,          "()I"),
@@ -588,6 +594,8 @@ static NativeSymbol s_symbols[] = {
 
     W("host_lockscreen_register_action",   w_host_lockscreen_register_action,   "($i)i"),
     W("host_lockscreen_unregister_action", w_host_lockscreen_unregister_action, "()i"),
+
+    W("host_serial_consume_args", w_host_serial_consume_args, "(*~)i"),
 };
 
 bool register_host_imports()

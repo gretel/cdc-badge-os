@@ -18,6 +18,7 @@ idf_component_register(
         "src/host_api_power.cpp"
         "src/host_api_ui.cpp"
         "src/host_api_ui_views.cpp"
+        "src/host_api_serial.cpp"
         "src/host_api_canvas.cpp"
         "src/PluginUiState.cpp"
         "src/host_api_i18n.cpp"
