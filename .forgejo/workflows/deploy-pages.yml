@@ -87,6 +87,7 @@ jobs:
           {
             "name": "CDC Badge OS (Firmware Update)",
             "version": "${TAG}",
+            "new_install_prompt_erase": true,
             "builds": [
               {
                 "chipFamily": "ESP32-S3",
