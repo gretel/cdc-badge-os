@@ -146,13 +146,17 @@ int host_http_perform(int handle)
     auto* slot = slotFor(handle);
     if (!slot) return HOST_ERR_INVALID_ARG;
     esp_err_t err = esp_http_client_perform(slot->handle.get());
-    if (err != ESP_OK) {
-        LOG_E("HTTP", "perform failed: %s (0x%x)", esp_err_to_name(err), err);
-        return HOST_ERR_GENERIC;
-    }
     slot->status         = esp_http_client_get_status_code(slot->handle.get());
     slot->content_length = static_cast<size_t>(
         esp_http_client_get_content_length(slot->handle.get()));
+    // ESP_ERR_NOT_SUPPORTED (0x106) is returned when the server sends a 401
+    // with a WWW-Authenticate header the client cannot handle (e.g. Bearer).
+    // The HTTP exchange succeeded; the plugin handles the status code.
+    // Treat any valid status code (non-zero) as success.
+    if (err != ESP_OK && slot->status == 0) {
+        LOG_E("HTTP", "perform failed: %s (0x%x)", esp_err_to_name(err), err);
+        return HOST_ERR_GENERIC;
+    }
     LOG_I("HTTP", "status=%d content_length=%zu", slot->status, slot->content_length);
     return HOST_OK;
 }
